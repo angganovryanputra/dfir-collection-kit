@@ -1,0 +1,259 @@
+import { useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { TacticalPanel } from "@/components/TacticalPanel";
+import {
+  Shield,
+  ArrowLeft,
+  Search,
+  Lock,
+  FileText,
+  Download,
+} from "lucide-react";
+import type { ChainOfCustodyEntry } from "@/types/dfir";
+
+const mockCustodyLog: (ChainOfCustodyEntry & { incidentId: string })[] = [
+  {
+    incidentId: "INC-2025-0142",
+    timestamp: "2025-01-09T10:45:23Z",
+    action: "EVIDENCE EXPORTED",
+    actor: "J.SMITH",
+    target: "INC-2025-0142_full_package.zip",
+  },
+  {
+    incidentId: "INC-2025-0142",
+    timestamp: "2025-01-09T09:30:12Z",
+    action: "HASH VERIFICATION COMPLETE",
+    actor: "SYSTEM",
+    target: "All artifacts (47 files)",
+  },
+  {
+    incidentId: "INC-2025-0142",
+    timestamp: "2025-01-09T09:25:45Z",
+    action: "COLLECTION COMPLETE",
+    actor: "COLLECTOR-BRAVO",
+    target: "WS-FINANCE-01",
+  },
+  {
+    incidentId: "INC-2025-0142",
+    timestamp: "2025-01-09T09:10:00Z",
+    action: "COLLECTION STARTED",
+    actor: "J.SMITH",
+    target: "WS-FINANCE-01",
+  },
+  {
+    incidentId: "INC-2025-0142",
+    timestamp: "2025-01-09T08:55:30Z",
+    action: "INCIDENT CREATED",
+    actor: "J.SMITH",
+    target: "INC-2025-0142",
+  },
+  {
+    incidentId: "INC-2025-0141",
+    timestamp: "2025-01-08T16:45:00Z",
+    action: "EVIDENCE LOCKED",
+    actor: "SYSTEM",
+    target: "All artifacts (32 files)",
+  },
+  {
+    incidentId: "INC-2025-0141",
+    timestamp: "2025-01-08T16:30:22Z",
+    action: "COLLECTION COMPLETE",
+    actor: "COLLECTOR-ALPHA",
+    target: "DC-PRIMARY",
+  },
+  {
+    incidentId: "INC-2025-0141",
+    timestamp: "2025-01-08T15:00:00Z",
+    action: "COLLECTION STARTED",
+    actor: "M.CHEN",
+    target: "DC-PRIMARY",
+  },
+  {
+    incidentId: "INC-2025-0141",
+    timestamp: "2025-01-08T14:20:00Z",
+    action: "INCIDENT CREATED",
+    actor: "M.CHEN",
+    target: "INC-2025-0141",
+  },
+];
+
+export default function ChainOfCustody() {
+  const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
+
+  const incidents = [...new Set(mockCustodyLog.map((l) => l.incidentId))];
+
+  const filteredLog = mockCustodyLog.filter((entry) => {
+    const matchesSearch =
+      entry.action.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      entry.actor.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      entry.target.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesIncident = selectedIncident
+      ? entry.incidentId === selectedIncident
+      : true;
+    return matchesSearch && matchesIncident;
+  });
+
+  const getActionColor = (action: string) => {
+    if (action.includes("CREATED")) return "text-primary";
+    if (action.includes("STARTED")) return "text-warning";
+    if (action.includes("COMPLETE")) return "text-primary";
+    if (action.includes("VERIFIED") || action.includes("LOCKED"))
+      return "text-status-verified";
+    if (action.includes("EXPORTED")) return "text-foreground";
+    return "text-muted-foreground";
+  };
+
+  return (
+    <div className="min-h-screen bg-background tactical-grid flex flex-col">
+      {/* Header */}
+      <header className="border-b border-border bg-card">
+        <div className="flex items-center justify-between px-6 py-3">
+          <div className="flex items-center gap-4">
+            <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
+              <ArrowLeft className="w-5 h-5" />
+            </Button>
+            <Shield className="w-6 h-6 text-primary" />
+            <div>
+              <h1 className="font-mono text-lg font-bold tracking-wider text-foreground">
+                CHAIN OF CUSTODY
+              </h1>
+              <p className="font-mono text-xs text-muted-foreground">
+                IMMUTABLE AUDIT LOG
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Lock className="w-4 h-4" />
+            <span className="font-mono text-xs">READ-ONLY</span>
+          </div>
+        </div>
+      </header>
+
+      {/* Main Content */}
+      <main className="flex-1 p-6 overflow-hidden">
+        <div className="max-w-6xl mx-auto space-y-6 h-full flex flex-col">
+          {/* Filters */}
+          <div className="flex items-center gap-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Input
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search actions, actors, targets..."
+                className="pl-10"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setSelectedIncident(null)}
+                className={`px-4 py-2 border font-mono text-xs uppercase tracking-wider transition-all ${
+                  selectedIncident === null
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
+                }`}
+              >
+                ALL
+              </button>
+              {incidents.map((inc) => (
+                <button
+                  key={inc}
+                  onClick={() => setSelectedIncident(inc)}
+                  className={`px-4 py-2 border font-mono text-xs uppercase tracking-wider transition-all ${
+                    selectedIncident === inc
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
+                  }`}
+                >
+                  {inc}
+                </button>
+              ))}
+            </div>
+            <Button variant="secondary">
+              <Download className="w-4 h-4" />
+              EXPORT LOG
+            </Button>
+          </div>
+
+          {/* Log Table */}
+          <TacticalPanel
+            title="CUSTODY LOG"
+            status="locked"
+            className="flex-1 overflow-hidden"
+            headerActions={
+              <span className="font-mono text-xs text-muted-foreground">
+                {filteredLog.length} ENTRIES
+              </span>
+            }
+          >
+            <div className="space-y-0 h-full overflow-auto">
+              {/* Header */}
+              <div className="grid grid-cols-12 gap-4 px-4 py-3 font-mono text-xs text-muted-foreground uppercase tracking-wider border-b border-border sticky top-0 bg-card">
+                <div className="col-span-3">Timestamp</div>
+                <div className="col-span-3">Action</div>
+                <div className="col-span-2">Actor</div>
+                <div className="col-span-4">Target</div>
+              </div>
+
+              {/* Rows */}
+              {filteredLog.map((entry, index) => (
+                <div
+                  key={index}
+                  className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors"
+                >
+                  <div className="col-span-3 font-mono text-sm text-muted-foreground">
+                    <div>{new Date(entry.timestamp).toLocaleDateString()}</div>
+                    <div className="text-xs">
+                      {new Date(entry.timestamp).toLocaleTimeString("en-US", {
+                        hour12: false,
+                      })}
+                    </div>
+                  </div>
+                  <div className="col-span-3">
+                    <span
+                      className={`font-mono text-sm font-bold ${getActionColor(
+                        entry.action
+                      )}`}
+                    >
+                      {entry.action}
+                    </span>
+                  </div>
+                  <div className="col-span-2 font-mono text-sm">
+                    {entry.actor}
+                  </div>
+                  <div className="col-span-4 font-mono text-sm text-muted-foreground flex items-center gap-2">
+                    <FileText className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{entry.target}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </TacticalPanel>
+
+          {/* Integrity Notice */}
+          <div className="border border-primary/30 bg-primary/5 p-4">
+            <div className="flex items-center gap-3">
+              <Lock className="w-5 h-5 text-primary shrink-0" />
+              <div className="font-mono text-xs text-muted-foreground">
+                <span className="text-primary font-bold">INTEGRITY NOTICE:</span>{" "}
+                This log is cryptographically signed and append-only. All entries
+                are timestamped with UTC and cannot be modified or deleted.
+                Suitable for legal proceedings and regulatory compliance.
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      {/* Footer */}
+      <footer className="border-t border-border bg-secondary px-6 py-2 flex items-center justify-between font-mono text-xs text-muted-foreground">
+        <span>LOG INTEGRITY: VERIFIED</span>
+        <span>LAST ENTRY: {new Date(mockCustodyLog[0].timestamp).toISOString()}</span>
+        <span>{new Date().toISOString()}</span>
+      </footer>
+    </div>
+  );
+}
