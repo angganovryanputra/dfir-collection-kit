@@ -9,6 +9,7 @@ import CreateIncident from "./pages/CreateIncident";
 import CollectionExecution from "./pages/CollectionExecution";
 import EvidenceVault from "./pages/EvidenceVault";
 import ChainOfCustody from "./pages/ChainOfCustody";
+import AdminSettings from "./pages/AdminSettings";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -26,6 +27,7 @@ const App = () => (
           <Route path="/collection/:incidentId" element={<CollectionExecution />} />
           <Route path="/evidence" element={<EvidenceVault />} />
           <Route path="/chain-of-custody" element={<ChainOfCustody />} />
+          <Route path="/admin" element={<AdminSettings />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
