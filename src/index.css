@@ -1,96 +1,88 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
-*/
-
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* DFIR Tactical Command Theme - Dark Mode Only */
+    --background: 225 25% 4%;
+    --foreground: 210 20% 90%;
 
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card: 225 20% 6%;
+    --card-foreground: 210 20% 90%;
 
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover: 225 20% 8%;
+    --popover-foreground: 210 20% 90%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    /* Tactical Green - Primary Actions */
+    --primary: 155 100% 45%;
+    --primary-foreground: 225 25% 4%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    /* Dark Slate - Secondary */
+    --secondary: 220 15% 12%;
+    --secondary-foreground: 210 20% 75%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    /* Muted grays */
+    --muted: 220 15% 15%;
+    --muted-foreground: 215 15% 55%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    /* Accent - Subtle highlight */
+    --accent: 220 20% 18%;
+    --accent-foreground: 210 20% 90%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    /* Alert Colors */
+    --destructive: 0 85% 55%;
+    --destructive-foreground: 0 0% 100%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --warning: 38 100% 50%;
+    --warning-foreground: 225 25% 4%;
 
-    --radius: 0.5rem;
+    --success: 155 100% 45%;
+    --success-foreground: 225 25% 4%;
 
-    --sidebar-background: 0 0% 98%;
+    /* Status Colors */
+    --status-online: 155 100% 45%;
+    --status-offline: 0 85% 55%;
+    --status-pending: 38 100% 50%;
+    --status-locked: 155 100% 45%;
+    --status-verified: 200 100% 50%;
 
-    --sidebar-foreground: 240 5.3% 26.1%;
+    --border: 220 15% 18%;
+    --input: 220 15% 12%;
+    --ring: 155 100% 45%;
 
-    --sidebar-primary: 240 5.9% 10%;
+    --radius: 0rem;
 
-    --sidebar-primary-foreground: 0 0% 98%;
+    /* Typography */
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-sans: 'Inter', system-ui, sans-serif;
 
-    --sidebar-accent: 240 4.8% 95.9%;
-
-    --sidebar-accent-foreground: 240 5.9% 10%;
-
-    --sidebar-border: 220 13% 91%;
-
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    /* Grid overlay */
+    --grid-color: 220 15% 12%;
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --background: 225 25% 4%;
+    --foreground: 210 20% 90%;
+    --card: 225 20% 6%;
+    --card-foreground: 210 20% 90%;
+    --popover: 225 20% 8%;
+    --popover-foreground: 210 20% 90%;
+    --primary: 155 100% 45%;
+    --primary-foreground: 225 25% 4%;
+    --secondary: 220 15% 12%;
+    --secondary-foreground: 210 20% 75%;
+    --muted: 220 15% 15%;
+    --muted-foreground: 215 15% 55%;
+    --accent: 220 20% 18%;
+    --accent-foreground: 210 20% 90%;
+    --destructive: 0 85% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 220 15% 18%;
+    --input: 220 15% 12%;
+    --ring: 155 100% 45%;
   }
 }
 
@@ -99,7 +91,151 @@ All colors MUST be HSL.
     @apply border-border;
   }
 
+  html {
+    font-family: var(--font-sans);
+  }
+
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+
+  /* Tactical grid background */
+  .tactical-grid {
+    background-image: 
+      linear-gradient(hsl(var(--grid-color) / 0.3) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--grid-color) / 0.3) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+
+  /* Scanline effect for terminal areas */
+  .scanlines::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      hsl(var(--background) / 0.03) 2px,
+      hsl(var(--background) / 0.03) 4px
+    );
+    pointer-events: none;
+  }
+
+  /* Monospace text */
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+
+  /* Terminal cursor blink */
+  @keyframes cursor-blink {
+    0%, 50% { opacity: 1; }
+    51%, 100% { opacity: 0; }
+  }
+
+  .cursor-blink {
+    animation: cursor-blink 1s step-end infinite;
+  }
+
+  /* Status pulse */
+  @keyframes status-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .status-pulse {
+    animation: status-pulse 2s ease-in-out infinite;
+  }
+
+  /* Glow effects */
+  .glow-green {
+    box-shadow: 0 0 20px hsl(var(--primary) / 0.3);
+  }
+
+  .glow-red {
+    box-shadow: 0 0 20px hsl(var(--destructive) / 0.3);
+  }
+
+  .glow-amber {
+    box-shadow: 0 0 20px hsl(var(--warning) / 0.3);
+  }
+
+  /* Text glow */
+  .text-glow-green {
+    text-shadow: 0 0 10px hsl(var(--primary) / 0.5);
+  }
+
+  .text-glow-red {
+    text-shadow: 0 0 10px hsl(var(--destructive) / 0.5);
+  }
+
+  .text-glow-amber {
+    text-shadow: 0 0 10px hsl(var(--warning) / 0.5);
+  }
+
+  /* Border highlight on focus */
+  .tactical-focus:focus {
+    outline: none;
+    box-shadow: 
+      0 0 0 1px hsl(var(--primary)),
+      0 0 10px hsl(var(--primary) / 0.3);
+  }
+}
+
+@layer components {
+  /* Warning banner */
+  .warning-banner {
+    @apply bg-warning/10 border border-warning/30 text-warning px-4 py-2 font-mono text-sm;
+    background: repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 10px,
+      hsl(var(--warning) / 0.05) 10px,
+      hsl(var(--warning) / 0.05) 20px
+    );
+  }
+
+  /* Critical banner */
+  .critical-banner {
+    @apply bg-destructive/10 border border-destructive/30 text-destructive px-4 py-2 font-mono text-sm;
+    background: repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 10px,
+      hsl(var(--destructive) / 0.05) 10px,
+      hsl(var(--destructive) / 0.05) 20px
+    );
+  }
+
+  /* Panel header */
+  .panel-header {
+    @apply flex items-center gap-2 px-4 py-2 bg-secondary border-b border-border font-mono text-xs uppercase tracking-wider text-muted-foreground;
+  }
+
+  /* Terminal output */
+  .terminal-output {
+    @apply font-mono text-sm bg-background/50 p-4 overflow-auto;
+    line-height: 1.6;
+  }
+
+  .terminal-output .timestamp {
+    @apply text-muted-foreground;
+  }
+
+  .terminal-output .info {
+    @apply text-foreground;
+  }
+
+  .terminal-output .success {
+    @apply text-primary;
+  }
+
+  .terminal-output .warning {
+    @apply text-warning;
+  }
+
+  .terminal-output .error {
+    @apply text-destructive;
   }
 }
