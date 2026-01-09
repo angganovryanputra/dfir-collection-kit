@@ -9,6 +9,7 @@ import {
   Plus,
   Activity,
   HardDrive,
+  Settings,
   FolderLock,
   FileText,
   LogOut,
@@ -122,10 +123,16 @@ export default function Dashboard() {
                 <span className="text-primary font-bold">{onlineCollectors}/{collectors.length}</span>
               </div>
             </div>
-            <Button variant="ghost" size="sm" onClick={handleLogout}>
-              <LogOut className="w-4 h-4" />
-              LOGOUT
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="ghost" size="sm" onClick={() => navigate("/admin")}>
+                <Settings className="w-4 h-4" />
+                ADMIN
+              </Button>
+              <Button variant="ghost" size="sm" onClick={handleLogout}>
+                <LogOut className="w-4 h-4" />
+                LOGOUT
+              </Button>
+            </div>
           </div>
         </div>
       </header>
