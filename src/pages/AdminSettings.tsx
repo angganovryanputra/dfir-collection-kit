@@ -5,6 +5,8 @@ import { Input } from "@/components/ui/input";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { WarningBanner } from "@/components/WarningBanner";
+import { TablePagination } from "@/components/TablePagination";
+import { usePagination } from "@/hooks/usePagination";
 import {
   Shield,
   ArrowLeft,
@@ -121,6 +123,16 @@ export default function AdminSettings() {
   const [collectors] = useState<CollectorConfig[]>(mockCollectors);
   const [showAddUser, setShowAddUser] = useState(false);
   const [newUser, setNewUser] = useState<{ username: string; role: User["role"] }>({ username: "", role: "operator" });
+
+  const {
+    paginatedItems: paginatedUsers,
+    currentPage,
+    totalPages,
+    totalItems,
+    itemsPerPage,
+    goToPage,
+    setPerPage,
+  } = usePagination(users);
 
   const getRoleColor = (role: User["role"]) => {
     switch (role) {
@@ -306,7 +318,7 @@ export default function AdminSettings() {
                 )}
 
                 {/* Users Table */}
-                <TacticalPanel title="USER ACCOUNTS">
+                <TacticalPanel title="USER ACCOUNTS" className="flex flex-col">
                   <div className="space-y-0">
                     {/* Header */}
                     <div className="grid grid-cols-12 gap-4 px-4 py-3 font-mono text-xs text-muted-foreground uppercase tracking-wider border-b border-border">
@@ -318,7 +330,7 @@ export default function AdminSettings() {
                     </div>
 
                     {/* Rows */}
-                    {users.map((user) => (
+                    {paginatedUsers.map((user) => (
                       <div
                         key={user.id}
                         className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors items-center"
@@ -375,6 +387,14 @@ export default function AdminSettings() {
                       </div>
                     ))}
                   </div>
+                  <TablePagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={totalItems}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={goToPage}
+                    onItemsPerPageChange={setPerPage}
+                  />
                 </TacticalPanel>
               </>
             )}

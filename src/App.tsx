@@ -10,6 +10,7 @@ import CollectionExecution from "./pages/CollectionExecution";
 import EvidenceVault from "./pages/EvidenceVault";
 import ChainOfCustody from "./pages/ChainOfCustody";
 import AdminSettings from "./pages/AdminSettings";
+import Devices from "./pages/Devices";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -28,6 +29,7 @@ const App = () => (
           <Route path="/evidence" element={<EvidenceVault />} />
           <Route path="/chain-of-custody" element={<ChainOfCustody />} />
           <Route path="/admin" element={<AdminSettings />} />
+          <Route path="/devices" element={<Devices />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
