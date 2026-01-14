@@ -4,6 +4,8 @@ import { Button } from "@/components/ui/button";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { WarningBanner } from "@/components/WarningBanner";
+import { TablePagination } from "@/components/TablePagination";
+import { usePagination } from "@/hooks/usePagination";
 import {
   Shield,
   Plus,
@@ -15,10 +17,11 @@ import {
   LogOut,
   Server,
   AlertTriangle,
+  Monitor,
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
 
-// Mock data
+// Mock data - Extended for pagination demo
 const mockIncidents: Incident[] = [
   {
     id: "INC-2025-0142",
@@ -47,6 +50,87 @@ const mockIncidents: Incident[] = [
     createdAt: "2025-01-09T10:00:00Z",
     updatedAt: "2025-01-09T10:00:00Z",
   },
+  {
+    id: "INC-2025-0139",
+    type: "MALWARE",
+    status: "CLOSED",
+    targetEndpoints: ["WS-HR-01"],
+    operator: "J.SMITH",
+    createdAt: "2025-01-07T09:00:00Z",
+    updatedAt: "2025-01-07T15:00:00Z",
+  },
+  {
+    id: "INC-2025-0138",
+    type: "UNAUTHORIZED_ACCESS",
+    status: "COLLECTION_COMPLETE",
+    targetEndpoints: ["SRV-FILE-01"],
+    operator: "M.CHEN",
+    createdAt: "2025-01-06T11:00:00Z",
+    updatedAt: "2025-01-06T14:00:00Z",
+  },
+  {
+    id: "INC-2025-0137",
+    type: "RANSOMWARE",
+    status: "CLOSED",
+    targetEndpoints: ["WS-LEGAL-01", "WS-LEGAL-02"],
+    operator: "K.JOHNSON",
+    createdAt: "2025-01-05T08:00:00Z",
+    updatedAt: "2025-01-05T18:00:00Z",
+  },
+  {
+    id: "INC-2025-0136",
+    type: "INSIDER_THREAT",
+    status: "ACTIVE",
+    targetEndpoints: ["WS-EXEC-01"],
+    operator: "J.SMITH",
+    createdAt: "2025-01-04T10:00:00Z",
+    updatedAt: "2025-01-04T10:00:00Z",
+  },
+  {
+    id: "INC-2025-0135",
+    type: "DATA_EXFILTRATION",
+    status: "COLLECTION_COMPLETE",
+    targetEndpoints: ["SRV-DB-02"],
+    operator: "M.CHEN",
+    createdAt: "2025-01-03T14:00:00Z",
+    updatedAt: "2025-01-03T20:00:00Z",
+  },
+  {
+    id: "INC-2025-0134",
+    type: "ACCOUNT_COMPROMISE",
+    status: "CLOSED",
+    targetEndpoints: ["DC-BACKUP"],
+    operator: "K.JOHNSON",
+    createdAt: "2025-01-02T09:00:00Z",
+    updatedAt: "2025-01-02T17:00:00Z",
+  },
+  {
+    id: "INC-2025-0133",
+    type: "MALWARE",
+    status: "COLLECTION_IN_PROGRESS",
+    targetEndpoints: ["WS-DEV-01", "WS-DEV-02"],
+    operator: "J.SMITH",
+    createdAt: "2025-01-01T08:00:00Z",
+    updatedAt: "2025-01-01T12:00:00Z",
+  },
+  {
+    id: "INC-2025-0132",
+    type: "RANSOMWARE",
+    status: "CLOSED",
+    targetEndpoints: ["SRV-WEB-01"],
+    operator: "M.CHEN",
+    createdAt: "2024-12-31T10:00:00Z",
+    updatedAt: "2024-12-31T22:00:00Z",
+  },
+  {
+    id: "INC-2025-0131",
+    type: "UNAUTHORIZED_ACCESS",
+    status: "ACTIVE",
+    targetEndpoints: ["WS-SALES-01"],
+    operator: "K.JOHNSON",
+    createdAt: "2024-12-30T15:00:00Z",
+    updatedAt: "2024-12-30T15:00:00Z",
+  },
 ];
 
 const mockCollectors: Collector[] = [
@@ -60,6 +144,16 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [incidents] = useState<Incident[]>(mockIncidents);
   const [collectors] = useState<Collector[]>(mockCollectors);
+
+  const {
+    paginatedItems: paginatedIncidents,
+    currentPage,
+    totalPages,
+    totalItems,
+    itemsPerPage,
+    goToPage,
+    setPerPage,
+  } = usePagination(incidents);
 
   const activeIncidents = incidents.filter((i) => i.status !== "CLOSED").length;
   const onlineCollectors = collectors.filter((c) => c.status !== "OFFLINE").length;
@@ -175,12 +269,21 @@ export default function Dashboard() {
                 <FileText className="w-5 h-5" />
                 CHAIN OF CUSTODY
               </Button>
+              <Button
+                variant="secondary"
+                size="lg"
+                onClick={() => navigate("/devices")}
+              >
+                <Monitor className="w-5 h-5" />
+                DEVICES
+              </Button>
             </div>
 
             {/* Active Incidents */}
             <TacticalPanel
               title="ACTIVE INCIDENTS"
               status="active"
+              className="flex flex-col"
               headerActions={
                 <span className="font-mono text-xs text-primary">
                   {activeIncidents} ACTIVE
@@ -188,7 +291,7 @@ export default function Dashboard() {
               }
             >
               <div className="space-y-3">
-                {incidents.map((incident) => (
+                {paginatedIncidents.map((incident) => (
                   <div
                     key={incident.id}
                     className="border border-border bg-secondary/50 p-4 hover:border-primary/50 transition-colors cursor-pointer"
@@ -225,6 +328,14 @@ export default function Dashboard() {
                   </div>
                 ))}
               </div>
+              <TablePagination
+                currentPage={currentPage}
+                totalPages={totalPages}
+                totalItems={totalItems}
+                itemsPerPage={itemsPerPage}
+                onPageChange={goToPage}
+                onItemsPerPageChange={setPerPage}
+              />
             </TacticalPanel>
           </div>
 

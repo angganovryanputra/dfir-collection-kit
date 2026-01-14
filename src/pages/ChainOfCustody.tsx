@@ -3,6 +3,8 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TacticalPanel } from "@/components/TacticalPanel";
+import { TablePagination } from "@/components/TablePagination";
+import { usePagination } from "@/hooks/usePagination";
 import {
   Shield,
   ArrowLeft,
@@ -77,6 +79,48 @@ const mockCustodyLog: (ChainOfCustodyEntry & { incidentId: string })[] = [
     actor: "M.CHEN",
     target: "INC-2025-0141",
   },
+  {
+    incidentId: "INC-2025-0140",
+    timestamp: "2025-01-09T10:05:00Z",
+    action: "COLLECTION STARTED",
+    actor: "K.JOHNSON",
+    target: "SRV-DB-01",
+  },
+  {
+    incidentId: "INC-2025-0140",
+    timestamp: "2025-01-09T10:00:00Z",
+    action: "INCIDENT CREATED",
+    actor: "K.JOHNSON",
+    target: "INC-2025-0140",
+  },
+  {
+    incidentId: "INC-2025-0139",
+    timestamp: "2025-01-07T15:00:00Z",
+    action: "EVIDENCE LOCKED",
+    actor: "SYSTEM",
+    target: "All artifacts (28 files)",
+  },
+  {
+    incidentId: "INC-2025-0139",
+    timestamp: "2025-01-07T14:30:00Z",
+    action: "COLLECTION COMPLETE",
+    actor: "COLLECTOR-ALPHA",
+    target: "WS-HR-01",
+  },
+  {
+    incidentId: "INC-2025-0139",
+    timestamp: "2025-01-07T12:00:00Z",
+    action: "COLLECTION STARTED",
+    actor: "J.SMITH",
+    target: "WS-HR-01",
+  },
+  {
+    incidentId: "INC-2025-0139",
+    timestamp: "2025-01-07T09:00:00Z",
+    action: "INCIDENT CREATED",
+    actor: "J.SMITH",
+    target: "INC-2025-0139",
+  },
 ];
 
 export default function ChainOfCustody() {
@@ -96,6 +140,16 @@ export default function ChainOfCustody() {
       : true;
     return matchesSearch && matchesIncident;
   });
+
+  const {
+    paginatedItems,
+    currentPage,
+    totalPages,
+    totalItems,
+    itemsPerPage,
+    goToPage,
+    setPerPage,
+  } = usePagination(filteredLog);
 
   const getActionColor = (action: string) => {
     if (action.includes("CREATED")) return "text-primary";
@@ -182,14 +236,14 @@ export default function ChainOfCustody() {
           <TacticalPanel
             title="CUSTODY LOG"
             status="locked"
-            className="flex-1 overflow-hidden"
+            className="flex-1 overflow-hidden flex flex-col"
             headerActions={
               <span className="font-mono text-xs text-muted-foreground">
                 {filteredLog.length} ENTRIES
               </span>
             }
           >
-            <div className="space-y-0 h-full overflow-auto">
+            <div className="flex-1 overflow-auto">
               {/* Header */}
               <div className="grid grid-cols-12 gap-4 px-4 py-3 font-mono text-xs text-muted-foreground uppercase tracking-wider border-b border-border sticky top-0 bg-card">
                 <div className="col-span-3">Timestamp</div>
@@ -199,7 +253,7 @@ export default function ChainOfCustody() {
               </div>
 
               {/* Rows */}
-              {filteredLog.map((entry, index) => (
+              {paginatedItems.map((entry, index) => (
                 <div
                   key={index}
                   className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors"
@@ -231,6 +285,16 @@ export default function ChainOfCustody() {
                 </div>
               ))}
             </div>
+
+            {/* Pagination */}
+            <TablePagination
+              currentPage={currentPage}
+              totalPages={totalPages}
+              totalItems={totalItems}
+              itemsPerPage={itemsPerPage}
+              onPageChange={goToPage}
+              onItemsPerPageChange={setPerPage}
+            />
           </TacticalPanel>
 
           {/* Integrity Notice */}
