@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { AppLayout } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TacticalPanel } from "@/components/TacticalPanel";
-import { WarningBanner } from "@/components/WarningBanner";
 import { TablePagination } from "@/components/TablePagination";
 import { usePagination } from "@/hooks/usePagination";
 import {
@@ -21,8 +21,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Shield,
-  ArrowLeft,
   Plus,
   FileText,
   Edit,
@@ -31,7 +29,6 @@ import {
   Target,
   X,
   Save,
-  AlertTriangle,
 } from "lucide-react";
 import type { IncidentType } from "@/types/dfir";
 
@@ -263,140 +260,117 @@ export default function IncidentTemplates() {
   };
 
   const useTemplate = (template: IncidentTemplate) => {
-    // Navigate to create incident with template data
     navigate("/create-incident", { state: { template } });
   };
 
   const isFormValid = formData.name.trim() && formData.incidentType;
 
   return (
-    <div className="min-h-screen bg-background tactical-grid flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="flex items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
-              <ArrowLeft className="w-5 h-5" />
-            </Button>
-            <Shield className="w-6 h-6 text-primary" />
-            <div>
-              <h1 className="font-mono text-lg font-bold tracking-wider text-foreground">
-                INCIDENT TEMPLATES
-              </h1>
-              <p className="font-mono text-xs text-muted-foreground">
-                MANAGE COLLECTION OPERATION TEMPLATES
-              </p>
-            </div>
-          </div>
-          <Button variant="tactical" onClick={openCreateDialog}>
-            <Plus className="w-4 h-4 mr-2" />
-            CREATE TEMPLATE
-          </Button>
-        </div>
-      </header>
-
-      <WarningBanner variant="warning">
-        TEMPLATES ENABLE RAPID INCIDENT RESPONSE WITH PRE-CONFIGURED COLLECTION PARAMETERS
-      </WarningBanner>
-
-      {/* Main Content */}
-      <main className="flex-1 p-6">
-        <div className="max-w-7xl mx-auto space-y-6">
-          {/* Templates Table */}
-          <TacticalPanel 
-            title="AVAILABLE TEMPLATES" 
-            headerActions={
-              <span className="font-mono text-xs text-primary">{templates.length} TOTAL</span>
-            }
-          >
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="font-mono">ID</TableHead>
-                    <TableHead className="font-mono">NAME</TableHead>
-                    <TableHead className="font-mono">TYPE</TableHead>
-                    <TableHead className="font-mono">ENDPOINTS</TableHead>
-                    <TableHead className="font-mono">CREATED BY</TableHead>
-                    <TableHead className="font-mono">USAGE</TableHead>
-                    <TableHead className="font-mono text-right">ACTIONS</TableHead>
+    <AppLayout
+      title="INCIDENT TEMPLATES"
+      subtitle="MANAGE COLLECTION OPERATION TEMPLATES"
+      headerActions={
+        <Button variant="tactical" onClick={openCreateDialog}>
+          <Plus className="w-4 h-4 mr-2" />
+          CREATE TEMPLATE
+        </Button>
+      }
+    >
+      <div className="p-6">
+        {/* Templates Table */}
+        <TacticalPanel 
+          title="AVAILABLE TEMPLATES" 
+          headerActions={
+            <span className="font-mono text-xs text-primary">{templates.length} TOTAL</span>
+          }
+        >
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="font-mono">ID</TableHead>
+                  <TableHead className="font-mono">NAME</TableHead>
+                  <TableHead className="font-mono">TYPE</TableHead>
+                  <TableHead className="font-mono">ENDPOINTS</TableHead>
+                  <TableHead className="font-mono">CREATED BY</TableHead>
+                  <TableHead className="font-mono">USAGE</TableHead>
+                  <TableHead className="font-mono text-right">ACTIONS</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {paginatedTemplates.map((template) => (
+                  <TableRow key={template.id}>
+                    <TableCell className="font-mono text-primary">
+                      {template.id}
+                    </TableCell>
+                    <TableCell className="font-mono font-medium">
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-muted-foreground" />
+                        {template.name}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <span className="px-2 py-1 bg-warning/10 border border-warning/30 text-warning font-mono text-xs">
+                        {template.incidentType.replace("_", " ")}
+                      </span>
+                    </TableCell>
+                    <TableCell className="font-mono text-sm">
+                      {template.defaultEndpoints.length} TARGETS
+                    </TableCell>
+                    <TableCell className="font-mono text-sm text-muted-foreground">
+                      {template.createdBy}
+                    </TableCell>
+                    <TableCell className="font-mono text-sm">
+                      {template.usageCount}x
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => useTemplate(template)}
+                        >
+                          USE
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => openEditDialog(template)}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => duplicateTemplate(template)}
+                        >
+                          <Copy className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => deleteTemplate(template.id)}
+                          className="text-destructive hover:text-destructive"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {paginatedTemplates.map((template) => (
-                    <TableRow key={template.id}>
-                      <TableCell className="font-mono text-primary">
-                        {template.id}
-                      </TableCell>
-                      <TableCell className="font-mono font-medium">
-                        <div className="flex items-center gap-2">
-                          <FileText className="w-4 h-4 text-muted-foreground" />
-                          {template.name}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <span className="px-2 py-1 bg-warning/10 border border-warning/30 text-warning font-mono text-xs">
-                          {template.incidentType.replace("_", " ")}
-                        </span>
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">
-                        {template.defaultEndpoints.length} TARGETS
-                      </TableCell>
-                      <TableCell className="font-mono text-sm text-muted-foreground">
-                        {template.createdBy}
-                      </TableCell>
-                      <TableCell className="font-mono text-sm">
-                        {template.usageCount}x
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center justify-end gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => useTemplate(template)}
-                          >
-                            USE
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => openEditDialog(template)}
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => duplicateTemplate(template)}
-                          >
-                            <Copy className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => deleteTemplate(template.id)}
-                            className="text-destructive hover:text-destructive"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-            <TablePagination
-              currentPage={pagination.currentPage}
-              totalPages={pagination.totalPages}
-              totalItems={pagination.totalItems}
-              itemsPerPage={pagination.itemsPerPage}
-              onPageChange={pagination.goToPage}
-              onItemsPerPageChange={pagination.setPerPage}
-            />
-          </TacticalPanel>
-        </div>
-      </main>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <TablePagination
+            currentPage={pagination.currentPage}
+            totalPages={pagination.totalPages}
+            totalItems={pagination.totalItems}
+            itemsPerPage={pagination.itemsPerPage}
+            onPageChange={pagination.goToPage}
+            onItemsPerPageChange={pagination.setPerPage}
+          />
+        </TacticalPanel>
+      </div>
 
       {/* Create/Edit Dialog */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -562,13 +536,6 @@ export default function IncidentTemplates() {
           </div>
         </DialogContent>
       </Dialog>
-
-      {/* Footer */}
-      <footer className="border-t border-border bg-secondary px-6 py-2 flex items-center justify-between font-mono text-xs text-muted-foreground">
-        <span>TEMPLATES: {templates.length}</span>
-        <span>SYSTEM: OPERATIONAL</span>
-        <span>{new Date().toISOString()}</span>
-      </footer>
-    </div>
+    </AppLayout>
   );
 }

@@ -1,12 +1,10 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { AppLayout } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import {
-  Shield,
-  ArrowLeft,
   Folder,
   FileText,
   Download,
@@ -112,7 +110,6 @@ const mockEvidence: Evidence[] = [
 ];
 
 export default function EvidenceVault() {
-  const navigate = useNavigate();
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -126,36 +123,18 @@ export default function EvidenceVault() {
   );
 
   return (
-    <div className="min-h-screen bg-background tactical-grid flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="flex items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
-              <ArrowLeft className="w-5 h-5" />
-            </Button>
-            <Shield className="w-6 h-6 text-primary" />
-            <div>
-              <h1 className="font-mono text-lg font-bold tracking-wider text-foreground">
-                EVIDENCE VAULT
-              </h1>
-              <p className="font-mono text-xs text-muted-foreground">
-                SECURE FORENSIC STORAGE
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2 font-mono text-xs">
-              <HardDrive className="w-4 h-4 text-muted-foreground" />
-              <span className="text-muted-foreground">CAPACITY:</span>
-              <span className="text-warning">78%</span>
-            </div>
-          </div>
+    <AppLayout
+      title="EVIDENCE VAULT"
+      subtitle="SECURE FORENSIC STORAGE"
+      headerActions={
+        <div className="flex items-center gap-2 font-mono text-xs">
+          <HardDrive className="w-4 h-4 text-muted-foreground" />
+          <span className="text-muted-foreground">CAPACITY:</span>
+          <span className="text-warning">78%</span>
         </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="flex-1 p-6 overflow-hidden">
+      }
+    >
+      <div className="p-6 h-full">
         <div className="grid grid-cols-12 gap-6 h-full">
           {/* Left - Folder Structure */}
           <div className="col-span-4">
@@ -253,7 +232,7 @@ export default function EvidenceVault() {
                     />
                   </div>
                   <Button variant="tactical">
-                    <Download className="w-4 h-4" />
+                    <Download className="w-4 h-4 mr-2" />
                     EXPORT ALL
                   </Button>
                 </div>
@@ -329,14 +308,7 @@ export default function EvidenceVault() {
             )}
           </div>
         </div>
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-border bg-secondary px-6 py-2 flex items-center justify-between font-mono text-xs text-muted-foreground">
-        <span>TOTAL CASES: {mockFolders.length}</span>
-        <span>STORAGE: 9.4 GB USED</span>
-        <span>{new Date().toISOString()}</span>
-      </footer>
-    </div>
+      </div>
+    </AppLayout>
   );
 }

@@ -1,15 +1,12 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { AppLayout } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { StatusIndicator } from "@/components/StatusIndicator";
-import { WarningBanner } from "@/components/WarningBanner";
 import { TablePagination } from "@/components/TablePagination";
 import { usePagination } from "@/hooks/usePagination";
 import {
-  Shield,
-  ArrowLeft,
   Users,
   Server,
   Settings,
@@ -21,6 +18,7 @@ import {
   UserPlus,
   Power,
   RefreshCw,
+  Shield,
 } from "lucide-react";
 
 interface User {
@@ -117,7 +115,6 @@ const mockCollectors: CollectorConfig[] = [
 type TabType = "users" | "collectors" | "system";
 
 export default function AdminSettings() {
-  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>("users");
   const [users, setUsers] = useState<User[]>(mockUsers);
   const [collectors] = useState<CollectorConfig[]>(mockCollectors);
@@ -193,38 +190,19 @@ export default function AdminSettings() {
   ];
 
   return (
-    <div className="min-h-screen bg-background tactical-grid flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="flex items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
-              <ArrowLeft className="w-5 h-5" />
-            </Button>
-            <Shield className="w-6 h-6 text-primary" />
-            <div>
-              <h1 className="font-mono text-lg font-bold tracking-wider text-foreground">
-                ADMIN SETTINGS
-              </h1>
-              <p className="font-mono text-xs text-muted-foreground">
-                SYSTEM CONFIGURATION & USER MANAGEMENT
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 font-mono text-xs text-destructive">
-            <Shield className="w-4 h-4" />
-            ADMIN ACCESS REQUIRED
-          </div>
+    <AppLayout
+      title="ADMIN SETTINGS"
+      subtitle="SYSTEM CONFIGURATION & USER MANAGEMENT"
+      showWarning
+      warningMessage="CHANGES TO SYSTEM CONFIGURATION MAY AFFECT ONGOING COLLECTIONS — PROCEED WITH CAUTION"
+      headerActions={
+        <div className="flex items-center gap-2 font-mono text-xs text-destructive">
+          <Shield className="w-4 h-4" />
+          ADMIN ACCESS REQUIRED
         </div>
-      </header>
-
-      {/* Warning */}
-      <WarningBanner variant="warning">
-        CHANGES TO SYSTEM CONFIGURATION MAY AFFECT ONGOING COLLECTIONS — PROCEED WITH CAUTION
-      </WarningBanner>
-
-      {/* Main Content */}
-      <main className="flex-1 p-6 overflow-hidden">
+      }
+    >
+      <div className="p-6 h-full">
         <div className="grid grid-cols-12 gap-6 h-full">
           {/* Sidebar Tabs */}
           <div className="col-span-3">
@@ -261,7 +239,7 @@ export default function AdminSettings() {
                     variant="tactical"
                     onClick={() => setShowAddUser(true)}
                   >
-                    <UserPlus className="w-4 h-4" />
+                    <UserPlus className="w-4 h-4 mr-2" />
                     ADD USER
                   </Button>
                 </div>
@@ -303,14 +281,14 @@ export default function AdminSettings() {
                         </div>
                       </div>
                       <Button variant="tactical" onClick={handleAddUser}>
-                        <Save className="w-4 h-4" />
+                        <Save className="w-4 h-4 mr-2" />
                         SAVE
                       </Button>
                       <Button
                         variant="secondary"
                         onClick={() => setShowAddUser(false)}
                       >
-                        <X className="w-4 h-4" />
+                        <X className="w-4 h-4 mr-2" />
                         CANCEL
                       </Button>
                     </div>
@@ -408,11 +386,11 @@ export default function AdminSettings() {
                   </h2>
                   <div className="flex gap-3">
                     <Button variant="secondary">
-                      <RefreshCw className="w-4 h-4" />
+                      <RefreshCw className="w-4 h-4 mr-2" />
                       REFRESH STATUS
                     </Button>
                     <Button variant="tactical">
-                      <Plus className="w-4 h-4" />
+                      <Plus className="w-4 h-4 mr-2" />
                       ADD COLLECTOR
                     </Button>
                   </div>
@@ -446,15 +424,15 @@ export default function AdminSettings() {
                         </div>
                         <div className="flex gap-2">
                           <Button variant="secondary" size="sm" className="flex-1">
-                            <Edit2 className="w-3 h-3" />
+                            <Edit2 className="w-3 h-3 mr-2" />
                             CONFIGURE
                           </Button>
                           <Button
-                            variant={collector.status === "online" ? "warning" : "tactical"}
+                            variant={collector.status === "online" ? "destructive" : "tactical"}
                             size="sm"
                             className="flex-1"
                           >
-                            <Power className="w-3 h-3" />
+                            <Power className="w-3 h-3 mr-2" />
                             {collector.status === "online" ? "DISABLE" : "ENABLE"}
                           </Button>
                         </div>
@@ -473,147 +451,103 @@ export default function AdminSettings() {
                 </h2>
 
                 <div className="grid grid-cols-2 gap-6">
-                  <TacticalPanel title="EVIDENCE VAULT SETTINGS">
+                  {/* Evidence Vault Settings */}
+                  <TacticalPanel title="EVIDENCE VAULT" status="online">
                     <div className="space-y-4">
                       <div className="space-y-2">
                         <label className="font-mono text-xs text-muted-foreground uppercase">
                           Storage Path
                         </label>
-                        <Input
-                          defaultValue="/var/dfir/evidence"
-                          className="font-mono"
-                        />
+                        <Input defaultValue="/vault/evidence" disabled />
                       </div>
                       <div className="space-y-2">
                         <label className="font-mono text-xs text-muted-foreground uppercase">
-                          Max Storage (GB)
+                          Max File Size (GB)
                         </label>
-                        <Input defaultValue="500" type="number" className="font-mono" />
+                        <Input type="number" defaultValue="10" />
                       </div>
                       <div className="space-y-2">
                         <label className="font-mono text-xs text-muted-foreground uppercase">
                           Hash Algorithm
                         </label>
-                        <div className="flex gap-2">
-                          {["SHA-256", "SHA-512", "MD5"].map((algo) => (
-                            <button
-                              key={algo}
-                              className={`flex-1 p-2 border font-mono text-xs uppercase transition-all ${
-                                algo === "SHA-256"
-                                  ? "border-primary bg-primary/10 text-primary"
-                                  : "border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
-                              }`}
-                            >
-                              {algo}
-                            </button>
-                          ))}
-                        </div>
+                        <Input defaultValue="SHA-256" disabled />
                       </div>
-                      <Button variant="tactical" className="w-full">
-                        <Save className="w-4 h-4" />
-                        SAVE CHANGES
-                      </Button>
                     </div>
                   </TacticalPanel>
 
-                  <TacticalPanel title="COLLECTION SETTINGS">
+                  {/* Collection Settings */}
+                  <TacticalPanel title="COLLECTION ENGINE" status="online">
                     <div className="space-y-4">
                       <div className="space-y-2">
                         <label className="font-mono text-xs text-muted-foreground uppercase">
-                          Default Timeout (seconds)
+                          Default Timeout (min)
                         </label>
-                        <Input defaultValue="3600" type="number" className="font-mono" />
+                        <Input type="number" defaultValue="30" />
                       </div>
                       <div className="space-y-2">
                         <label className="font-mono text-xs text-muted-foreground uppercase">
-                          Max Concurrent Collections
+                          Max Concurrent Jobs
                         </label>
-                        <Input defaultValue="5" type="number" className="font-mono" />
+                        <Input type="number" defaultValue="5" />
                       </div>
                       <div className="space-y-2">
                         <label className="font-mono text-xs text-muted-foreground uppercase">
                           Retry Attempts
                         </label>
-                        <Input defaultValue="3" type="number" className="font-mono" />
+                        <Input type="number" defaultValue="3" />
                       </div>
-                      <Button variant="tactical" className="w-full">
-                        <Save className="w-4 h-4" />
-                        SAVE CHANGES
-                      </Button>
                     </div>
                   </TacticalPanel>
 
-                  <TacticalPanel title="SESSION SETTINGS">
+                  {/* Session Settings */}
+                  <TacticalPanel title="SESSION MANAGEMENT">
                     <div className="space-y-4">
                       <div className="space-y-2">
                         <label className="font-mono text-xs text-muted-foreground uppercase">
-                          Session Timeout (minutes)
+                          Session Timeout (min)
                         </label>
-                        <Input defaultValue="15" type="number" className="font-mono" />
+                        <Input type="number" defaultValue="15" />
                       </div>
                       <div className="space-y-2">
                         <label className="font-mono text-xs text-muted-foreground uppercase">
-                          Max Failed Login Attempts
+                          Max Failed Logins
                         </label>
-                        <Input defaultValue="5" type="number" className="font-mono" />
+                        <Input type="number" defaultValue="5" />
                       </div>
-                      <div className="space-y-2">
-                        <label className="font-mono text-xs text-muted-foreground uppercase">
-                          Lockout Duration (minutes)
-                        </label>
-                        <Input defaultValue="30" type="number" className="font-mono" />
-                      </div>
-                      <Button variant="tactical" className="w-full">
-                        <Save className="w-4 h-4" />
-                        SAVE CHANGES
-                      </Button>
                     </div>
                   </TacticalPanel>
 
-                  <TacticalPanel title="AUDIT SETTINGS">
+                  {/* Audit Settings */}
+                  <TacticalPanel title="AUDIT LOGGING">
                     <div className="space-y-4">
                       <div className="space-y-2">
                         <label className="font-mono text-xs text-muted-foreground uppercase">
                           Log Retention (days)
                         </label>
-                        <Input defaultValue="365" type="number" className="font-mono" />
+                        <Input type="number" defaultValue="365" />
                       </div>
                       <div className="space-y-2">
                         <label className="font-mono text-xs text-muted-foreground uppercase">
-                          Syslog Server
+                          Export Format
                         </label>
-                        <Input
-                          defaultValue="syslog.internal:514"
-                          className="font-mono"
-                        />
+                        <Input defaultValue="JSON" disabled />
                       </div>
-                      <div className="flex items-center justify-between p-3 border border-border bg-secondary">
-                        <span className="font-mono text-xs text-muted-foreground uppercase">
-                          Enable Remote Logging
-                        </span>
-                        <div className="w-12 h-6 bg-primary/20 border border-primary relative cursor-pointer">
-                          <div className="absolute right-0.5 top-0.5 w-5 h-5 bg-primary" />
-                        </div>
-                      </div>
-                      <Button variant="tactical" className="w-full">
-                        <Save className="w-4 h-4" />
-                        SAVE CHANGES
-                      </Button>
                     </div>
                   </TacticalPanel>
+                </div>
+
+                <div className="flex justify-end gap-4 mt-6">
+                  <Button variant="secondary">RESET TO DEFAULTS</Button>
+                  <Button variant="tactical">
+                    <Save className="w-4 h-4 mr-2" />
+                    SAVE CONFIGURATION
+                  </Button>
                 </div>
               </>
             )}
           </div>
         </div>
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-border bg-secondary px-6 py-2 flex items-center justify-between font-mono text-xs text-muted-foreground">
-        <span>ADMIN: ADMIN</span>
-        <span>CONFIG VERSION: 2.1.0-r45</span>
-        <span>{new Date().toISOString()}</span>
-      </footer>
-    </div>
+      </div>
+    </AppLayout>
   );
 }
