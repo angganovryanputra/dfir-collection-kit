@@ -18,6 +18,7 @@ import {
   Server,
   AlertTriangle,
   Monitor,
+  FileStack,
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
 
@@ -276,6 +277,14 @@ export default function Dashboard() {
               >
                 <Monitor className="w-5 h-5" />
                 DEVICES
+              </Button>
+              <Button
+                variant="secondary"
+                size="lg"
+                onClick={() => navigate("/templates")}
+              >
+                <FileStack className="w-5 h-5" />
+                TEMPLATES
               </Button>
             </div>
 
