@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -11,6 +11,7 @@ import {
   X,
   AlertTriangle,
   Target,
+  FileStack,
 } from "lucide-react";
 import type { IncidentType } from "@/types/dfir";
 
@@ -23,13 +24,35 @@ const incidentTypes: { value: IncidentType; label: string }[] = [
   { value: "INSIDER_THREAT", label: "INSIDER THREAT" },
 ];
 
+interface TemplateData {
+  id: string;
+  name: string;
+  incidentType: IncidentType;
+  defaultEndpoints: string[];
+  description: string;
+  preflightChecklist: string[];
+}
+
 export default function CreateIncident() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const template = location.state?.template as TemplateData | undefined;
+
   const [incidentType, setIncidentType] = useState<IncidentType | null>(null);
   const [endpoints, setEndpoints] = useState<string[]>([]);
   const [newEndpoint, setNewEndpoint] = useState("");
   const [operatorName, setOperatorName] = useState("");
   const [isStarting, setIsStarting] = useState(false);
+  const [customChecklist, setCustomChecklist] = useState<string[]>([]);
+
+  // Apply template on mount
+  useEffect(() => {
+    if (template) {
+      setIncidentType(template.incidentType);
+      setEndpoints([...template.defaultEndpoints]);
+      setCustomChecklist([...template.preflightChecklist]);
+    }
+  }, [template]);
 
   // Auto-generated incident ID
   const incidentId = `INC-${new Date().getFullYear()}-${String(
@@ -56,6 +79,15 @@ export default function CreateIncident() {
   };
 
   const isValid = incidentType && endpoints.length > 0 && operatorName.trim();
+
+  const defaultChecklist = [
+    "Target system(s) network isolated if required",
+    "Incident ticket created in tracking system",
+    "Legal/HR notified if insider threat",
+    "Collection scope approved by incident commander",
+  ];
+
+  const checklist = customChecklist.length > 0 ? customChecklist : defaultChecklist;
 
   return (
     <div className="min-h-screen bg-background tactical-grid flex flex-col">
@@ -86,6 +118,29 @@ export default function CreateIncident() {
       <WarningBanner variant="warning">
         ENSURE TARGET SYSTEMS ARE ISOLATED BEFORE INITIATING COLLECTION
       </WarningBanner>
+
+      {/* Template Badge */}
+      {template && (
+        <div className="mx-6 mt-4 flex items-center gap-3 p-3 border border-primary/30 bg-primary/5">
+          <FileStack className="w-5 h-5 text-primary" />
+          <div className="flex-1">
+            <div className="font-mono text-xs text-muted-foreground">USING TEMPLATE</div>
+            <div className="font-mono text-sm text-primary font-bold">{template.name}</div>
+          </div>
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            onClick={() => {
+              setIncidentType(null);
+              setEndpoints([]);
+              setCustomChecklist([]);
+              navigate("/create-incident", { replace: true, state: {} });
+            }}
+          >
+            CLEAR
+          </Button>
+        </div>
+      )}
 
       {/* Main Content */}
       <main className="flex-1 p-6">
@@ -235,10 +290,9 @@ export default function CreateIncident() {
               PRE-FLIGHT CHECKLIST
             </div>
             <ul className="font-mono text-xs text-muted-foreground space-y-1">
-              <li>☐ Target system(s) network isolated if required</li>
-              <li>☐ Incident ticket created in tracking system</li>
-              <li>☐ Legal/HR notified if insider threat</li>
-              <li>☐ Collection scope approved by incident commander</li>
+              {checklist.map((item, index) => (
+                <li key={index}>☐ {item}</li>
+              ))}
             </ul>
           </div>
         </div>

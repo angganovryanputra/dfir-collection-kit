@@ -11,6 +11,7 @@ import EvidenceVault from "./pages/EvidenceVault";
 import ChainOfCustody from "./pages/ChainOfCustody";
 import AdminSettings from "./pages/AdminSettings";
 import Devices from "./pages/Devices";
+import IncidentTemplates from "./pages/IncidentTemplates";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -30,6 +31,7 @@ const App = () => (
           <Route path="/chain-of-custody" element={<ChainOfCustody />} />
           <Route path="/admin" element={<AdminSettings />} />
           <Route path="/devices" element={<Devices />} />
+          <Route path="/templates" element={<IncidentTemplates />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </BrowserRouter>
