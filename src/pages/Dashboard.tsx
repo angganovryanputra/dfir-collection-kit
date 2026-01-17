@@ -1,28 +1,21 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { AppLayout } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { StatusIndicator } from "@/components/StatusIndicator";
-import { WarningBanner } from "@/components/WarningBanner";
 import { TablePagination } from "@/components/TablePagination";
 import { usePagination } from "@/hooks/usePagination";
 import {
-  Shield,
   Plus,
   Activity,
   HardDrive,
-  Settings,
-  FolderLock,
-  FileText,
-  LogOut,
-  Server,
   AlertTriangle,
-  Monitor,
-  FileStack,
+  ArrowUpRight,
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
 
-// Mock data - Extended for pagination demo
+// Mock data
 const mockIncidents: Incident[] = [
   {
     id: "INC-2025-0142",
@@ -160,11 +153,6 @@ export default function Dashboard() {
   const onlineCollectors = collectors.filter((c) => c.status !== "OFFLINE").length;
   const hasActiveCollection = incidents.some((i) => i.status === "COLLECTION_IN_PROGRESS");
 
-  const handleLogout = () => {
-    localStorage.removeItem("dfir_auth");
-    navigate("/");
-  };
-
   const getIncidentStatusIndicator = (status: Incident["status"]) => {
     switch (status) {
       case "COLLECTION_IN_PROGRESS":
@@ -190,109 +178,66 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-background tactical-grid flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="flex items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-4">
-            <Shield className="w-6 h-6 text-primary" />
-            <div>
-              <h1 className="font-mono text-lg font-bold tracking-wider text-foreground">
-                DFIR COMMAND CENTER
-              </h1>
-              <p className="font-mono text-xs text-muted-foreground">
-                RAPID COLLECTION KIT v2.1.0
-              </p>
+    <AppLayout
+      title="COMMAND CENTER"
+      subtitle="DFIR RAPID COLLECTION KIT"
+      showWarning={hasActiveCollection}
+      headerActions={
+        <Button variant="tactical" onClick={() => navigate("/create-incident")}>
+          <Plus className="w-4 h-4 mr-2" />
+          CREATE INCIDENT
+        </Button>
+      }
+    >
+      <div className="p-6">
+        {/* Stats Cards */}
+        <div className="grid grid-cols-4 gap-4 mb-6">
+          <div className="border border-border bg-card p-4">
+            <div className="flex items-center justify-between mb-2">
+              <Activity className="w-5 h-5 text-primary" />
+              <span className="font-mono text-3xl font-bold text-primary">{activeIncidents}</span>
+            </div>
+            <div className="font-mono text-xs text-muted-foreground uppercase">
+              Active Incidents
             </div>
           </div>
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-6 font-mono text-xs">
-              <div className="flex items-center gap-2">
-                <Activity className="w-4 h-4 text-primary" />
-                <span className="text-muted-foreground">ACTIVE:</span>
-                <span className="text-primary font-bold">{activeIncidents}</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <Server className="w-4 h-4 text-primary" />
-                <span className="text-muted-foreground">COLLECTORS:</span>
-                <span className="text-primary font-bold">{onlineCollectors}/{collectors.length}</span>
-              </div>
+          <div className="border border-border bg-card p-4">
+            <div className="flex items-center justify-between mb-2">
+              <HardDrive className="w-5 h-5 text-primary" />
+              <span className="font-mono text-3xl font-bold text-primary">
+                {onlineCollectors}/{collectors.length}
+              </span>
             </div>
-            <div className="flex items-center gap-2">
-              <Button variant="ghost" size="sm" onClick={() => navigate("/admin")}>
-                <Settings className="w-4 h-4" />
-                ADMIN
-              </Button>
-              <Button variant="ghost" size="sm" onClick={handleLogout}>
-                <LogOut className="w-4 h-4" />
-                LOGOUT
-              </Button>
+            <div className="font-mono text-xs text-muted-foreground uppercase">
+              Collectors Online
+            </div>
+          </div>
+          <div className="border border-border bg-card p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-5 h-5 flex items-center justify-center font-mono text-xs text-primary">TB</div>
+              <span className="font-mono text-3xl font-bold text-primary">2.4</span>
+            </div>
+            <div className="font-mono text-xs text-muted-foreground uppercase">
+              Evidence Stored
+            </div>
+          </div>
+          <div className="border border-border bg-card p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="w-5 h-5 flex items-center justify-center font-mono text-xs text-warning">!</div>
+              <span className="font-mono text-3xl font-bold text-warning">2</span>
+            </div>
+            <div className="font-mono text-xs text-muted-foreground uppercase">
+              System Alerts
             </div>
           </div>
         </div>
-      </header>
 
-      {/* Active Collection Warning */}
-      {hasActiveCollection && (
-        <WarningBanner variant="warning">
-          COLLECTION IN PROGRESS — DO NOT INTERRUPT TARGET SYSTEMS
-        </WarningBanner>
-      )}
-
-      {/* Main Content */}
-      <main className="flex-1 p-6">
-        <div className="grid grid-cols-12 gap-6 h-full">
-          {/* Left Column - Incidents */}
+        <div className="grid grid-cols-12 gap-6">
+          {/* Main Content - Incidents */}
           <div className="col-span-8 space-y-6">
-            {/* Quick Actions */}
-            <div className="flex items-center gap-4">
-              <Button
-                variant="tactical"
-                size="lg"
-                onClick={() => navigate("/create-incident")}
-              >
-                <Plus className="w-5 h-5" />
-                CREATE INCIDENT
-              </Button>
-              <Button
-                variant="secondary"
-                size="lg"
-                onClick={() => navigate("/evidence")}
-              >
-                <FolderLock className="w-5 h-5" />
-                EVIDENCE VAULT
-              </Button>
-              <Button
-                variant="secondary"
-                size="lg"
-                onClick={() => navigate("/chain-of-custody")}
-              >
-                <FileText className="w-5 h-5" />
-                CHAIN OF CUSTODY
-              </Button>
-              <Button
-                variant="secondary"
-                size="lg"
-                onClick={() => navigate("/devices")}
-              >
-                <Monitor className="w-5 h-5" />
-                DEVICES
-              </Button>
-              <Button
-                variant="secondary"
-                size="lg"
-                onClick={() => navigate("/templates")}
-              >
-                <FileStack className="w-5 h-5" />
-                TEMPLATES
-              </Button>
-            </div>
-
-            {/* Active Incidents */}
             <TacticalPanel
               title="ACTIVE INCIDENTS"
               status="active"
-              className="flex flex-col"
               headerActions={
                 <span className="font-mono text-xs text-primary">
                   {activeIncidents} ACTIVE
@@ -303,7 +248,7 @@ export default function Dashboard() {
                 {paginatedIncidents.map((incident) => (
                   <div
                     key={incident.id}
-                    className="border border-border bg-secondary/50 p-4 hover:border-primary/50 transition-colors cursor-pointer"
+                    className="border border-border bg-secondary/30 p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all cursor-pointer group"
                     onClick={() => {
                       if (incident.status === "COLLECTION_IN_PROGRESS") {
                         navigate(`/collection/${incident.id}`);
@@ -321,9 +266,7 @@ export default function Dashboard() {
                           </span>
                         </div>
                         <div className="font-mono text-xs text-muted-foreground space-y-1">
-                          <div>
-                            TARGETS: {incident.targetEndpoints.join(", ")}
-                          </div>
+                          <div>TARGETS: {incident.targetEndpoints.join(", ")}</div>
                           <div>OPERATOR: {incident.operator}</div>
                         </div>
                       </div>
@@ -332,6 +275,9 @@ export default function Dashboard() {
                         <div className="font-mono text-xs text-muted-foreground">
                           {new Date(incident.updatedAt).toLocaleTimeString()}
                         </div>
+                        {incident.status === "COLLECTION_IN_PROGRESS" && (
+                          <ArrowUpRight className="w-4 h-4 text-primary opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
+                        )}
                       </div>
                     </div>
                   </div>
@@ -348,7 +294,7 @@ export default function Dashboard() {
             </TacticalPanel>
           </div>
 
-          {/* Right Column - System Status */}
+          {/* Sidebar - System Status */}
           <div className="col-span-4 space-y-6">
             {/* Collectors Status */}
             <TacticalPanel
@@ -394,34 +340,9 @@ export default function Dashboard() {
                 </div>
               </div>
             </TacticalPanel>
-
-            {/* Quick Stats */}
-            <TacticalPanel title="STATISTICS">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="text-center p-4 border border-border">
-                  <div className="font-mono text-3xl font-bold text-primary">142</div>
-                  <div className="font-mono text-xs text-muted-foreground mt-1">
-                    TOTAL INCIDENTS
-                  </div>
-                </div>
-                <div className="text-center p-4 border border-border">
-                  <div className="font-mono text-3xl font-bold text-primary">2.4TB</div>
-                  <div className="font-mono text-xs text-muted-foreground mt-1">
-                    EVIDENCE STORED
-                  </div>
-                </div>
-              </div>
-            </TacticalPanel>
           </div>
         </div>
-      </main>
-
-      {/* Footer Status Bar */}
-      <footer className="border-t border-border bg-secondary px-6 py-2 flex items-center justify-between font-mono text-xs text-muted-foreground">
-        <span>OPERATOR: J.SMITH | ROLE: OPERATOR</span>
-        <span>SESSION: 00:14:32</span>
-        <span>{new Date().toISOString()}</span>
-      </footer>
-    </div>
+      </div>
+    </AppLayout>
   );
 }

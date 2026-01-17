@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { AppLayout } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -7,8 +7,6 @@ import { StatusIndicator } from "@/components/StatusIndicator";
 import { TablePagination } from "@/components/TablePagination";
 import { usePagination } from "@/hooks/usePagination";
 import {
-  Shield,
-  ArrowLeft,
   Search,
   RefreshCw,
   Plus,
@@ -19,8 +17,6 @@ import {
   Wifi,
   WifiOff,
   Clock,
-  Cpu,
-  MemoryStick,
   Activity,
   Settings,
   Power,
@@ -211,7 +207,6 @@ type FilterStatus = "all" | "online" | "offline" | "degraded" | "pending";
 type FilterType = "all" | "workstation" | "server" | "laptop" | "virtual";
 
 export default function Devices() {
-  const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [filterType, setFilterType] = useState<FilterType>("all");
@@ -290,10 +285,6 @@ export default function Devices() {
     }
   };
 
-  const getTypeLabel = (type: Device["type"]) => {
-    return type.toUpperCase();
-  };
-
   const formatLastSeen = (lastSeen: string) => {
     if (lastSeen === "-") return "NEVER";
     const date = new Date(lastSeen);
@@ -308,271 +299,190 @@ export default function Devices() {
   };
 
   return (
-    <div className="min-h-screen bg-background tactical-grid flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="flex items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
-              <ArrowLeft className="w-5 h-5" />
-            </Button>
-            <Shield className="w-6 h-6 text-primary" />
-            <div>
-              <h1 className="font-mono text-lg font-bold tracking-wider text-foreground">
-                DEVICE MANAGEMENT
-              </h1>
-              <p className="font-mono text-xs text-muted-foreground">
-                AGENT INTEGRATION & ENDPOINT STATUS
-              </p>
-            </div>
+    <AppLayout
+      title="DEVICE MANAGEMENT"
+      subtitle="AGENT INTEGRATION & ENDPOINT STATUS"
+      headerActions={
+        <div className="flex items-center gap-6 font-mono text-xs">
+          <div className="flex items-center gap-2">
+            <Wifi className="w-4 h-4 text-primary" />
+            <span className="text-muted-foreground">ONLINE:</span>
+            <span className="text-primary font-bold">{onlineCount}</span>
           </div>
-          <div className="flex items-center gap-6 font-mono text-xs">
-            <div className="flex items-center gap-2">
-              <Wifi className="w-4 h-4 text-primary" />
-              <span className="text-muted-foreground">ONLINE:</span>
-              <span className="text-primary font-bold">{onlineCount}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <WifiOff className="w-4 h-4 text-destructive" />
-              <span className="text-muted-foreground">OFFLINE:</span>
-              <span className="text-destructive font-bold">{offlineCount}</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <Activity className="w-4 h-4 text-warning" />
-              <span className="text-muted-foreground">DEGRADED:</span>
-              <span className="text-warning font-bold">{degradedCount}</span>
-            </div>
+          <div className="flex items-center gap-2">
+            <WifiOff className="w-4 h-4 text-destructive" />
+            <span className="text-muted-foreground">OFFLINE:</span>
+            <span className="text-destructive font-bold">{offlineCount}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <Activity className="w-4 h-4 text-warning" />
+            <span className="text-muted-foreground">DEGRADED:</span>
+            <span className="text-warning font-bold">{degradedCount}</span>
           </div>
         </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="flex-1 p-6 overflow-hidden">
-        <div className="max-w-full mx-auto space-y-6 h-full flex flex-col">
-          {/* Filters & Actions */}
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1 max-w-md">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search hostname, IP, or OS..."
-                className="pl-10"
-              />
-            </div>
-            
-            {/* Status Filter */}
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-xs text-muted-foreground">STATUS:</span>
-              {(["all", "online", "offline", "degraded", "pending"] as const).map((status) => (
-                <button
-                  key={status}
-                  onClick={() => setFilterStatus(status)}
-                  className={`px-3 py-1.5 border font-mono text-xs uppercase tracking-wider transition-all ${
-                    filterStatus === status
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
-                  }`}
-                >
-                  {status}
-                </button>
-              ))}
-            </div>
-
-            {/* Type Filter */}
-            <div className="flex items-center gap-2">
-              <span className="font-mono text-xs text-muted-foreground">TYPE:</span>
-              {(["all", "workstation", "server", "laptop", "virtual"] as const).map((type) => (
-                <button
-                  key={type}
-                  onClick={() => setFilterType(type)}
-                  className={`px-3 py-1.5 border font-mono text-xs uppercase tracking-wider transition-all ${
-                    filterType === type
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
-                  }`}
-                >
-                  {type === "all" ? "ALL" : type.slice(0, 3).toUpperCase()}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex gap-2 ml-auto">
-              <Button variant="secondary">
-                <RefreshCw className="w-4 h-4" />
-                REFRESH
-              </Button>
-              <Button variant="tactical">
-                <Plus className="w-4 h-4" />
-                ADD DEVICE
-              </Button>
-            </div>
-          </div>
-
-          {/* Devices Table */}
-          <TacticalPanel
-            title="REGISTERED DEVICES"
-            status="online"
-            className="flex-1 overflow-hidden flex flex-col"
-            headerActions={
-              <span className="font-mono text-xs text-muted-foreground">
-                {filteredDevices.length} DEVICES
-              </span>
-            }
-          >
-            <div className="flex-1 overflow-auto">
-              {/* Header */}
-              <div className="grid grid-cols-12 gap-4 px-4 py-3 font-mono text-xs text-muted-foreground uppercase tracking-wider border-b border-border sticky top-0 bg-card z-10">
-                <div className="col-span-2">Hostname</div>
-                <div className="col-span-1">Type</div>
-                <div className="col-span-2">IP Address</div>
-                <div className="col-span-2">OS</div>
-                <div className="col-span-1">Agent</div>
-                <div className="col-span-1">Status</div>
-                <div className="col-span-1">Last Seen</div>
-                <div className="col-span-1">Collection</div>
-                <div className="col-span-1">Actions</div>
-              </div>
-
-              {/* Rows */}
-              {paginatedItems.map((device) => (
-                <div
-                  key={device.id}
-                  className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors items-center"
-                >
-                  <div className="col-span-2 flex items-center gap-2">
-                    <div className={`${device.status === "online" ? "text-primary" : "text-muted-foreground"}`}>
-                      {getDeviceIcon(device.type)}
-                    </div>
-                    <span className="font-mono text-sm font-bold truncate">
-                      {device.hostname}
-                    </span>
-                  </div>
-                  <div className="col-span-1">
-                    <span className="font-mono text-xs text-muted-foreground">
-                      {getTypeLabel(device.type)}
-                    </span>
-                  </div>
-                  <div className="col-span-2 font-mono text-sm text-muted-foreground">
-                    {device.ipAddress}
-                  </div>
-                  <div className="col-span-2 font-mono text-xs text-muted-foreground truncate">
-                    {device.os}
-                  </div>
-                  <div className="col-span-1">
-                    <span className={`font-mono text-xs ${
-                      device.agentVersion === "2.1.0" ? "text-primary" : "text-warning"
-                    }`}>
-                      v{device.agentVersion}
-                    </span>
-                  </div>
-                  <div className="col-span-1">
-                    {getStatusIndicator(device.status)}
-                  </div>
-                  <div className="col-span-1 font-mono text-xs text-muted-foreground">
-                    <div className="flex items-center gap-1">
-                      <Clock className="w-3 h-3" />
-                      {formatLastSeen(device.lastSeen)}
-                    </div>
-                  </div>
-                  <div className="col-span-1">
-                    {getCollectionStatus(device.collectionStatus)}
-                  </div>
-                  <div className="col-span-1 flex items-center gap-1">
-                    <Button variant="ghost" size="sm" title="Configure">
-                      <Settings className="w-3 h-3" />
-                    </Button>
-                    <Button variant="ghost" size="sm" title="Toggle Status">
-                      <Power className={`w-3 h-3 ${device.status === "online" ? "text-primary" : "text-muted-foreground"}`} />
-                    </Button>
-                    <Button variant="ghost" size="sm" title="Remove">
-                      <Trash2 className="w-3 h-3 text-destructive" />
-                    </Button>
-                  </div>
-                </div>
-              ))}
-
-              {paginatedItems.length === 0 && (
-                <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                  <Monitor className="w-12 h-12 mb-4 opacity-50" />
-                  <span className="font-mono text-sm">NO DEVICES FOUND</span>
-                </div>
-              )}
-            </div>
-
-            {/* Pagination */}
-            <TablePagination
-              currentPage={currentPage}
-              totalPages={totalPages}
-              totalItems={totalItems}
-              itemsPerPage={itemsPerPage}
-              onPageChange={goToPage}
-              onItemsPerPageChange={setPerPage}
+      }
+    >
+      <div className="p-6 h-full flex flex-col">
+        {/* Filters & Actions */}
+        <div className="flex items-center gap-4 mb-6 flex-wrap">
+          <div className="relative flex-1 min-w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search hostname, IP, or OS..."
+              className="pl-10"
             />
-          </TacticalPanel>
+          </div>
+          
+          {/* Status Filter */}
+          <div className="flex items-center gap-2">
+            {(["all", "online", "offline", "degraded"] as const).map((status) => (
+              <button
+                key={status}
+                onClick={() => setFilterStatus(status)}
+                className={`px-3 py-1.5 border font-mono text-xs uppercase tracking-wider transition-all ${
+                  filterStatus === status
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
+                }`}
+              >
+                {status}
+              </button>
+            ))}
+          </div>
 
-          {/* Agent Download Section */}
-          <TacticalPanel title="AGENT DEPLOYMENT" status="online">
-            <div className="grid grid-cols-4 gap-4">
-              <div className="border border-border bg-secondary/50 p-4">
-                <div className="flex items-center gap-3 mb-3">
-                  <Monitor className="w-5 h-5 text-primary" />
-                  <span className="font-mono text-sm font-bold">WINDOWS</span>
-                </div>
-                <p className="font-mono text-xs text-muted-foreground mb-3">
-                  Windows 10/11, Server 2016+
-                </p>
-                <Button variant="tactical" size="sm" className="w-full">
-                  DOWNLOAD MSI
-                </Button>
-              </div>
-              <div className="border border-border bg-secondary/50 p-4">
-                <div className="flex items-center gap-3 mb-3">
-                  <HardDrive className="w-5 h-5 text-primary" />
-                  <span className="font-mono text-sm font-bold">LINUX</span>
-                </div>
-                <p className="font-mono text-xs text-muted-foreground mb-3">
-                  Ubuntu, RHEL, CentOS, Debian
-                </p>
-                <Button variant="tactical" size="sm" className="w-full">
-                  DOWNLOAD DEB/RPM
-                </Button>
-              </div>
-              <div className="border border-border bg-secondary/50 p-4">
-                <div className="flex items-center gap-3 mb-3">
-                  <Laptop className="w-5 h-5 text-primary" />
-                  <span className="font-mono text-sm font-bold">MACOS</span>
-                </div>
-                <p className="font-mono text-xs text-muted-foreground mb-3">
-                  macOS 11+, Intel & Apple Silicon
-                </p>
-                <Button variant="tactical" size="sm" className="w-full">
-                  DOWNLOAD PKG
-                </Button>
-              </div>
-              <div className="border border-border bg-secondary/50 p-4">
-                <div className="flex items-center gap-3 mb-3">
-                  <Server className="w-5 h-5 text-primary" />
-                  <span className="font-mono text-sm font-bold">DOCKER</span>
-                </div>
-                <p className="font-mono text-xs text-muted-foreground mb-3">
-                  Container deployment
-                </p>
-                <Button variant="secondary" size="sm" className="w-full">
-                  VIEW INSTRUCTIONS
-                </Button>
-              </div>
-            </div>
-          </TacticalPanel>
+          {/* Type Filter */}
+          <div className="flex items-center gap-2">
+            {(["all", "workstation", "server", "laptop", "virtual"] as const).map((type) => (
+              <button
+                key={type}
+                onClick={() => setFilterType(type)}
+                className={`px-3 py-1.5 border font-mono text-xs uppercase tracking-wider transition-all ${
+                  filterType === type
+                    ? "border-primary bg-primary/10 text-primary"
+                    : "border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
+                }`}
+              >
+                {type === "all" ? "ALL" : type.slice(0, 3).toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex gap-2">
+            <Button variant="secondary">
+              <RefreshCw className="w-4 h-4 mr-2" />
+              REFRESH
+            </Button>
+            <Button variant="tactical">
+              <Plus className="w-4 h-4 mr-2" />
+              ADD DEVICE
+            </Button>
+          </div>
         </div>
-      </main>
 
-      {/* Footer */}
-      <footer className="border-t border-border bg-secondary px-6 py-2 flex items-center justify-between font-mono text-xs text-muted-foreground">
-        <span>TOTAL DEVICES: {devices.length}</span>
-        <span>AGENT VERSION: 2.1.0</span>
-        <span>{new Date().toISOString()}</span>
-      </footer>
-    </div>
+        {/* Devices Table */}
+        <TacticalPanel
+          title="REGISTERED DEVICES"
+          status="online"
+          className="flex-1 overflow-hidden flex flex-col"
+          headerActions={
+            <span className="font-mono text-xs text-muted-foreground">
+              {filteredDevices.length} DEVICES
+            </span>
+          }
+        >
+          <div className="flex-1 overflow-auto">
+            {/* Header */}
+            <div className="grid grid-cols-12 gap-4 px-4 py-3 font-mono text-xs text-muted-foreground uppercase tracking-wider border-b border-border sticky top-0 bg-card z-10">
+              <div className="col-span-2">Hostname</div>
+              <div className="col-span-1">Type</div>
+              <div className="col-span-2">IP Address</div>
+              <div className="col-span-2">OS</div>
+              <div className="col-span-1">Agent</div>
+              <div className="col-span-1">Status</div>
+              <div className="col-span-1">Last Seen</div>
+              <div className="col-span-1">Collection</div>
+              <div className="col-span-1">Actions</div>
+            </div>
+
+            {/* Rows */}
+            {paginatedItems.map((device) => (
+              <div
+                key={device.id}
+                className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors items-center"
+              >
+                <div className="col-span-2 flex items-center gap-2">
+                  <div className={`${device.status === "online" ? "text-primary" : "text-muted-foreground"}`}>
+                    {getDeviceIcon(device.type)}
+                  </div>
+                  <span className="font-mono text-sm font-bold truncate">
+                    {device.hostname}
+                  </span>
+                </div>
+                <div className="col-span-1">
+                  <span className="font-mono text-xs text-muted-foreground uppercase">
+                    {device.type}
+                  </span>
+                </div>
+                <div className="col-span-2 font-mono text-sm text-muted-foreground">
+                  {device.ipAddress}
+                </div>
+                <div className="col-span-2 font-mono text-xs text-muted-foreground truncate">
+                  {device.os}
+                </div>
+                <div className="col-span-1">
+                  <span className={`font-mono text-xs ${
+                    device.agentVersion === "2.1.0" ? "text-primary" : "text-warning"
+                  }`}>
+                    v{device.agentVersion}
+                  </span>
+                </div>
+                <div className="col-span-1">
+                  {getStatusIndicator(device.status)}
+                </div>
+                <div className="col-span-1 font-mono text-xs text-muted-foreground">
+                  <div className="flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    {formatLastSeen(device.lastSeen)}
+                  </div>
+                </div>
+                <div className="col-span-1">
+                  {getCollectionStatus(device.collectionStatus)}
+                </div>
+                <div className="col-span-1 flex items-center gap-1">
+                  <Button variant="ghost" size="sm" title="Configure">
+                    <Settings className="w-3 h-3" />
+                  </Button>
+                  <Button variant="ghost" size="sm" title="Toggle Status">
+                    <Power className={`w-3 h-3 ${device.status === "online" ? "text-primary" : "text-muted-foreground"}`} />
+                  </Button>
+                  <Button variant="ghost" size="sm" title="Remove">
+                    <Trash2 className="w-3 h-3 text-destructive" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+
+            {paginatedItems.length === 0 && (
+              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
+                <Monitor className="w-12 h-12 mb-4 opacity-50" />
+                <span className="font-mono text-sm">NO DEVICES FOUND</span>
+              </div>
+            )}
+          </div>
+
+          {/* Pagination */}
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={totalItems}
+            itemsPerPage={itemsPerPage}
+            onPageChange={goToPage}
+            onItemsPerPageChange={setPerPage}
+          />
+        </TacticalPanel>
+      </div>
+    </AppLayout>
   );
 }

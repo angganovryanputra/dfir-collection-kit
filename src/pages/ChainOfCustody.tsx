@@ -1,13 +1,11 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { AppLayout } from "@/components/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { TablePagination } from "@/components/TablePagination";
 import { usePagination } from "@/hooks/usePagination";
 import {
-  Shield,
-  ArrowLeft,
   Search,
   Lock,
   FileText,
@@ -124,7 +122,6 @@ const mockCustodyLog: (ChainOfCustodyEntry & { incidentId: string })[] = [
 ];
 
 export default function ChainOfCustody() {
-  const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
 
@@ -162,162 +159,137 @@ export default function ChainOfCustody() {
   };
 
   return (
-    <div className="min-h-screen bg-background tactical-grid flex flex-col">
-      {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="flex items-center justify-between px-6 py-3">
-          <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
-              <ArrowLeft className="w-5 h-5" />
-            </Button>
-            <Shield className="w-6 h-6 text-primary" />
-            <div>
-              <h1 className="font-mono text-lg font-bold tracking-wider text-foreground">
-                CHAIN OF CUSTODY
-              </h1>
-              <p className="font-mono text-xs text-muted-foreground">
-                IMMUTABLE AUDIT LOG
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Lock className="w-4 h-4" />
-            <span className="font-mono text-xs">READ-ONLY</span>
-          </div>
+    <AppLayout
+      title="CHAIN OF CUSTODY"
+      subtitle="IMMUTABLE AUDIT LOG"
+      headerActions={
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Lock className="w-4 h-4" />
+          <span className="font-mono text-xs">READ-ONLY</span>
         </div>
-      </header>
-
-      {/* Main Content */}
-      <main className="flex-1 p-6 overflow-hidden">
-        <div className="max-w-6xl mx-auto space-y-6 h-full flex flex-col">
-          {/* Filters */}
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-              <Input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search actions, actors, targets..."
-                className="pl-10"
-              />
-            </div>
-            <div className="flex items-center gap-2">
+      }
+    >
+      <div className="p-6 h-full flex flex-col">
+        {/* Filters */}
+        <div className="flex items-center gap-4 mb-6">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search actions, actors, targets..."
+              className="pl-10"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setSelectedIncident(null)}
+              className={`px-3 py-2 border font-mono text-xs uppercase tracking-wider transition-all ${
+                selectedIncident === null
+                  ? "border-primary bg-primary/10 text-primary"
+                  : "border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
+              }`}
+            >
+              ALL
+            </button>
+            {incidents.slice(0, 3).map((inc) => (
               <button
-                onClick={() => setSelectedIncident(null)}
-                className={`px-4 py-2 border font-mono text-xs uppercase tracking-wider transition-all ${
-                  selectedIncident === null
+                key={inc}
+                onClick={() => setSelectedIncident(inc)}
+                className={`px-3 py-2 border font-mono text-xs uppercase tracking-wider transition-all ${
+                  selectedIncident === inc
                     ? "border-primary bg-primary/10 text-primary"
                     : "border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
                 }`}
               >
-                ALL
+                {inc}
               </button>
-              {incidents.map((inc) => (
-                <button
-                  key={inc}
-                  onClick={() => setSelectedIncident(inc)}
-                  className={`px-4 py-2 border font-mono text-xs uppercase tracking-wider transition-all ${
-                    selectedIncident === inc
-                      ? "border-primary bg-primary/10 text-primary"
-                      : "border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
-                  }`}
-                >
-                  {inc}
-                </button>
-              ))}
-            </div>
-            <Button variant="secondary">
-              <Download className="w-4 h-4" />
-              EXPORT LOG
-            </Button>
+            ))}
           </div>
+          <Button variant="secondary">
+            <Download className="w-4 h-4 mr-2" />
+            EXPORT
+          </Button>
+        </div>
 
-          {/* Log Table */}
-          <TacticalPanel
-            title="CUSTODY LOG"
-            status="locked"
-            className="flex-1 overflow-hidden flex flex-col"
-            headerActions={
-              <span className="font-mono text-xs text-muted-foreground">
-                {filteredLog.length} ENTRIES
-              </span>
-            }
-          >
-            <div className="flex-1 overflow-auto">
-              {/* Header */}
-              <div className="grid grid-cols-12 gap-4 px-4 py-3 font-mono text-xs text-muted-foreground uppercase tracking-wider border-b border-border sticky top-0 bg-card">
-                <div className="col-span-3">Timestamp</div>
-                <div className="col-span-3">Action</div>
-                <div className="col-span-2">Actor</div>
-                <div className="col-span-4">Target</div>
-              </div>
+        {/* Log Table */}
+        <TacticalPanel
+          title="CUSTODY LOG"
+          status="locked"
+          className="flex-1 overflow-hidden flex flex-col"
+          headerActions={
+            <span className="font-mono text-xs text-muted-foreground">
+              {filteredLog.length} ENTRIES
+            </span>
+          }
+        >
+          <div className="flex-1 overflow-auto">
+            {/* Header */}
+            <div className="grid grid-cols-12 gap-4 px-4 py-3 font-mono text-xs text-muted-foreground uppercase tracking-wider border-b border-border sticky top-0 bg-card">
+              <div className="col-span-3">Timestamp</div>
+              <div className="col-span-3">Action</div>
+              <div className="col-span-2">Actor</div>
+              <div className="col-span-4">Target</div>
+            </div>
 
-              {/* Rows */}
-              {paginatedItems.map((entry, index) => (
-                <div
-                  key={index}
-                  className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors"
-                >
-                  <div className="col-span-3 font-mono text-sm text-muted-foreground">
-                    <div>{new Date(entry.timestamp).toLocaleDateString()}</div>
-                    <div className="text-xs">
-                      {new Date(entry.timestamp).toLocaleTimeString("en-US", {
-                        hour12: false,
-                      })}
-                    </div>
-                  </div>
-                  <div className="col-span-3">
-                    <span
-                      className={`font-mono text-sm font-bold ${getActionColor(
-                        entry.action
-                      )}`}
-                    >
-                      {entry.action}
-                    </span>
-                  </div>
-                  <div className="col-span-2 font-mono text-sm">
-                    {entry.actor}
-                  </div>
-                  <div className="col-span-4 font-mono text-sm text-muted-foreground flex items-center gap-2">
-                    <FileText className="w-3 h-3 shrink-0" />
-                    <span className="truncate">{entry.target}</span>
+            {/* Rows */}
+            {paginatedItems.map((entry, index) => (
+              <div
+                key={index}
+                className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors"
+              >
+                <div className="col-span-3 font-mono text-sm text-muted-foreground">
+                  <div>{new Date(entry.timestamp).toLocaleDateString()}</div>
+                  <div className="text-xs">
+                    {new Date(entry.timestamp).toLocaleTimeString("en-US", {
+                      hour12: false,
+                    })}
                   </div>
                 </div>
-              ))}
-            </div>
-
-            {/* Pagination */}
-            <TablePagination
-              currentPage={currentPage}
-              totalPages={totalPages}
-              totalItems={totalItems}
-              itemsPerPage={itemsPerPage}
-              onPageChange={goToPage}
-              onItemsPerPageChange={setPerPage}
-            />
-          </TacticalPanel>
-
-          {/* Integrity Notice */}
-          <div className="border border-primary/30 bg-primary/5 p-4">
-            <div className="flex items-center gap-3">
-              <Lock className="w-5 h-5 text-primary shrink-0" />
-              <div className="font-mono text-xs text-muted-foreground">
-                <span className="text-primary font-bold">INTEGRITY NOTICE:</span>{" "}
-                This log is cryptographically signed and append-only. All entries
-                are timestamped with UTC and cannot be modified or deleted.
-                Suitable for legal proceedings and regulatory compliance.
+                <div className="col-span-3">
+                  <span
+                    className={`font-mono text-sm font-bold ${getActionColor(
+                      entry.action
+                    )}`}
+                  >
+                    {entry.action}
+                  </span>
+                </div>
+                <div className="col-span-2 font-mono text-sm">
+                  {entry.actor}
+                </div>
+                <div className="col-span-4 font-mono text-sm text-muted-foreground flex items-center gap-2">
+                  <FileText className="w-3 h-3 shrink-0" />
+                  <span className="truncate">{entry.target}</span>
+                </div>
               </div>
+            ))}
+          </div>
+
+          {/* Pagination */}
+          <TablePagination
+            currentPage={currentPage}
+            totalPages={totalPages}
+            totalItems={totalItems}
+            itemsPerPage={itemsPerPage}
+            onPageChange={goToPage}
+            onItemsPerPageChange={setPerPage}
+          />
+        </TacticalPanel>
+
+        {/* Integrity Notice */}
+        <div className="border border-primary/30 bg-primary/5 p-4 mt-6">
+          <div className="flex items-center gap-3">
+            <Lock className="w-5 h-5 text-primary shrink-0" />
+            <div className="font-mono text-xs text-muted-foreground">
+              <span className="text-primary font-bold">INTEGRITY NOTICE:</span>{" "}
+              This log is cryptographically signed and append-only. All entries
+              are timestamped with UTC and cannot be modified or deleted.
+              Suitable for legal proceedings and regulatory compliance.
             </div>
           </div>
         </div>
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-border bg-secondary px-6 py-2 flex items-center justify-between font-mono text-xs text-muted-foreground">
-        <span>LOG INTEGRITY: VERIFIED</span>
-        <span>LAST ENTRY: {new Date(mockCustodyLog[0].timestamp).toISOString()}</span>
-        <span>{new Date().toISOString()}</span>
-      </footer>
-    </div>
+      </div>
+    </AppLayout>
   );
 }
