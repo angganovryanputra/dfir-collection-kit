@@ -1,3 +1,5 @@
+import os
+import secrets
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +25,13 @@ def parse_dt(value: str) -> datetime:
 
 
 async def seed_data(session: AsyncSession) -> None:
+    default_password = os.getenv("DFIR_SEED_PASSWORD")
+    if not default_password:
+        default_password = secrets.token_urlsafe(16)
+    password_hash = get_password_hash(default_password)
+    if not os.getenv("DFIR_SEED_PASSWORD"):
+        print(f"Seed password: {default_password}")
+
     users = [
         User(
             id="1",
@@ -31,7 +40,7 @@ async def seed_data(session: AsyncSession) -> None:
             status="active",
             last_login="2025-01-09T10:30:00Z",
             created_at="2024-06-15T08:00:00Z",
-            password_hash=get_password_hash("password"),
+            password_hash=password_hash,
         ),
         User(
             id="2",
@@ -40,7 +49,7 @@ async def seed_data(session: AsyncSession) -> None:
             status="active",
             last_login="2025-01-08T16:45:00Z",
             created_at="2024-07-20T10:00:00Z",
-            password_hash=get_password_hash("password"),
+            password_hash=password_hash,
         ),
         User(
             id="3",
@@ -49,7 +58,7 @@ async def seed_data(session: AsyncSession) -> None:
             status="active",
             last_login="2025-01-09T09:00:00Z",
             created_at="2024-09-01T14:00:00Z",
-            password_hash=get_password_hash("password"),
+            password_hash=password_hash,
         ),
         User(
             id="4",
@@ -58,7 +67,7 @@ async def seed_data(session: AsyncSession) -> None:
             status="active",
             last_login="2025-01-09T08:00:00Z",
             created_at="2024-01-01T00:00:00Z",
-            password_hash=get_password_hash("password"),
+            password_hash=password_hash,
         ),
         User(
             id="5",
@@ -67,7 +76,7 @@ async def seed_data(session: AsyncSession) -> None:
             status="locked",
             last_login="2025-01-05T12:00:00Z",
             created_at="2024-08-10T09:00:00Z",
-            password_hash=get_password_hash("password"),
+            password_hash=password_hash,
         ),
     ]
 

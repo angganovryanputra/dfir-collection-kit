@@ -100,7 +100,11 @@ export default function AdminSettings() {
   const [collectors, setCollectors] = useState<CollectorConfig[]>([]);
   const [systemSettings, setSystemSettings] = useState<SystemSettingsResponse | null>(null);
   const [showAddUser, setShowAddUser] = useState(false);
-  const [newUser, setNewUser] = useState<{ username: string; role: User["role"] }>({ username: "", role: "operator" });
+  const [newUser, setNewUser] = useState<{ username: string; password: string; role: User["role"] }>({
+    username: "",
+    password: "",
+    role: "operator",
+  });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isRefreshingCollectors, setIsRefreshingCollectors] = useState(false);
@@ -162,6 +166,10 @@ export default function AdminSettings() {
       setErrorMessage("Username is required.");
       return;
     }
+    if (!newUser.password.trim()) {
+      setErrorMessage("Password is required.");
+      return;
+    }
     const user: User = {
       id: String(users.length + 1),
       username: newUser.username.toUpperCase(),
@@ -178,10 +186,10 @@ export default function AdminSettings() {
         status: user.status,
         last_login: user.lastLogin,
         created_at: user.createdAt,
-        password: "password",
+        password: newUser.password,
       });
       setUsers([...users, user]);
-      setNewUser({ username: "", role: "operator" });
+      setNewUser({ username: "", password: "", role: "operator" });
       setShowAddUser(false);
     } catch {
       setErrorMessage("Unable to add user.");
@@ -306,6 +314,19 @@ export default function AdminSettings() {
                             setNewUser({ ...newUser, username: e.target.value })
                           }
                           placeholder="Enter username"
+                        />
+                      </div>
+                      <div className="flex-1 space-y-2">
+                        <FormLabel className="text-muted-foreground uppercase">
+                          Password
+                        </FormLabel>
+                        <Input
+                          type="password"
+                          value={newUser.password}
+                          onChange={(e) =>
+                            setNewUser({ ...newUser, password: e.target.value })
+                          }
+                          placeholder="Enter password"
                         />
                       </div>
                       <div className="w-48 space-y-2">

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { WarningBanner } from "@/components/WarningBanner";
 import { FormLabel } from "@/components/common/FormLabel";
@@ -30,6 +30,7 @@ type SequenceContext = {
   handshakeLatencyMs: number | null;
   serverTime: string | null;
   backendVersion: string | null;
+  logoutReason?: string | null;
 };
 
 type SequenceStep = {
@@ -199,22 +200,41 @@ const computeTokenTTLMinutes = (token: string): number | null => {
 };
 
 const bootSteps: SequenceStep[] = [
-  { getText: () => "[BOOT] Initializing DFIR Rapid Collection Kit v2.1.0...", minDelay: 120, jitter: 80 },
-  { getText: () => "[KERN] Loading security modules...", minDelay: 320, jitter: 140 },
-  { getText: () => "[KERN] Cryptographic subsystem initialized", minDelay: 300, jitter: 120 },
-  { getText: (ctx) => `[NET ] Secure communication channel established (${ctx.connectionLabel || "link pending"})`, minDelay: 360, jitter: 180 },
-  { getText: (ctx) => `[NET ] Auth service handshake latency ${formatLatencyLabel(ctx.handshakeLatencyMs)}`, minDelay: 320, jitter: 150 },
-  { getText: (ctx) => `[CORE] Backend build ${ctx.backendVersion ?? "unknown"}`, minDelay: 320, jitter: 140 },
-  { getText: (ctx) => `[DB  ] Persistence layer status: ${formatDbStatusLabel(ctx.dbStatus)}`, minDelay: 360, jitter: 160 },
-  { getText: () => "[AUTH] Loading authentication protocols...", minDelay: 360, jitter: 140 },
-  { getText: () => "[AUTH] Multi-factor authentication ready", minDelay: 320, jitter: 160 },
-  { getText: () => "[SYS ] Checking system integrity...", minDelay: 360, jitter: 160 },
-  { getText: () => "[SYS ] All checksums verified ✓", minDelay: 320, jitter: 140 },
-  { getText: () => "[DFIR] Collection engine standby", minDelay: 340, jitter: 150 },
-  { getText: (ctx) => `[DFIR] Evidence vault connection established (client ${ctx.clientIp ?? "pending"})`, minDelay: 360, jitter: 160 },
-  { getText: () => "[STAT] Collector heartbeats synchronized", minDelay: 360, jitter: 180 },
-  { getText: (ctx) => `[TIME] Command clock synced ${formatServerTimestamp(ctx.serverTime)}`, minDelay: 360, jitter: 160 },
-  { getText: () => "[RDY ] System ready for authentication", minDelay: 380, jitter: 180 },
+  {
+    getText: () => "[SYS ] Initializing secure boot sequence",
+    minDelay: 400,
+  },
+  {
+    getText: () => "[SYS ] Loading tactical UI modules",
+    minDelay: 320,
+  },
+  {
+    getText: () => "[SYS ] Establishing encrypted channel",
+    minDelay: 300,
+  },
+  {
+    getText: () => "[NET ] Network handshake verified",
+    minDelay: 280,
+  },
+  {
+    getText: () => "[DB  ] Backend diagnostics complete",
+    minDelay: 260,
+  },
+  {
+    getText: (context) =>
+      context.logoutReason === "manual"
+        ? "[AUTH] Operator logout acknowledged"
+        : context.logoutReason === "timeout"
+        ? "[AUTH] Session expired — logout enforced"
+        : context.logoutReason === "forced"
+        ? "[AUTH] Administrative logout enforced"
+        : "[AUTH] Security checks complete",
+    minDelay: 240,
+  },
+  {
+    getText: () => "[SYS ] Operator console ready",
+    minDelay: 200,
+  },
 ];
 
 const preAuthSteps: SequenceStep[] = [
@@ -233,7 +253,7 @@ const successAuthSteps: SequenceStep[] = [
 
 const failureAuthSteps: SequenceStep[] = [
   { getText: (ctx) => `[FAIL] Credential verification failed for ${ctx.username ? ctx.username.toUpperCase() : "OPERATOR"}`, minDelay: 0, jitter: 0 },
-  { getText: (ctx) => `[LOG ] Unauthorized attempt recorded · IP ${ctx.clientIp ?? "unknown"}`, minDelay: 320, jitter: 160 },
+  { getText: (ctx) => `[LOG ] Unauthorized attempt recorded · Public IP ${ctx.clientIp ?? "unknown"}`, minDelay: 320, jitter: 160 },
 ];
 
 const AUTH_STAGE_LABELS = ["CRED", "PERM", "SEC", "SES"];
@@ -288,6 +308,7 @@ const parseErrorMessage = (error: unknown): string => {
 
 export default function Login() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"operator" | "viewer">("operator");
@@ -301,6 +322,8 @@ export default function Login() {
   const [authTotalSteps, setAuthTotalSteps] = useState(preAuthSteps.length + successAuthSteps.length);
   const [authFailureDialogOpen, setAuthFailureDialogOpen] = useState(false);
   const [authFailureMessage, setAuthFailureMessage] = useState<string>("");
+  const [logoutReason, setLogoutReason] = useState<string | null>(null);
+  const [logoutTimestamp, setLogoutTimestamp] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsState>({
     dbStatus: "unknown",
     handshakeLatencyMs: null,
@@ -323,10 +346,11 @@ export default function Login() {
     handshakeLatencyMs: null,
     serverTime: null,
     backendVersion: null,
+    logoutReason: null,
   });
   const authContextRef = useRef<SequenceContext>({
     username: "",
-    role: "operator",
+    role: "",
     tokenTTLMinutes: null,
     clientIp: null,
     connectionLabel,
@@ -334,6 +358,7 @@ export default function Login() {
     handshakeLatencyMs: null,
     serverTime: null,
     backendVersion: null,
+    logoutReason: null,
   });
 
   const [systemStats, setSystemStats] = useState({
@@ -378,7 +403,7 @@ export default function Login() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    setClientIp(window.location.hostname || null);
+    setClientIp(null);
   }, []);
 
   const normalizeDbStatus = (status?: string | null): DbStatus => {
@@ -461,6 +486,51 @@ export default function Login() {
   }, [diagnostics]);
 
   useEffect(() => {
+    const stored = localStorage.getItem("dfir_logout_reason");
+    const stateReason = (location.state as { logoutReason?: string } | null)?.logoutReason ?? null;
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored) as { reason?: string; timestamp?: string };
+        if (parsed.reason) {
+          setLogoutReason(parsed.reason);
+          setLogoutTimestamp(parsed.timestamp ?? null);
+        }
+      } catch {
+        // ignore invalid storage
+      }
+    }
+    if (stateReason) {
+      setLogoutReason(stateReason);
+      setLogoutTimestamp(new Date().toISOString());
+    }
+  }, [location.state]);
+
+  useEffect(() => {
+    if (!authFailureDialogOpen) return;
+    if (clientIp) return;
+    const fetchPublicIp = async () => {
+      try {
+        const response = await fetch("https://api.ipify.org?format=json");
+        if (!response.ok) return;
+        const data = (await response.json()) as { ip?: string };
+        if (data.ip) {
+          setClientIp(data.ip);
+          authContextRef.current.clientIp = data.ip;
+        }
+      } catch {
+        // ignore IP fetch errors
+      }
+    };
+    fetchPublicIp();
+  }, [authFailureDialogOpen, clientIp]);
+
+  useEffect(() => {
+    if (!logoutReason) return;
+    authContextRef.current.logoutReason = logoutReason;
+    bootContextRef.current.logoutReason = logoutReason;
+  }, [logoutReason]);
+
+  useEffect(() => {
     bootContextRef.current.connectionLabel = connectionLabel;
     authContextRef.current.connectionLabel = connectionLabel;
   }, [connectionLabel]);
@@ -483,6 +553,7 @@ export default function Login() {
         tokenTTLMinutes: null,
         clientIp,
         connectionLabel: connectionLabelRef.current,
+        logoutReason,
       };
       await playSequence(
         bootSteps,
@@ -542,9 +613,13 @@ export default function Login() {
       tokenTTLMinutes: null,
       clientIp,
       connectionLabel: connectionLabelRef.current,
+      logoutReason: null,
     };
     setAuthFailureDialogOpen(false);
     setAuthFailureMessage("");
+    setLogoutReason(null);
+    setLogoutTimestamp(null);
+    localStorage.removeItem("dfir_logout_reason");
 
     const pushMessage = (message: string) => {
       setAuthMessages((prev) => {
@@ -572,12 +647,24 @@ export default function Login() {
       await runPreAuth();
 
       try {
-        const { apiPost } = await import("@/lib/api");
+        const { apiPost, apiGet } = await import("@/lib/api");
         const response = await apiPost<{ access_token: string }>("/auth/login", {
           username,
           password,
           role,
         });
+
+        if (!clientIp) {
+          try {
+            const diag = await apiGet<DiagnosticsResponse>("/status/diagnostics");
+            if (diag.client_ip) {
+              setClientIp(diag.client_ip);
+              authContextRef.current.clientIp = diag.client_ip;
+            }
+          } catch {
+            // ignore diagnostics errors
+          }
+        }
 
         const ttl = computeTokenTTLMinutes(response.access_token);
         authContextRef.current.tokenTTLMinutes = ttl;
@@ -631,7 +718,7 @@ export default function Login() {
             </DialogHeader>
             <div className="mt-4 space-y-2 text-sm font-mono">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Origin IP</span>
+                <span className="text-muted-foreground">Public IP</span>
                 <span>{clientIp ?? "unknown"}</span>
               </div>
               <div className="flex justify-between">
@@ -810,7 +897,7 @@ export default function Login() {
             </DialogHeader>
             <div className="mt-4 space-y-2 text-sm font-mono">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Origin IP</span>
+                <span className="text-muted-foreground">Public IP</span>
                 <span>{clientIp ?? "unknown"}</span>
               </div>
               <div className="flex justify-between">
@@ -829,165 +916,8 @@ export default function Login() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
-        <div className="min-h-screen bg-background flex flex-col">
-        <WarningBanner variant="warning" className="border-x-0 border-t-0">
-          AUTHENTICATION IN PROGRESS — DO NOT CLOSE THIS WINDOW
-        </WarningBanner>
+        <div className="min-h-screen bg-background tactical-grid flex flex-col">
 
-        <div className="flex-1 flex items-center justify-center p-8">
-          <div className="w-full max-w-lg">
-            {/* Auth Header */}
-            <div className="border border-primary/30 bg-card p-6 mb-4 glow-green">
-              <div className="flex items-center justify-center gap-4 mb-6">
-                <div className="relative">
-                  <Shield className="w-8 h-8 text-primary animate-pulse" />
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <Lock className="w-5 h-5 text-primary" />
-                  </div>
-                </div>
-              </div>
-              
-              <div className="text-center mb-6">
-                <h2 className="font-mono text-lg font-bold text-primary text-glow-green mb-2">
-                  AUTHENTICATING
-                </h2>
-                <p className="font-mono text-xs text-muted-foreground">
-                  OPERATOR: {username.toUpperCase()} | ACCESS LEVEL: {role.toUpperCase()}
-                </p>
-              </div>
-
-              {/* Auth Progress Indicators */}
-              <div className="grid grid-cols-4 gap-2 mb-4">
-                {AUTH_STAGE_LABELS.map((step, i) => (
-                  <div 
-                    key={step}
-                    className={`text-center p-2 border transition-all duration-300 ${
-                      authStageStatus[i] === "done"
-                        ? "border-primary bg-primary/10 text-primary"
-                        : authStageStatus[i] === "active"
-                        ? "border-warning bg-warning/10 text-warning"
-                        : "border-border text-muted-foreground"
-                    }`}
-                  >
-                    <div className="font-mono text-xs">{step}</div>
-                    {authStageStatus[i] === "done" ? (
-                      <div className="font-mono text-xs mt-1">✓</div>
-                    ) : authStageStatus[i] === "active" ? (
-                      <div className="font-mono text-xs mt-1 animate-pulse">...</div>
-                    ) : (
-                      <div className="font-mono text-xs mt-1">○</div>
-                    )}
-                  </div>
-                ))}
-              </div>
-
-              {/* Diagnostics Snapshot */}
-              <div className="grid grid-cols-2 gap-3 mb-4 text-xs font-mono">
-                <div className="flex items-center gap-2">
-                  <Radar className="w-4 h-4 text-primary" />
-                  <span className="text-muted-foreground">LATENCY</span>
-                  <span className="text-primary">{formatLatencyLabel(diagnostics.handshakeLatencyMs)}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Database className="w-4 h-4 text-warning" />
-                  <span className="text-muted-foreground">DB</span>
-                  <span
-                    className={
-                      diagnostics.dbStatus === "ok"
-                        ? "text-primary"
-                        : diagnostics.dbStatus === "degraded"
-                        ? "text-warning"
-                        : diagnostics.dbStatus === "error"
-                        ? "text-destructive"
-                        : "text-muted-foreground"
-                    }
-                  >
-                    {formatDbStatusLabel(diagnostics.dbStatus)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Progress Bar */}
-              <div className="h-2 bg-secondary overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-primary to-primary/50 transition-all duration-300"
-                  style={{ width: `${Math.round(authProgress * 100)}%` }}
-                />
-              </div>
-            </div>
-
-            {/* Auth Log */}
-            <div className="border border-border bg-background/80 p-4 font-mono text-sm max-h-48 overflow-y-auto">
-              {authMessages.map((msg, index) => (
-                <div 
-                  key={index} 
-                  className={`py-0.5 ${
-                    msg.includes("successful") ? "text-primary text-glow-green" :
-                    msg.includes("Redirecting") ? "text-primary" :
-                    "text-foreground"
-                  }`}
-                >
-                  <span className="text-muted-foreground mr-2">
-                    {new Date().toTimeString().slice(0, 8)}
-                  </span>
-                  {msg}
-                </div>
-              ))}
-              <div className="text-primary mt-1">
-                <span className="cursor-blink">█</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="border-t border-border bg-secondary px-4 py-2 flex items-center justify-between font-mono text-xs">
-          <span className="flex items-center gap-2 text-warning">
-            <span className="w-2 h-2 bg-warning rounded-full animate-pulse" />
-            AUTHENTICATING
-          </span>
-          <span className="text-primary">CPU: {systemStats.cpu}% | MEM: {systemStats.memoryLabel}</span>
-          <span className="text-muted-foreground">{new Date().toISOString()}</span>
-        </div>
-      </div>
-      </>
-    );
-  }
-
-  return (
-    <>
-      <Dialog open={authFailureDialogOpen} onOpenChange={setAuthFailureDialogOpen}>
-        <DialogContent className="bg-background border border-destructive/40 text-foreground max-w-md">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-destructive">
-              <AlertCircle className="h-4 w-4" />
-              ACCESS DENIED
-            </DialogTitle>
-            <DialogDescription className="text-muted-foreground">
-              {authFailureMessage || "Invalid username or password."}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="mt-4 space-y-2 text-sm font-mono">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Origin IP</span>
-              <span>{clientIp ?? "unknown"}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Connection</span>
-              <span>{connectionLabel}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Timestamp</span>
-              <span>{new Date().toLocaleTimeString()}</span>
-            </div>
-          </div>
-          <DialogFooter className="mt-6">
-            <Button variant="tactical" onClick={() => setAuthFailureDialogOpen(false)}>
-              RETRY AUTH
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-      <div className="min-h-screen bg-background tactical-grid flex flex-col">
       {/* Top Warning Banner */}
       <WarningBanner variant="critical" className="border-x-0 border-t-0">
         RESTRICTED SYSTEM — AUTHORIZED PERSONNEL ONLY — ALL ACCESS IS LOGGED AND MONITORED

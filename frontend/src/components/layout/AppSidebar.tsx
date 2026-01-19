@@ -57,7 +57,15 @@ export function AppSidebar({
 
   const handleLogout = () => {
     localStorage.removeItem("dfir_auth");
-    navigate("/login");
+    localStorage.removeItem("dfir_logout_reason");
+    localStorage.setItem(
+      "dfir_logout_reason",
+      JSON.stringify({
+        reason: "manual",
+        timestamp: new Date().toISOString(),
+      })
+    );
+    navigate("/login", { replace: true, state: { logoutReason: "manual" } });
   };
 
   const NavButton = ({ item }: { item: NavItem }) => {
