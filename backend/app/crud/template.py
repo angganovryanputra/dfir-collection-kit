@@ -10,6 +10,11 @@ async def list_templates(db: AsyncSession) -> list[IncidentTemplate]:
     return list(result.scalars().all())
 
 
+async def get_template(db: AsyncSession, template_id: str) -> IncidentTemplate | None:
+    result = await db.execute(select(IncidentTemplate).where(IncidentTemplate.id == template_id))
+    return result.scalar_one_or_none()
+
+
 async def create_template(db: AsyncSession, payload: IncidentTemplateCreate) -> IncidentTemplate:
     template = IncidentTemplate(**payload.model_dump())
     db.add(template)

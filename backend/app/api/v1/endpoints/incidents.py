@@ -1,11 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_db
+from app.core.deps import get_current_user, get_db, require_roles
+from app.core.modules import build_modules
 from app.crud.collection_log import create_log_entries, delete_logs_for_incident, list_logs
-from app.crud.incident import create_incident, list_incidents, update_incident
+from app.crud.incident import create_incident, delete_incident, get_incident, list_incidents, update_incident
+from app.crud.job import create_job
+from app.models.user import User
 from app.schemas.collection import CollectionLogEntry, CollectionStartResponse, CollectionStatusResponse
 from app.schemas.incident import IncidentCreate, IncidentOut, IncidentUpdate
+from app.schemas.job import JobCreate
 
 router = APIRouter()
 
@@ -46,12 +50,27 @@ PHASE_STEPS = [
 
 
 @router.get("/", response_model=list[IncidentOut])
-async def get_incidents(db: AsyncSession = Depends(get_db)) -> list[IncidentOut]:
+async def get_incidents(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[IncidentOut]:
     incidents = await list_incidents(db)
     return [IncidentOut.model_validate(incident) for incident in incidents]
 
 
-@router.post("/", response_model=IncidentOut)
+@router.get("/{incident_id}", response_model=IncidentOut)
+async def get_incident_endpoint(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> IncidentOut:
+    incident = await get_incident(db, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return IncidentOut.model_validate(incident)
+
+
+@router.post("/", response_model=IncidentOut, dependencies=[Depends(require_roles("operator", "admin"))])
 async def create_incident_endpoint(
     payload: IncidentCreate, db: AsyncSession = Depends(get_db)
 ) -> IncidentOut:
@@ -59,12 +78,15 @@ async def create_incident_endpoint(
     return IncidentOut.model_validate(incident)
 
 
-@router.post("/{incident_id}/collect", response_model=CollectionStartResponse)
+@router.post(
+    "/{incident_id}/collect",
+    response_model=CollectionStartResponse,
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
 async def start_collection_endpoint(
     incident_id: str, db: AsyncSession = Depends(get_db)
 ) -> CollectionStartResponse:
-    incidents = await list_incidents(db)
-    incident = next((entry for entry in incidents if entry.id == incident_id), None)
+    incident = await get_incident(db, incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
@@ -86,6 +108,14 @@ async def start_collection_endpoint(
     await delete_logs_for_incident(db, incident_id)
     await create_log_entries(db, incident_id, 1, SIMULATED_COLLECTION_LOGS)
 
+    modules = build_modules()
+    await create_job(
+        db,
+        JobCreate(id=f"JOB-{incident_id}", incident_id=incident_id),
+        modules,
+        f"{incident_id}/JOB-{incident_id}",
+    )
+
     return CollectionStartResponse(
         incident_id=incident.id,
         status="started",
@@ -96,10 +126,9 @@ async def start_collection_endpoint(
 
 @router.get("/{incident_id}/collect", response_model=CollectionStatusResponse)
 async def get_collection_status_endpoint(
-    incident_id: str, db: AsyncSession = Depends(get_db)
+    incident_id: str, db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)
 ) -> CollectionStatusResponse:
-    incidents = await list_incidents(db)
-    incident = next((entry for entry in incidents if entry.id == incident_id), None)
+    incident = await get_incident(db, incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
@@ -119,10 +148,9 @@ async def get_collection_status_endpoint(
 
 @router.post("/{incident_id}/collect/poll", response_model=CollectionStatusResponse)
 async def poll_collection_endpoint(
-    incident_id: str, db: AsyncSession = Depends(get_db)
+    incident_id: str, db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)
 ) -> CollectionStatusResponse:
-    incidents = await list_incidents(db)
-    incident = next((entry for entry in incidents if entry.id == incident_id), None)
+    incident = await get_incident(db, incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
@@ -188,7 +216,11 @@ async def poll_collection_endpoint(
     )
 
 
-@router.patch("/{incident_id}", response_model=IncidentOut)
+@router.patch(
+    "/{incident_id}",
+    response_model=IncidentOut,
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
 async def update_incident_endpoint(
     incident_id: str, payload: IncidentUpdate, db: AsyncSession = Depends(get_db)
 ) -> IncidentOut:
@@ -196,3 +228,16 @@ async def update_incident_endpoint(
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
     return IncidentOut.model_validate(incident)
+
+
+@router.delete(
+    "/{incident_id}",
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def delete_incident_endpoint(
+    incident_id: str, db: AsyncSession = Depends(get_db)
+) -> dict:
+    deleted = await delete_incident(db, incident_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    return {"status": "deleted"}

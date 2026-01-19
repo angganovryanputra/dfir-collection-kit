@@ -10,6 +10,11 @@ async def list_devices(db: AsyncSession) -> list[Device]:
     return list(result.scalars().all())
 
 
+async def get_device(db: AsyncSession, device_id: str) -> Device | None:
+    result = await db.execute(select(Device).where(Device.id == device_id))
+    return result.scalar_one_or_none()
+
+
 async def create_device(db: AsyncSession, payload: DeviceCreate) -> Device:
     device = Device(**payload.model_dump())
     db.add(device)

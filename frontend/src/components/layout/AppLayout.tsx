@@ -17,9 +17,17 @@ interface IncidentResponse {
 interface CollectorResponse {
   id: string;
   name: string;
-  status: Collector["status"];
+  status: string;
   last_heartbeat: string;
 }
+
+const normalizeCollectorStatus = (status: string): Collector["status"] => {
+  const normalized = status.toUpperCase();
+  if (normalized === "ONLINE" || normalized === "OFFLINE" || normalized === "BUSY") {
+    return normalized;
+  }
+  return "OFFLINE";
+};
 
 const mapIncident = (incident: IncidentResponse): Incident => ({
   id: incident.id,
@@ -34,17 +42,10 @@ const mapIncident = (incident: IncidentResponse): Incident => ({
 const mapCollector = (collector: CollectorResponse): Collector => ({
   id: collector.id,
   name: collector.name,
-  status: collector.status,
+  status: normalizeCollectorStatus(collector.status),
   lastSeen: collector.last_heartbeat,
 });
 
-
-const mockCollectors: Collector[] = [
-  { id: "COL-01", name: "COLLECTOR-ALPHA", status: "ONLINE", lastSeen: "2025-01-09T10:30:00Z" },
-  { id: "COL-02", name: "COLLECTOR-BRAVO", status: "BUSY", lastSeen: "2025-01-09T10:30:00Z" },
-  { id: "COL-03", name: "COLLECTOR-CHARLIE", status: "ONLINE", lastSeen: "2025-01-09T10:28:00Z" },
-  { id: "COL-04", name: "COLLECTOR-DELTA", status: "OFFLINE", lastSeen: "2025-01-09T08:15:00Z" },
-];
 
 interface AppLayoutProps {
   children: ReactNode;

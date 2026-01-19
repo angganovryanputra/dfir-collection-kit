@@ -10,6 +10,11 @@ async def list_collectors(db: AsyncSession) -> list[Collector]:
     return list(result.scalars().all())
 
 
+async def get_collector(db: AsyncSession, collector_id: str) -> Collector | None:
+    result = await db.execute(select(Collector).where(Collector.id == collector_id))
+    return result.scalar_one_or_none()
+
+
 async def create_collector(db: AsyncSession, payload: CollectorCreate) -> Collector:
     collector = Collector(**payload.model_dump())
     db.add(collector)
@@ -27,3 +32,13 @@ async def update_collector_status(
     collector.status = status
     await db.flush()
     return collector
+
+
+async def delete_collector(db: AsyncSession, collector_id: str) -> bool:
+    result = await db.execute(select(Collector).where(Collector.id == collector_id))
+    collector = result.scalar_one_or_none()
+    if not collector:
+        return False
+    await db.delete(collector)
+    await db.flush()
+    return True

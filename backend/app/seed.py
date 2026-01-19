@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import get_password_hash
+from app.core.security import compute_chain_hash
 from app.models import (
     ChainOfCustodyEntry,
     Collector,
@@ -233,24 +234,46 @@ async def seed_data(session: AsyncSession) -> None:
         ),
     ]
 
-    custody = [
-        ChainOfCustodyEntry(
-            id="1",
-            incident_id="INC-2025-0142",
-            timestamp="2025-01-09T10:45:23Z",
-            action="EVIDENCE EXPORTED",
-            actor="J.SMITH",
-            target="INC-2025-0142_full_package.zip",
-        ),
-        ChainOfCustodyEntry(
-            id="2",
-            incident_id="INC-2025-0142",
-            timestamp="2025-01-09T09:30:12Z",
-            action="HASH VERIFICATION COMPLETE",
-            actor="SYSTEM",
-            target="All artifacts (47 files)",
-        ),
+    custody = []
+    custody_payloads = [
+        {
+            "id": "1",
+            "incident_id": "INC-2025-0142",
+            "timestamp": "2025-01-09T10:45:23Z",
+            "action": "EVIDENCE EXPORTED",
+            "actor": "J.SMITH",
+            "target": "INC-2025-0142_full_package.zip",
+        },
+        {
+            "id": "2",
+            "incident_id": "INC-2025-0142",
+            "timestamp": "2025-01-09T09:30:12Z",
+            "action": "HASH VERIFICATION COMPLETE",
+            "actor": "SYSTEM",
+            "target": "All artifacts (47 files)",
+        },
     ]
+
+    previous_hash = None
+    for idx, payload in enumerate(custody_payloads, start=1):
+        entry_hash = compute_chain_hash(
+            payload["incident_id"],
+            idx,
+            payload["timestamp"],
+            payload["action"],
+            payload["actor"],
+            payload["target"],
+            previous_hash,
+        )
+        custody.append(
+            ChainOfCustodyEntry(
+                **payload,
+                sequence=idx,
+                previous_hash=previous_hash,
+                entry_hash=entry_hash,
+            )
+        )
+        previous_hash = entry_hash
 
     collectors = [
         Collector(

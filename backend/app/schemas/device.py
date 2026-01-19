@@ -5,7 +5,7 @@ class DeviceBase(BaseModel):
     hostname: str
     ip_address: str
     type: str
-    os: str
+    os: str | None = None
     agent_version: str
     status: str
     last_seen: str

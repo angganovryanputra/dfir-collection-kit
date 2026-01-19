@@ -52,9 +52,12 @@ export default function CreateIncident() {
   }, [template]);
 
   // Auto-generated incident ID
-  const [incidentId] = useState(
-    `INC-${new Date().getFullYear()}-${String(Math.floor(Math.random() * 1000)).padStart(4, "0")}`
-  );
+  const [incidentId, setIncidentId] = useState<string>("");
+
+  useEffect(() => {
+    const id = `INC-${new Date().getFullYear()}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`;
+    setIncidentId(id);
+  }, []);
 
   const addEndpoint = () => {
     if (newEndpoint.trim() && !endpoints.includes(newEndpoint.trim())) {
@@ -91,7 +94,6 @@ export default function CreateIncident() {
         actor: operatorName.trim().toUpperCase(),
         target: incidentId,
       });
-      await new Promise((resolve) => setTimeout(resolve, 500));
       navigate(`/incidents/${incidentId}/collect`);
     } catch {
       setErrorMessage("Failed to create incident. Verify backend connectivity.");

@@ -118,24 +118,25 @@ const getConnectionSpeedFactor = (info: ConnectionInfo): number => {
   return Math.min(Math.max(factor, 0.6), 1.6);
 };
 
-const captureMemoryUsage = (): MemorySnapshot | null => {
-  if (typeof window === "undefined") return null;
-  const performanceWithMemory = performance as Performance & {
-    memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number };
+  const captureMemoryUsage = (): MemorySnapshot | null => {
+    if (typeof window === "undefined") return null;
+    const performanceWithMemory = performance as Performance & {
+      memory?: { usedJSHeapSize: number; jsHeapSizeLimit: number };
+    };
+    const perfMemory = performanceWithMemory.memory;
+    if (perfMemory) {
+      const used = perfMemory.usedJSHeapSize / 1024 / 1024 / 1024;
+      const total = perfMemory.jsHeapSizeLimit / 1024 / 1024 / 1024;
+      const percent = Math.min(100, Math.round((used / total) * 100));
+      return { used, total, percent };
+    }
+    const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+    if (typeof deviceMemory === "number") {
+      return { used: deviceMemory, total: deviceMemory, percent: Math.round(100) };
+    }
+    return null;
   };
-  const perfMemory = performanceWithMemory.memory;
-  if (perfMemory) {
-    const used = perfMemory.usedJSHeapSize / 1024 / 1024 / 1024;
-    const total = perfMemory.jsHeapSizeLimit / 1024 / 1024 / 1024;
-    const percent = Math.min(100, Math.round((used / total) * 100));
-    return { used, total, percent };
-  }
-  const deviceMemory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
-  if (typeof deviceMemory === "number") {
-    return { used: deviceMemory * 0.35, total: deviceMemory, percent: Math.round(35) };
-  }
-  return null;
-};
+
 
 const formatMemoryLabel = (snapshot: MemorySnapshot | null): string => {
   if (!snapshot) return "Detecting...";
@@ -199,89 +200,101 @@ const computeTokenTTLMinutes = (token: string): number | null => {
   return Math.round(diff / 60000);
 };
 
-const bootSteps: SequenceStep[] = [
-  {
-    getText: () => "[SYS ] Initializing secure boot sequence",
-    minDelay: 400,
-  },
-  {
-    getText: () => "[SYS ] Loading tactical UI modules",
-    minDelay: 320,
-  },
-  {
-    getText: () => "[SYS ] Establishing encrypted channel",
-    minDelay: 300,
-  },
-  {
-    getText: () => "[NET ] Network handshake verified",
-    minDelay: 280,
-  },
-  {
-    getText: () => "[DB  ] Backend diagnostics complete",
-    minDelay: 260,
-  },
-  {
-    getText: (context) =>
-      context.logoutReason === "manual"
-        ? "[AUTH] Operator logout acknowledged"
-        : context.logoutReason === "timeout"
-        ? "[AUTH] Session expired — logout enforced"
-        : context.logoutReason === "forced"
-        ? "[AUTH] Administrative logout enforced"
-        : "[AUTH] Security checks complete",
-    minDelay: 240,
-  },
-  {
-    getText: () => "[SYS ] Operator console ready",
-    minDelay: 200,
-  },
-];
+  const bootSteps: SequenceStep[] = [
+    {
+      getText: () => "[SYS ] Initializing secure boot sequence",
+      minDelay: 400,
+      jitter: 0,
+    },
+    {
+      getText: () => "[SYS ] Loading tactical UI modules",
+      minDelay: 320,
+      jitter: 0,
+    },
+    {
+      getText: () => "[SYS ] Establishing encrypted channel",
+      minDelay: 300,
+      jitter: 0,
+    },
+    {
+      getText: () => "[NET ] Network handshake verified",
+      minDelay: 280,
+      jitter: 0,
+    },
+    {
+      getText: () => "[DB  ] Backend diagnostics complete",
+      minDelay: 260,
+      jitter: 0,
+    },
+    {
+      getText: (context) =>
+        context.logoutReason === "manual"
+          ? "[AUTH] Operator logout acknowledged"
+          : context.logoutReason === "timeout"
+          ? "[AUTH] Session expired — logout enforced"
+          : context.logoutReason === "forced"
+          ? "[AUTH] Administrative logout enforced"
+          : "[AUTH] Security checks complete",
+      minDelay: 240,
+      jitter: 0,
+    },
+    {
+      getText: () => "[SYS ] Operator console ready",
+      minDelay: 200,
+      jitter: 0,
+    },
+  ];
 
-const preAuthSteps: SequenceStep[] = [
-  { getText: (ctx) => `[AUTH] Validating credentials for ${ctx.username ? ctx.username.toUpperCase() : "OPERATOR"}...`, minDelay: 0, jitter: 0 },
-  { getText: (ctx) => `[AUTH] Checking ${ctx.role.toUpperCase()} access level policies...`, minDelay: 360, jitter: 160 },
-  { getText: () => "[SEC ] Verifying security clearance tokens...", minDelay: 360, jitter: 180 },
-  { getText: (ctx) => `[SYS ] Establishing secure session via ${ctx.connectionLabel || "network"}...`, minDelay: 400, jitter: 180 },
-];
 
-const successAuthSteps: SequenceStep[] = [
-  { getText: (ctx) => `[SYS ] Session token generated${ctx.tokenTTLMinutes ? ` · TTL ${ctx.tokenTTLMinutes}m` : ""}`, minDelay: 260, jitter: 130 },
-  { getText: (ctx) => `[LOG ] Access logged to audit trail (IP ${ctx.clientIp ?? "unknown"})`, minDelay: 320, jitter: 160 },
-  { getText: () => "[RDY ] Authentication successful", minDelay: 340, jitter: 160 },
-  { getText: () => "[NAV ] Redirecting to command center...", minDelay: 360, jitter: 180 },
-];
+  const preAuthSteps: SequenceStep[] = [
+    { getText: (ctx) => `[AUTH] Validating credentials for ${ctx.username ? ctx.username.toUpperCase() : "OPERATOR"}...`, minDelay: 0, jitter: 0 },
+    { getText: (ctx) => `[AUTH] Checking ${ctx.role.toUpperCase()} access level policies...`, minDelay: 360, jitter: 0 },
+    { getText: () => "[SEC ] Verifying security clearance tokens...", minDelay: 360, jitter: 0 },
+    { getText: (ctx) => `[SYS ] Establishing secure session via ${ctx.connectionLabel || "network"}...`, minDelay: 400, jitter: 0 },
+  ];
 
-const failureAuthSteps: SequenceStep[] = [
-  { getText: (ctx) => `[FAIL] Credential verification failed for ${ctx.username ? ctx.username.toUpperCase() : "OPERATOR"}`, minDelay: 0, jitter: 0 },
-  { getText: (ctx) => `[LOG ] Unauthorized attempt recorded · Public IP ${ctx.clientIp ?? "unknown"}`, minDelay: 320, jitter: 160 },
-];
+  const successAuthSteps: SequenceStep[] = [
+    { getText: (ctx) => `[SYS ] Session token generated${ctx.tokenTTLMinutes ? ` · TTL ${ctx.tokenTTLMinutes}m` : ""}`, minDelay: 260, jitter: 0 },
+    { getText: (ctx) => `[LOG ] Access logged to audit trail (IP ${ctx.clientIp ?? "unknown"})`, minDelay: 320, jitter: 0 },
+    { getText: () => "[RDY ] Authentication successful", minDelay: 340, jitter: 0 },
+    { getText: () => "[NAV ] Redirecting to command center...", minDelay: 360, jitter: 0 },
+  ];
+
+  const failureAuthSteps: SequenceStep[] = [
+    { getText: (ctx) => `[FAIL] Credential verification failed for ${ctx.username ? ctx.username.toUpperCase() : "OPERATOR"}`, minDelay: 0, jitter: 0 },
+    { getText: (ctx) => `[LOG ] Unauthorized attempt recorded · Public IP ${ctx.clientIp ?? "unknown"}`, minDelay: 320, jitter: 0 },
+  ];
+
 
 const AUTH_STAGE_LABELS = ["CRED", "PERM", "SEC", "SES"];
 
-const playSequence = async (
-  steps: SequenceStep[],
-  contextRef: React.MutableRefObject<SequenceContext>,
-  addMessage: (message: string) => void,
-  options: { speedFactor: number; shouldContinue?: () => boolean; isMounted: () => boolean },
-) => {
-  const { speedFactor, shouldContinue, isMounted } = options;
-  for (let index = 0; index < steps.length; index++) {
-    const step = steps[index];
-    if (index !== 0 || step.minDelay > 0) {
-      const jitter = step.jitter ?? step.minDelay * 0.35;
-      const delay = Math.max(100, step.minDelay * speedFactor + (Math.random() - 0.5) * jitter);
-      await sleep(delay);
+  const playSequence = async (
+    steps: SequenceStep[],
+    contextRef: React.MutableRefObject<SequenceContext>,
+    addMessage: (message: string) => void,
+    options: { speedFactor: number; shouldContinue?: () => boolean; isMounted: () => boolean },
+  ) => {
+    const { speedFactor, shouldContinue, isMounted } = options;
+    for (let index = 0; index < steps.length; index++) {
+      const step = steps[index];
+      if (index !== 0 || step.minDelay > 0) {
+        await wait(step.minDelay, speedFactor, step.jitter);
+      }
+      if (!isMounted()) return;
+      const message = step.getText(contextRef.current);
+      addMessage(message);
+      if (shouldContinue && !shouldContinue()) {
+        return;
+      }
     }
-    if (!isMounted()) return;
-    const message = step.getText(contextRef.current);
-    addMessage(message);
-    if (shouldContinue && !shouldContinue()) {
-      return;
-    }
-  }
-};
+  };
 
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+  const wait = async (minDelay: number, speedFactor: number, jitter?: number) => {
+    const jitterMs = jitter ?? 0;
+    const delay = Math.max(100, minDelay * speedFactor + jitterMs);
+    await new Promise<void>((resolve) => setTimeout(resolve, delay));
+  };
+
 
 const parseErrorMessage = (error: unknown): string => {
   if (error instanceof Error) {
@@ -362,7 +375,7 @@ export default function Login() {
   });
 
   const [systemStats, setSystemStats] = useState({
-    cpu: 0,
+    cpu: null as number | null,
     memoryLabel: "Detecting...",
     networkLabel: formatNetworkThroughput(connectionInfoRef.current),
   });
@@ -457,7 +470,6 @@ export default function Login() {
           setClientIp(data.client_ip);
         }
       } catch {
-        // ignore diagnostics fetch errors
       }
     };
 
@@ -496,7 +508,6 @@ export default function Login() {
           setLogoutTimestamp(parsed.timestamp ?? null);
         }
       } catch {
-        // ignore invalid storage
       }
     }
     if (stateReason) {
@@ -518,7 +529,6 @@ export default function Login() {
           authContextRef.current.clientIp = data.ip;
         }
       } catch {
-        // ignore IP fetch errors
       }
     };
     fetchPublicIp();
@@ -588,14 +598,14 @@ export default function Login() {
     const updateStats = () => {
       const memorySnapshot = captureMemoryUsage();
       setSystemStats({
-        cpu: Math.floor(Math.random() * 40) + 5,
+        cpu: null,
         memoryLabel: formatMemoryLabel(memorySnapshot),
         networkLabel: formatNetworkThroughput(connectionInfoRef.current),
       });
     };
 
     updateStats();
-    const interval = setInterval(updateStats, 650);
+    const interval = setInterval(updateStats, 1000);
 
     return () => clearInterval(interval);
   }, [isBooting, isLoading]);
@@ -661,9 +671,9 @@ export default function Login() {
               setClientIp(diag.client_ip);
               authContextRef.current.clientIp = diag.client_ip;
             }
-          } catch {
-            // ignore diagnostics errors
-          }
+            } catch {
+            }
+
         }
 
         const ttl = computeTokenTTLMinutes(response.access_token);
@@ -676,7 +686,7 @@ export default function Login() {
           JSON.stringify({ username, role, token: response.access_token })
         );
 
-        await sleep(350);
+        await wait(350, 1, 0);
         navigate("/dashboard");
       } catch (error) {
         localStorage.removeItem("dfir_auth");
@@ -766,7 +776,9 @@ export default function Login() {
                 <div className="flex items-center gap-2 font-mono text-xs">
                   <Cpu className="w-4 h-4 text-primary" />
                   <span className="text-muted-foreground">CPU:</span>
-                  <span className="text-primary">{systemStats.cpu}%</span>
+                  <span className="text-primary">
+                    {typeof systemStats.cpu === "number" ? `${systemStats.cpu}%` : "Detecting..."}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2 font-mono text-xs">
                   <Server className="w-4 h-4 text-warning" />
@@ -1081,4 +1093,5 @@ export default function Login() {
     </div>
     </>
   );
+}
 }

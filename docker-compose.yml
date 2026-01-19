@@ -2,13 +2,15 @@ version: "3.9"
 
 services:
   db:
-    image: postgres:16
+    image: postgres:16-alpine
+    container_name: dfir-postgres
     environment:
       POSTGRES_USER: dfir
       POSTGRES_PASSWORD: dfir
       POSTGRES_DB: dfir
+      PGDATA: /var/lib/postgresql/data/pgdata
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - dfir_postgres:/var/lib/postgresql/data
     healthcheck:
@@ -17,38 +19,68 @@ services:
       timeout: 5s
       retries: 10
       start_period: 5s
+    restart: unless-stopped
+    networks:
+      - dfir-network
 
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    container_name: dfir-backend
     environment:
       DATABASE_URL: postgresql+asyncpg://dfir:dfir@db:5432/dfir
-      SECRET_KEY: change-me
+      SECRET_KEY: ${SECRET_KEY:-local-dev-secret}
       ACCESS_TOKEN_EXPIRE_MINUTES: 60
+      EVIDENCE_STORAGE_PATH: /vault/evidence
+      AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:-local-agent-secret}
+      REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
+    volumes:
+      - dfir_evidence:/vault/evidence
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/incidents')\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/status/diagnostics')\""]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 20s
+    restart: unless-stopped
+    networks:
+      - dfir-network
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    container_name: dfir-frontend
     environment:
-      VITE_API_BASE_URL: http://localhost:8000/api/v1
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://backend:8000/api/v1}
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     depends_on:
       backend:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:5173 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - dfir-network
+
+networks:
+  dfir-network:
+    driver: bridge
 
 volumes:
   dfir_postgres:
+    driver: local
+  dfir_evidence:
+    driver: local
+

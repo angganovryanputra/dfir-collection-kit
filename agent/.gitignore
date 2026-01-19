@@ -1,0 +1,15 @@
+# Binaries
+dfir-agent
+dfir-agent.exe
+
+# Go build artifacts
+*.exe
+*.out
+
+# Agent ID file
+agent_id.json
+
+# IDE
+.idea/
+.vscode/
+*.swp

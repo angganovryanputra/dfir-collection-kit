@@ -30,9 +30,17 @@ interface IncidentResponse {
 interface CollectorResponse {
   id: string;
   name: string;
-  status: Collector["status"];
+  status: string;
   last_heartbeat: string;
 }
+
+const normalizeCollectorStatus = (status: string): Collector["status"] => {
+  const normalized = status.toUpperCase();
+  if (normalized === "ONLINE" || normalized === "OFFLINE" || normalized === "BUSY") {
+    return normalized;
+  }
+  return "OFFLINE";
+};
 
 const mapIncident = (incident: IncidentResponse): Incident => ({
   id: incident.id,
@@ -47,7 +55,7 @@ const mapIncident = (incident: IncidentResponse): Incident => ({
 const mapCollector = (collector: CollectorResponse): Collector => ({
   id: collector.id,
   name: collector.name,
-  status: collector.status,
+  status: normalizeCollectorStatus(collector.status),
   lastSeen: collector.last_heartbeat,
 });
 

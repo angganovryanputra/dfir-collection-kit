@@ -26,6 +26,11 @@ async def list_items(db: AsyncSession, incident_id: str | None = None) -> list[E
     return list(result.scalars().all())
 
 
+async def get_item(db: AsyncSession, evidence_id: str) -> EvidenceItem | None:
+    result = await db.execute(select(EvidenceItem).where(EvidenceItem.id == evidence_id))
+    return result.scalar_one_or_none()
+
+
 async def create_item(db: AsyncSession, payload: EvidenceItemCreate) -> EvidenceItem:
     item = EvidenceItem(**payload.model_dump())
     db.add(item)

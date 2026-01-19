@@ -208,7 +208,6 @@ export default function IncidentTemplates() {
     if (!formData.name || !formData.incidentType) return;
 
     setIsSaving(true);
-    await new Promise((resolve) => setTimeout(resolve, 300));
 
     try {
       if (editingTemplate) {

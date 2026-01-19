@@ -103,7 +103,6 @@ export default function CollectionExecution() {
   const pollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedRef = useRef(false);
   const startedAtRef = useRef<number | null>(null);
-  const createEvidenceOnceRef = useRef(false);
 
   useEffect(() => {
     const loadContext = async () => {
@@ -219,27 +218,15 @@ export default function CollectionExecution() {
   }, [incidentId]);
 
   useEffect(() => {
-    const createEvidence = async () => {
+    const fetchExistingEvidence = async () => {
       if (!incident || !isComplete) return;
-      if (createEvidenceOnceRef.current) return;
-      createEvidenceOnceRef.current = true;
       try {
-        const payload = {
-          id: `EV-${incident.id}`,
-          incident_id: incident.id,
-          type: incident.type,
-          date: new Date().toISOString().slice(0, 10),
-          files_count: 47,
-          total_size: "2.4 GB",
-          status: "HASH_VERIFIED",
-        };
-        await apiPost<EvidenceFolderResponse>("/evidence/folders", payload);
+        await apiGet<EvidenceFolderResponse[]>("/evidence/folders");
       } catch {
-        // ignore evidence creation issues
       }
     };
 
-    createEvidence();
+    fetchExistingEvidence();
   }, [incident, isComplete]);
 
   const formatTime = (seconds: number) => {

@@ -15,6 +15,9 @@ class ChainOfCustodyEntryCreate(ChainOfCustodyEntryBase):
 
 class ChainOfCustodyEntryOut(ChainOfCustodyEntryBase):
     id: str
+    sequence: int
+    previous_hash: str | None = None
+    entry_hash: str
 
     class Config:
         from_attributes = True
