@@ -1,0 +1,554 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "windows_eventlog_security",
+      "name": "Windows Security Event Log",
+      "os": "windows",
+      "category": "logs",
+      "priority": "high",
+      "why_important": "Contains authentication, logon, process creation, and audit events critical for incident timelines.",
+      "paths": [
+        {
+          "path": "%SystemRoot%\\System32\\winevt\\Logs\\Security.evtx",
+          "notes": "Default Security.evtx location"
+        }
+      ],
+      "collection_method": {
+        "type": "export",
+        "recommended": "wevtutil epl Security <out.evtx> /q:*[System[TimeCreated[timediff(@SystemTime) <= <ms>]]]",
+        "fallbacks": ["Copy Security.evtx if export fails and file is readable"]
+      },
+      "version_notes": ["Windows 10/11, Server 2016+ consistent log channel name"],
+      "source_citations": [
+        {
+          "title": "Eventlog Key",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows/win32/eventlog/eventlog-key",
+          "section": "Eventlog Key table (Application/Security/System)"
+        },
+        {
+          "title": "4624(S): An account was successfully logged on",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/previous-versions/windows/it-pro/windows-10/security/threat-protection/auditing/event-4624",
+          "section": "Logon types and descriptions"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_eventlog_system",
+      "name": "Windows System Event Log",
+      "os": "windows",
+      "category": "logs",
+      "priority": "high",
+      "why_important": "System services, driver, and OS-level events provide system-level timeline and stability context.",
+      "paths": [
+        {
+          "path": "%SystemRoot%\\System32\\winevt\\Logs\\System.evtx",
+          "notes": "Default System.evtx location"
+        }
+      ],
+      "collection_method": {
+        "type": "export",
+        "recommended": "wevtutil epl System <out.evtx> /q:*[System[TimeCreated[timediff(@SystemTime) <= <ms>]]]",
+        "fallbacks": ["Copy System.evtx if export fails and file is readable"]
+      },
+      "version_notes": ["Windows 10/11, Server 2016+ consistent log channel name"],
+      "source_citations": [
+        {
+          "title": "Eventlog Key",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows/win32/eventlog/eventlog-key",
+          "section": "Eventlog Key table (Application/Security/System)"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_eventlog_application",
+      "name": "Windows Application Event Log",
+      "os": "windows",
+      "category": "logs",
+      "priority": "high",
+      "why_important": "Application and service events help identify suspicious application behavior and failures.",
+      "paths": [
+        {
+          "path": "%SystemRoot%\\System32\\winevt\\Logs\\Application.evtx",
+          "notes": "Default Application.evtx location"
+        }
+      ],
+      "collection_method": {
+        "type": "export",
+        "recommended": "wevtutil epl Application <out.evtx> /q:*[System[TimeCreated[timediff(@SystemTime) <= <ms>]]]",
+        "fallbacks": ["Copy Application.evtx if export fails and file is readable"]
+      },
+      "version_notes": ["Windows 10/11, Server 2016+ consistent log channel name"],
+      "source_citations": [
+        {
+          "title": "Eventlog Key",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows/win32/eventlog/eventlog-key",
+          "section": "Eventlog Key table (Application/Security/System)"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_eventlog_powershell_operational",
+      "name": "PowerShell Operational Log",
+      "os": "windows",
+      "category": "logs",
+      "priority": "high",
+      "why_important": "PowerShell logging captures script block and module execution used in many intrusions.",
+      "paths": [
+        {
+          "path": "%SystemRoot%\\System32\\winevt\\Logs\\Microsoft-Windows-PowerShell%4Operational.evtx",
+          "notes": "Operational channel log"
+        }
+      ],
+      "collection_method": {
+        "type": "export",
+        "recommended": "wevtutil epl Microsoft-Windows-PowerShell/Operational <out.evtx>",
+        "fallbacks": ["Copy Operational.evtx if export fails and file is readable"]
+      },
+      "version_notes": ["PowerShell 5+ operational channel available by default"],
+      "source_citations": [
+        {
+          "title": "Security features in PowerShell",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/powershell/scripting/security/security-features?view=powershell-7.5",
+          "section": "Module and script block logging"
+        },
+        {
+          "title": "about_Logging_Windows",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/about/about_logging_windows?view=powershell-7.5",
+          "section": "Viewing the PowerShell event log entries"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_eventlog_sysmon_operational",
+      "name": "Sysmon Operational Log",
+      "os": "windows",
+      "category": "logs",
+      "priority": "high",
+      "why_important": "Sysmon provides detailed process, network, and persistence telemetry.",
+      "paths": [
+        {
+          "path": "%SystemRoot%\\System32\\winevt\\Logs\\Microsoft-Windows-Sysmon%4Operational.evtx",
+          "notes": "Sysmon operational channel log"
+        }
+      ],
+      "collection_method": {
+        "type": "export",
+        "recommended": "wevtutil epl Microsoft-Windows-Sysmon/Operational <out.evtx>",
+        "fallbacks": ["Skip if Sysmon not installed"]
+      },
+      "version_notes": ["Requires Sysmon installed"],
+      "source_citations": [
+        {
+          "title": "Sysmon",
+          "publisher": "Microsoft Sysinternals",
+          "url": "https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon",
+          "section": "Events and channel location"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_registry_run_keys",
+      "name": "Run and RunOnce Registry Keys",
+      "os": "windows",
+      "category": "persistence",
+      "priority": "high",
+      "why_important": "Common autostart mechanism for persistence.",
+      "paths": [
+        {"path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "notes": "Machine-wide"},
+        {"path": "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce", "notes": "Machine-wide"},
+        {"path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run", "notes": "Per-user"},
+        {"path": "HKCU\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce", "notes": "Per-user"}
+      ],
+      "collection_method": {
+        "type": "command",
+        "recommended": "reg query <key>",
+        "fallbacks": []
+      },
+      "version_notes": ["Consistent across modern Windows versions"],
+      "source_citations": [
+        {
+          "title": "Run and RunOnce Registry Keys",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows/win32/setupapi/run-and-runonce-registry-keys",
+          "section": "Run and RunOnce keys"
+        },
+        {
+          "title": "Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder",
+          "publisher": "MITRE ATT&CK",
+          "url": "https://attack.mitre.org/techniques/T1547/001/",
+          "section": "Registry Run Keys / Startup Folder"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_startup_folders",
+      "name": "Startup Folders",
+      "os": "windows",
+      "category": "persistence",
+      "priority": "high",
+      "why_important": "Startup folders are common persistence targets for user and all-users startup.",
+      "paths": [
+        {
+          "path": "%APPDATA%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup",
+          "notes": "Per-user startup folder"
+        },
+        {
+          "path": "%ProgramData%\\Microsoft\\Windows\\Start Menu\\Programs\\Startup",
+          "notes": "All-users startup folder"
+        }
+      ],
+      "collection_method": {
+        "type": "copy",
+        "recommended": "List and copy items from Startup folders",
+        "fallbacks": ["Record folder listing if files are locked"]
+      },
+      "version_notes": ["Paths derived from CSIDL/known folder mapping"],
+      "source_citations": [
+        {
+          "title": "CSIDL values",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows/win32/shell/csidl",
+          "section": "CSIDL_STARTUP and CSIDL_COMMON_STARTUP"
+        },
+        {
+          "title": "Boot or Logon Autostart Execution: Registry Run Keys / Startup Folder",
+          "publisher": "MITRE ATT&CK",
+          "url": "https://attack.mitre.org/techniques/T1547/001/",
+          "section": "Startup folder paths"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_services",
+      "name": "Windows Services",
+      "os": "windows",
+      "category": "persistence",
+      "priority": "high",
+      "why_important": "Services can provide persistence and privileged execution.",
+      "paths": [
+        {
+          "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services",
+          "notes": "Service configuration registry tree"
+        }
+      ],
+      "collection_method": {
+        "type": "command",
+        "recommended": "Get-Service or sc query",
+        "fallbacks": ["Export registry service tree if needed"]
+      },
+      "version_notes": ["Service registry tree consistent across modern Windows"],
+      "source_citations": [
+        {
+          "title": "HKLM\\SYSTEM\\CurrentControlSet\\Services Registry Tree",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows-hardware/drivers/install/hklm-system-currentcontrolset-services-registry-tree",
+          "section": "Registry tree and values"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_scheduled_tasks",
+      "name": "Scheduled Tasks",
+      "os": "windows",
+      "category": "persistence",
+      "priority": "high",
+      "why_important": "Tasks can execute at logon or boot and are commonly abused for persistence.",
+      "paths": [
+        {
+          "path": "%SystemRoot%\\System32\\Tasks",
+          "notes": "Task definitions stored as files"
+        }
+      ],
+      "collection_method": {
+        "type": "command",
+        "recommended": "schtasks /query /fo LIST /v",
+        "fallbacks": ["Copy task XML files from Task folder"]
+      },
+      "version_notes": ["Task schema stable across Windows 10/11"],
+      "source_citations": [
+        {
+          "title": "Task Scheduler Schema",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows/win32/taskschd/task-scheduler-schema",
+          "section": "Task definitions and triggers"
+        },
+        {
+          "title": "Scheduled Task/Job: Scheduled Task",
+          "publisher": "MITRE ATT&CK",
+          "url": "https://attack.mitre.org/techniques/T1053/005/",
+          "section": "Abuse of scheduled tasks"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_wmi_event_subscriptions",
+      "name": "WMI Event Subscriptions",
+      "os": "windows",
+      "category": "persistence",
+      "priority": "medium",
+      "why_important": "WMI event filters/consumers/bindings are stealthy persistence mechanisms.",
+      "paths": [
+        {
+          "path": "root\\subscription (WMI repository)",
+          "notes": "__EventFilter, __EventConsumer, __FilterToConsumerBinding"
+        }
+      ],
+      "collection_method": {
+        "type": "command",
+        "recommended": "Get-CimInstance -Namespace root\\subscription -Class __EventFilter/__EventConsumer/__FilterToConsumerBinding",
+        "fallbacks": ["Collect Sysmon Event IDs 19-21 if available"]
+      },
+      "version_notes": ["Requires WMI access; may need elevated privileges"],
+      "source_citations": [
+        {
+          "title": "Event Triggered Execution: Windows Management Instrumentation Event Subscription",
+          "publisher": "MITRE ATT&CK",
+          "url": "https://attack.mitre.org/techniques/T1546/003/",
+          "section": "Event filters, consumers, bindings"
+        },
+        {
+          "title": "Sysmon",
+          "publisher": "Microsoft Sysinternals",
+          "url": "https://learn.microsoft.com/en-us/sysinternals/downloads/sysmon",
+          "section": "Event ID 19/20/21 (WMI)"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_local_users",
+      "name": "Local User Accounts",
+      "os": "windows",
+      "category": "system",
+      "priority": "high",
+      "why_important": "Local user accounts indicate potentially compromised or created accounts.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "Get-LocalUser",
+        "fallbacks": ["net user"]
+      },
+      "version_notes": ["Get-LocalUser requires Windows 10/Server 2016+"],
+      "source_citations": [
+        {
+          "title": "Get-LocalUser",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.localaccounts/get-localuser",
+          "section": "Synopsis and examples"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_logged_on_users",
+      "name": "Logged-on Users",
+      "os": "windows",
+      "category": "system",
+      "priority": "high",
+      "why_important": "Active sessions show who is logged on and help triage live incidents.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "quser",
+        "fallbacks": ["query user"]
+      },
+      "version_notes": ["Command available on Windows client/server"],
+      "source_citations": [
+        {
+          "title": "quser",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/quser",
+          "section": "Syntax and output"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_process_list",
+      "name": "Process List",
+      "os": "windows",
+      "category": "volatile",
+      "priority": "high",
+      "why_important": "Running processes identify malicious executables and parent-child relationships.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "Get-Process",
+        "fallbacks": ["tasklist"]
+      },
+      "version_notes": ["Get-Process available on modern Windows"],
+      "source_citations": [
+        {
+          "title": "Get-Process",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/get-process",
+          "section": "Description"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_network_connections",
+      "name": "Network Connections",
+      "os": "windows",
+      "category": "volatile",
+      "priority": "high",
+      "why_important": "Network connections reveal live C2 and lateral movement activity.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "Get-NetTCPConnection",
+        "fallbacks": ["netstat -ano"]
+      },
+      "version_notes": ["Get-NetTCPConnection available on Windows 8/Server 2012+"],
+      "source_citations": [
+        {
+          "title": "Get-NetTCPConnection",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/powershell/module/nettcpip/get-nettcpconnection",
+          "section": "Description"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_listening_ports",
+      "name": "Listening Ports",
+      "os": "windows",
+      "category": "volatile",
+      "priority": "medium",
+      "why_important": "Listening services help spot unauthorized services or backdoors.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "Get-NetTCPConnection -State Listen",
+        "fallbacks": ["netstat -ano"]
+      },
+      "version_notes": ["Get-NetTCPConnection available on Windows 8/Server 2012+"],
+      "source_citations": [
+        {
+          "title": "Get-NetTCPConnection",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/powershell/module/nettcpip/get-nettcpconnection",
+          "section": "State parameter"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_dns_cache",
+      "name": "DNS Cache",
+      "os": "windows",
+      "category": "volatile",
+      "priority": "medium",
+      "why_important": "DNS cache can indicate recent connections to malicious domains.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "ipconfig /displaydns",
+        "fallbacks": []
+      },
+      "version_notes": ["Requires local DNS client service"],
+      "source_citations": [
+        {
+          "title": "ipconfig",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/ipconfig",
+          "section": "displaydns"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_system_info",
+      "name": "System Information",
+      "os": "windows",
+      "category": "system",
+      "priority": "medium",
+      "why_important": "OS version, hostname, and installed components provide system context.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "systeminfo",
+        "fallbacks": []
+      },
+      "version_notes": ["systeminfo available on Windows client/server"],
+      "source_citations": [
+        {
+          "title": "systeminfo",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/systeminfo",
+          "section": "Syntax and output"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_installed_patches",
+      "name": "Installed Patches",
+      "os": "windows",
+      "category": "system",
+      "priority": "medium",
+      "why_important": "Patch levels help identify vulnerability exposure and timeline of updates.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "Get-HotFix",
+        "fallbacks": ["wmic qfe list"]
+      },
+      "version_notes": ["Get-HotFix available on PowerShell"],
+      "source_citations": [
+        {
+          "title": "Get-HotFix",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/get-hotfix",
+          "section": "Description"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_timezone",
+      "name": "System Timezone",
+      "os": "windows",
+      "category": "system",
+      "priority": "medium",
+      "why_important": "Timezone is critical for accurate timeline analysis.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "tzutil /g",
+        "fallbacks": []
+      },
+      "version_notes": ["tzutil available on modern Windows"],
+      "source_citations": [
+        {
+          "title": "tzutil",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/tzutil",
+          "section": "Syntax and examples"
+        }
+      ]
+    },
+    {
+      "artifact_id": "windows_boot_time",
+      "name": "System Boot Time",
+      "os": "windows",
+      "category": "system",
+      "priority": "medium",
+      "why_important": "Boot time supports timeline reconstruction and persistence validation.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "Get-CimInstance Win32_OperatingSystem | Select LastBootUpTime",
+        "fallbacks": ["wmic os get lastbootuptime"]
+      },
+      "version_notes": ["CIM available on modern Windows"],
+      "source_citations": [
+        {
+          "title": "Win32_OperatingSystem class",
+          "publisher": "Microsoft",
+          "url": "https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-operatingsystem",
+          "section": "LastBootUpTime"
+        }
+      ]
+    }
+  ]
+}

@@ -71,12 +71,14 @@ func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, wor
 	}
 
 	// Report job started
-	if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
-		Status:   "collecting",
-		Progress: 0,
-		Message:  "Job started",
-	}); err != nil {
-		return fmt.Errorf("failed to report job start: %w", err)
+	if e.apiClient != nil {
+		if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+			Status:   "collecting",
+			Progress: 0,
+			Message:  "Job started",
+		}); err != nil {
+			return fmt.Errorf("failed to report job start: %w", err)
+		}
 	}
 
 	// Execute modules in sequence
@@ -93,22 +95,26 @@ func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, wor
 			logJob.Error("Module failed: %s - %v", module.ModuleID, err)
 
 			// Report module failure
-			e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
-				Status:   "failed",
-				Message:  fmt.Sprintf("Module %s failed: %v", module.ModuleID, err),
-			})
+			if e.apiClient != nil {
+				e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+					Status:   "failed",
+					Message:  fmt.Sprintf("Module %s failed: %v", module.ModuleID, err),
+				})
+			}
 
 			return fmt.Errorf("module execution failed: %w", err)
 		}
 
 		// Update progress
 		job.Progress = int(float64(i+1) / float64(totalModules) * 100)
-		if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
-			Status:   job.Status,
-			Progress: &job.Progress,
-			Message:  fmt.Sprintf("Completed %s", module.ModuleID),
-		}); err != nil {
-			logJob.Warning("Failed to update progress: %v", err)
+		if e.apiClient != nil {
+			if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+				Status:   job.Status,
+				Progress: &job.Progress,
+				Message:  fmt.Sprintf("Completed %s", module.ModuleID),
+			}); err != nil {
+				logJob.Warning("Failed to update progress: %v", err)
+			}
 		}
 	}
 
@@ -122,20 +128,22 @@ func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, wor
 	logJob.Info("Evidence ZIP created successfully")
 
 	// Upload evidence
-	if err := e.apiClient.UploadEvidence(ctx, jobID, filepath.Join(workDir, "collection.zip")); err != nil {
-		logJob.Error("Failed to upload evidence: %w", err)
-		return err
-	}
+	if e.apiClient != nil {
+		if err := e.apiClient.UploadEvidence(ctx, jobID, filepath.Join(workDir, "collection.zip")); err != nil {
+			logJob.Error("Failed to upload evidence: %w", err)
+			return err
+		}
 
-	logJob.Info("Evidence uploaded successfully")
+		logJob.Info("Evidence uploaded successfully")
 
-	// Report job completion
-	if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
-		Status:  "complete",
-		Progress: 100,
-		Message: "Job completed successfully",
-	}); err != nil {
-		logJob.Warning("Failed to report job completion: %v", err)
+		// Report job completion
+		if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+			Status:  "complete",
+			Progress: 100,
+			Message: "Job completed successfully",
+		}); err != nil {
+			logJob.Warning("Failed to report job completion: %v", err)
+		}
 	}
 
 	logJob.Info("Job completed successfully")
@@ -152,23 +160,72 @@ func (e *Executor) executeModule(ctx context.Context, job *Job, module api.JobMo
 
 	logJob.Info("Module implementation: %s", module.ModuleID)
 
+	params := sanitizeParams(logJob, module.Params)
+
 	// Build module context
 	mctx := modules.ModuleContext{
 		JobID:      job.ID,
 		IncidentID: job.IncidentID,
 		WorkDir:    job.WorkDir,
-		OS:         e.config.OSVersion,
+		OS:         e.config.OS,
+		IsAdmin:    modules.IsAdmin(),
 	}
 
 	// Execute module
-	outputPath := filepath.Join(job.WorkDir, module.OutputRelPath)
+	outputPath, err := storage.SafeJoin(job.WorkDir, module.OutputRelPath)
+	if err != nil {
+		return fmt.Errorf("invalid output path: %w", err)
+	}
 
-	if err := moduleImpl.Run(ctx, mctx, module.Params, outputPath); err != nil {
+	if err := moduleImpl.Run(ctx, mctx, params, outputPath); err != nil {
+		if modules.IsWarning(err) {
+			logJob.Warning("Module warning: %s - %v", module.ModuleID, err)
+			if e.apiClient != nil {
+				e.apiClient.UpdateJobStatus(ctx, job.ID, api.JobStatusUpdate{
+					Status:  job.Status,
+					Message: fmt.Sprintf("Warning in %s: %v", module.ModuleID, err),
+				})
+			}
+			return nil
+		}
 		return fmt.Errorf("module execution failed: %w", err)
 	}
 
 	logJob.Info("Module output: %s", outputPath)
 	return nil
+}
+
+func sanitizeParams(logJob logging.JobLogger, params map[string]interface{}) map[string]interface{} {
+	if params == nil {
+		return map[string]interface{}{}
+	}
+	clean := map[string]interface{}{}
+	for key, value := range params {
+		clean[key] = value
+	}
+
+	if value, ok := clean["time_window"].(string); ok {
+		if _, exists := modules.AllowedTimeWindow(value); !exists {
+			logJob.Warning("Invalid time_window %s, defaulting to 7d", value)
+			delete(clean, "time_window")
+		}
+	}
+
+	if value, ok := clean["max_lines"]; ok {
+		if !modules.IsAllowedMaxLines(value) {
+			logJob.Warning("Invalid max_lines %v ignored", value)
+			delete(clean, "max_lines")
+		}
+	}
+
+	if value, ok := clean["max_size_mb"]; ok {
+		if !modules.IsAllowedMaxSizeMB(value) {
+			logJob.Warning("Invalid max_size_mb %v ignored", value)
+			delete(clean, "max_size_mb")
+		}
+	}
+
+	return clean
 }
 
 // createEvidenceZip creates a ZIP file of all collected evidence

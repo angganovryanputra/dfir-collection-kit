@@ -97,7 +97,10 @@ async def create_job_for_agent(
 ) -> JobOut:
     if payload.agent_id and payload.agent_id != agent_id:
         raise HTTPException(status_code=400, detail="agent_id mismatch")
-    modules = build_modules(payload.module_ids)
+    device = await get_device(db, agent_id)
+    if not device and not payload.module_ids:
+        raise HTTPException(status_code=400, detail="module_ids required when agent is unknown")
+    modules = build_modules(payload.module_ids, device.os if device else None)
     output_path = str(Path(settings.EVIDENCE_STORAGE_PATH) / payload.incident_id / payload.id)
     job = await create_job(db, payload, modules, output_path)
     return JobOut.model_validate(job)

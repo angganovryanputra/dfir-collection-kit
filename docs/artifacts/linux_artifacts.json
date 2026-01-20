@@ -1,0 +1,513 @@
+{
+  "artifacts": [
+    {
+      "artifact_id": "linux_journalctl",
+      "name": "systemd Journal",
+      "os": "linux",
+      "category": "logs",
+      "priority": "high",
+      "why_important": "Systemd journal aggregates system and service logs, crucial for incident timelines.",
+      "paths": [
+        {"path": "/var/log/journal", "notes": "Persistent journal storage (if enabled)"},
+        {"path": "/run/log/journal", "notes": "Runtime journal storage"}
+      ],
+      "collection_method": {
+        "type": "command",
+        "recommended": "journalctl --no-pager --since '-7 days'",
+        "fallbacks": ["Copy journal files if accessible"]
+      },
+      "version_notes": ["systemd-based distributions"],
+      "source_citations": [
+        {
+          "title": "journalctl",
+          "publisher": "systemd",
+          "url": "https://www.freedesktop.org/software/systemd/man/latest/journalctl.html",
+          "section": "DESCRIPTION and OPTIONS"
+        },
+        {
+          "title": "systemd-journald.service",
+          "publisher": "systemd",
+          "url": "https://www.freedesktop.org/software/systemd/man/latest/systemd-journald.service.html",
+          "section": "Journal storage"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_auth_logs",
+      "name": "Authentication Logs",
+      "os": "linux",
+      "category": "logs",
+      "priority": "high",
+      "why_important": "Authentication logs capture login attempts and authentication activity.",
+      "paths": [
+        {"path": "/var/log/auth.log", "notes": "Debian/Ubuntu"},
+        {"path": "/var/log/secure", "notes": "RHEL/CentOS/Fedora"}
+      ],
+      "collection_method": {
+        "type": "copy",
+        "recommended": "Copy auth.log or secure",
+        "fallbacks": ["Use journalctl -u sshd where applicable"]
+      },
+      "version_notes": ["Path depends on distro rsyslog config"],
+      "source_citations": [
+        {
+          "title": "syslog",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man3/syslog.3.html",
+          "section": "Facilities LOG_AUTH/LOG_AUTHPRIV"
+        },
+        {
+          "title": "rsyslog.conf",
+          "publisher": "rsyslog",
+          "url": "https://www.rsyslog.com/doc/configuration/rsyslog_conf.html",
+          "section": "Selector syntax and file actions"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_syslog",
+      "name": "System Logs (syslog/messages)",
+      "os": "linux",
+      "category": "logs",
+      "priority": "high",
+      "why_important": "System logs provide OS-level events and service activity.",
+      "paths": [
+        {"path": "/var/log/syslog", "notes": "Debian/Ubuntu"},
+        {"path": "/var/log/messages", "notes": "RHEL/CentOS/Fedora"}
+      ],
+      "collection_method": {
+        "type": "copy",
+        "recommended": "Copy syslog/messages",
+        "fallbacks": ["Use journalctl if syslog not present"]
+      },
+      "version_notes": ["Path depends on distro syslog config"],
+      "source_citations": [
+        {
+          "title": "syslog",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man3/syslog.3.html",
+          "section": "Facilities and priorities"
+        },
+        {
+          "title": "rsyslog.conf",
+          "publisher": "rsyslog",
+          "url": "https://www.rsyslog.com/doc/configuration/rsyslog_conf.html",
+          "section": "Selector syntax and file actions"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_wtmp",
+      "name": "wtmp Login Records",
+      "os": "linux",
+      "category": "logs",
+      "priority": "high",
+      "why_important": "wtmp records successful logins and supports session reconstruction.",
+      "paths": [
+        {"path": "/var/log/wtmp", "notes": "Binary log of logins"}
+      ],
+      "collection_method": {
+        "type": "command",
+        "recommended": "last -f /var/log/wtmp",
+        "fallbacks": ["Copy /var/log/wtmp if readable"]
+      },
+      "version_notes": ["Requires read permissions"],
+      "source_citations": [
+        {
+          "title": "wtmp",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man5/wtmp.5.html",
+          "section": "FILES"
+        },
+        {
+          "title": "last",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man1/last.1.html",
+          "section": "DESCRIPTION"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_btmp",
+      "name": "btmp Failed Login Records",
+      "os": "linux",
+      "category": "logs",
+      "priority": "high",
+      "why_important": "btmp records failed logins and brute-force attempts.",
+      "paths": [
+        {"path": "/var/log/btmp", "notes": "Binary log of failed logins"}
+      ],
+      "collection_method": {
+        "type": "command",
+        "recommended": "last -f /var/log/btmp",
+        "fallbacks": ["Copy /var/log/btmp if readable"]
+      },
+      "version_notes": ["Requires read permissions"],
+      "source_citations": [
+        {
+          "title": "wtmp",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man5/wtmp.5.html",
+          "section": "FILES"
+        },
+        {
+          "title": "last",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man1/last.1.html",
+          "section": "DESCRIPTION"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_cron",
+      "name": "Cron Jobs",
+      "os": "linux",
+      "category": "persistence",
+      "priority": "high",
+      "why_important": "Cron is a common persistence mechanism for scheduled execution.",
+      "paths": [
+        {"path": "/etc/crontab", "notes": "System crontab"},
+        {"path": "/etc/cron.d", "notes": "System cron.d entries"},
+        {"path": "/var/spool/cron", "notes": "User crontabs"}
+      ],
+      "collection_method": {
+        "type": "copy",
+        "recommended": "Copy crontab files and run crontab -l",
+        "fallbacks": []
+      },
+      "version_notes": ["Paths differ by distro"],
+      "source_citations": [
+        {
+          "title": "crontab",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man5/crontab.5.html",
+          "section": "FILES"
+        },
+        {
+          "title": "cron",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man8/cron.8.html",
+          "section": "FILES"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_systemd_units",
+      "name": "Enabled systemd Services",
+      "os": "linux",
+      "category": "persistence",
+      "priority": "high",
+      "why_important": "Systemd services can be abused for persistence.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "systemctl list-unit-files --type=service --state=enabled",
+        "fallbacks": []
+      },
+      "version_notes": ["systemd-based distributions"],
+      "source_citations": [
+        {
+          "title": "systemd.service",
+          "publisher": "systemd",
+          "url": "https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html",
+          "section": "DESCRIPTION"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_systemd_timers",
+      "name": "systemd Timers",
+      "os": "linux",
+      "category": "persistence",
+      "priority": "high",
+      "why_important": "Systemd timers can run at boot or schedule recurring tasks.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "systemctl list-timers --all",
+        "fallbacks": []
+      },
+      "version_notes": ["systemd-based distributions"],
+      "source_citations": [
+        {
+          "title": "systemd.timer",
+          "publisher": "systemd",
+          "url": "https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html",
+          "section": "DESCRIPTION"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_rc_local",
+      "name": "rc.local",
+      "os": "linux",
+      "category": "persistence",
+      "priority": "medium",
+      "why_important": "Legacy startup scripts can provide persistence on some systems.",
+      "paths": [
+        {"path": "/etc/rc.local", "notes": "Legacy startup script"}
+      ],
+      "collection_method": {
+        "type": "copy",
+        "recommended": "Copy /etc/rc.local",
+        "fallbacks": []
+      },
+      "version_notes": ["Used on systems with rc-local compatibility"],
+      "source_citations": [
+        {
+          "title": "systemd-rc-local-generator",
+          "publisher": "systemd",
+          "url": "https://www.freedesktop.org/software/systemd/man/latest/systemd-rc-local-generator.html",
+          "section": "DESCRIPTION"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_authorized_keys",
+      "name": "SSH authorized_keys",
+      "os": "linux",
+      "category": "persistence",
+      "priority": "high",
+      "why_important": "Authorized keys enable persistence via SSH access.",
+      "paths": [
+        {"path": "/home/*/.ssh/authorized_keys", "notes": "Per-user"},
+        {"path": "/root/.ssh/authorized_keys", "notes": "Root account"}
+      ],
+      "collection_method": {
+        "type": "copy",
+        "recommended": "Copy authorized_keys files",
+        "fallbacks": []
+      },
+      "version_notes": ["Depends on sshd_config AuthorizedKeysFile"],
+      "source_citations": [
+        {
+          "title": "sshd_config",
+          "publisher": "OpenBSD",
+          "url": "https://man.openbsd.org/sshd_config.5",
+          "section": "AuthorizedKeysFile"
+        },
+        {
+          "title": "sshd",
+          "publisher": "OpenBSD",
+          "url": "https://man.openbsd.org/sshd.8",
+          "section": "Public key authentication"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_process_list",
+      "name": "Process List",
+      "os": "linux",
+      "category": "volatile",
+      "priority": "high",
+      "why_important": "Running processes identify malicious programs and persistence.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "ps aux",
+        "fallbacks": []
+      },
+      "version_notes": ["Standard procps utility"],
+      "source_citations": [
+        {
+          "title": "ps",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man1/ps.1.html",
+          "section": "DESCRIPTION"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_network_connections",
+      "name": "Network Connections",
+      "os": "linux",
+      "category": "volatile",
+      "priority": "high",
+      "why_important": "Live network connections indicate active C2 or lateral movement.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "ss -tupn",
+        "fallbacks": ["netstat -tupn"]
+      },
+      "version_notes": ["ss is preferred; netstat as fallback"],
+      "source_citations": [
+        {
+          "title": "ss",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man8/ss.8.html",
+          "section": "DESCRIPTION and OPTIONS"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_ip_config",
+      "name": "IP Configuration and Routes",
+      "os": "linux",
+      "category": "system",
+      "priority": "medium",
+      "why_important": "Network configuration helps understand routing and segmentation.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "ip addr; ip route",
+        "fallbacks": []
+      },
+      "version_notes": ["iproute2-based systems"],
+      "source_citations": [
+        {
+          "title": "ip",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man8/ip.8.html",
+          "section": "DESCRIPTION"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_resolv_conf",
+      "name": "DNS Resolver Configuration",
+      "os": "linux",
+      "category": "system",
+      "priority": "medium",
+      "why_important": "Resolver configuration indicates DNS infrastructure and possible tampering.",
+      "paths": [
+        {"path": "/etc/resolv.conf", "notes": "Resolver configuration"}
+      ],
+      "collection_method": {
+        "type": "copy",
+        "recommended": "Copy /etc/resolv.conf",
+        "fallbacks": []
+      },
+      "version_notes": ["May be managed by systemd-resolved or NetworkManager"],
+      "source_citations": [
+        {
+          "title": "resolv.conf",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man5/resolv.conf.5.html",
+          "section": "DESCRIPTION"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_bash_history",
+      "name": "Bash History",
+      "os": "linux",
+      "category": "system",
+      "priority": "medium",
+      "why_important": "Command history helps identify user activity and attacker commands.",
+      "paths": [
+        {"path": "/home/*/.bash_history", "notes": "Per-user history"},
+        {"path": "/root/.bash_history", "notes": "Root history"}
+      ],
+      "collection_method": {
+        "type": "copy",
+        "recommended": "Copy .bash_history files",
+        "fallbacks": []
+      },
+      "version_notes": ["Depends on shell configuration and HISTFILE"],
+      "source_citations": [
+        {
+          "title": "bash",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man1/bash.1.html",
+          "section": "HISTORY and HISTFILE"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_logged_in_users",
+      "name": "Logged-in Users",
+      "os": "linux",
+      "category": "system",
+      "priority": "medium",
+      "why_important": "Shows current and recent sessions for triage.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "who; w; last",
+        "fallbacks": []
+      },
+      "version_notes": ["Reads utmp/wtmp"],
+      "source_citations": [
+        {
+          "title": "who",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man1/who.1.html",
+          "section": "DESCRIPTION"
+        },
+        {
+          "title": "w",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man1/w.1.html",
+          "section": "DESCRIPTION"
+        },
+        {
+          "title": "last",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man1/last.1.html",
+          "section": "DESCRIPTION"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_installed_packages",
+      "name": "Installed Packages",
+      "os": "linux",
+      "category": "system",
+      "priority": "medium",
+      "why_important": "Package inventory helps identify vulnerable or suspicious software.",
+      "paths": [],
+      "collection_method": {
+        "type": "command",
+        "recommended": "dpkg-query -W -f '${Package}\t${Version}\n'",
+        "fallbacks": ["rpm -qa"]
+      },
+      "version_notes": ["Debian/Ubuntu use dpkg; RHEL/Fedora use rpm"],
+      "source_citations": [
+        {
+          "title": "dpkg-query",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man1/dpkg-query.1.html",
+          "section": "DESCRIPTION"
+        },
+        {
+          "title": "rpm",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man8/rpm.8.html",
+          "section": "QUERY OPTIONS"
+        }
+      ]
+    },
+    {
+      "artifact_id": "linux_kernel_version",
+      "name": "Kernel Version",
+      "os": "linux",
+      "category": "system",
+      "priority": "medium",
+      "why_important": "Kernel version helps identify vulnerabilities and timeline.",
+      "paths": [
+        {"path": "/proc/version", "notes": "Kernel version string"}
+      ],
+      "collection_method": {
+        "type": "command",
+        "recommended": "uname -a",
+        "fallbacks": ["cat /proc/version"]
+      },
+      "version_notes": ["Standard across Linux distros"],
+      "source_citations": [
+        {
+          "title": "uname",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man1/uname.1.html",
+          "section": "DESCRIPTION"
+        },
+        {
+          "title": "proc",
+          "publisher": "Linux man-pages",
+          "url": "https://man7.org/linux/man-pages/man5/proc.5.html",
+          "section": "/proc/version"
+        }
+      ]
+    }
+  ]
+}

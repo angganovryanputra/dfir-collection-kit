@@ -108,7 +108,7 @@ async def start_collection_endpoint(
     await delete_logs_for_incident(db, incident_id)
     await create_log_entries(db, incident_id, 1, SIMULATED_COLLECTION_LOGS)
 
-    modules = build_modules()
+    modules = build_modules(os_name="windows")
     await create_job(
         db,
         JobCreate(id=f"JOB-{incident_id}", incident_id=incident_id),

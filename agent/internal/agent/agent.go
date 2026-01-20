@@ -47,7 +47,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	logging.Info("Starting DFIR Agent")
 	logging.Info("Agent ID: %s", a.config.AgentID)
 	logging.Info("Backend URL: %s", a.config.BackendURL)
-	logging.Info("OS: %s", a.config.OSVersion)
+	logging.Info("OS: %s", a.config.OS)
+	logging.Info("OS Version: %s", a.config.OSVersion)
 
 	// Register agent on startup
 	if _, err := a.apiClient.Register(ctx); err != nil {

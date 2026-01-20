@@ -27,7 +27,8 @@ type Config struct {
 	Hostname           string
 	IPAddress          string
 	Type               string
-	OSVersion           string
+	OS                 string
+	OSVersion          string
 	AgentVersion        string
 	HeartbeatInterval int
 	PollInterval       int
@@ -59,13 +60,36 @@ func Load() (*Config, error) {
 		Hostname:           os.Getenv("DFIR_HOSTNAME"),
 		IPAddress:          os.Getenv("DFIR_IP_ADDRESS"),
 		Type:               os.Getenv("DFIR_TYPE"),
-		OSVersion:           detectOSVersion(),
+		OS:                 detectOSName(),
+		OSVersion:          detectOSVersion(),
 		AgentVersion:        "1.0.0",
 		HeartbeatInterval: DefaultHeartbeatInterval,
 		PollInterval:       DefaultPollInterval,
 	}
 
 	return cfg, nil
+}
+
+// LoadDryRun builds a minimal config for local module execution without backend.
+func LoadDryRun() (*Config, error) {
+	agentID, err := loadOrGenerateAgentID()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load agent ID: %w", err)
+	}
+
+	return &Config{
+		BackendURL:         "",
+		AgentSharedSecret:  "dry-run",
+		AgentID:            agentID,
+		Hostname:           os.Getenv("DFIR_HOSTNAME"),
+		IPAddress:          os.Getenv("DFIR_IP_ADDRESS"),
+		Type:               os.Getenv("DFIR_TYPE"),
+		OS:                 detectOSName(),
+		OSVersion:          detectOSVersion(),
+		AgentVersion:       "1.0.0",
+		HeartbeatInterval: DefaultHeartbeatInterval,
+		PollInterval:       DefaultPollInterval,
+	}, nil
 }
 
 // loadOrGenerateAgentID loads an existing agent ID or generates a new one
@@ -108,17 +132,19 @@ func loadOrGenerateAgentID() (string, error) {
 
 // detectOSVersion returns a best-effort OS version string
 func detectOSVersion() string {
-	osName := runtime.GOOS
 	arch := runtime.GOARCH
-
-	switch osName {
+	switch runtime.GOOS {
 	case "windows":
-		return fmt.Sprintf("Windows %s (amd64)", getWindowsVersion())
+		return fmt.Sprintf("Windows %s (%s)", getWindowsVersion(), arch)
 	case "linux":
-		return fmt.Sprintf("Linux (amd64)", getLinuxDistro())
+		return fmt.Sprintf("%s (%s)", getLinuxDistro(), arch)
 	default:
-		return fmt.Sprintf("%s (%s)", osName, arch)
+		return fmt.Sprintf("%s (%s)", runtime.GOOS, arch)
 	}
+}
+
+func detectOSName() string {
+	return fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 }
 
 // getWindowsVersion attempts to get Windows version

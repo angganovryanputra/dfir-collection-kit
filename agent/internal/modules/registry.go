@@ -2,10 +2,12 @@ package modules
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
+	"strings"
 
 	"github.com/dfir/agent/internal/logging"
 )
@@ -16,6 +18,7 @@ type ModuleContext struct {
 	IncidentID string
 	WorkDir    string
 	OS         string
+	IsAdmin    bool
 }
 
 // CollectorModule defines the interface for all collection modules
@@ -46,21 +49,46 @@ func GetModule(id string) (CollectorModule, error) {
 // Init initializes all modules
 func Init() error {
 	// Register Windows modules
-	Register(&WindowsEventLogsSecurity{})
-	Register(&WindowsEventLogsSystem{})
-	Register(&WindowsEventLogsPowerShell{})
-	Register(&WindowsProcessList{})
-	Register(&WindowsNetworkConnections{})
-	Register(&WindowsScheduledTasks{})
-	Register(&WindowsAutorunsBasic{})
+	Register(NewWindowsEventLogSecurity())
+	Register(NewWindowsEventLogSystem())
+	Register(NewWindowsEventLogApplication())
+	Register(NewWindowsEventLogPowerShellOperational())
+	Register(NewWindowsEventLogSysmonOperational())
+	Register(NewWindowsProcessList())
+	Register(NewWindowsNetworkConnections())
+	Register(NewWindowsListeningPorts())
+	Register(NewWindowsDnsCache())
+	Register(NewWindowsScheduledTasks())
+	Register(NewWindowsServices())
+	Register(NewWindowsRunKeys())
+	Register(NewWindowsStartupFolders())
+	Register(NewWindowsWmiEventSubscriptions())
+	Register(NewWindowsLocalUsers())
+	Register(NewWindowsLoggedOnUsers())
+	Register(NewWindowsSystemInfo())
+	Register(NewWindowsInstalledPatches())
+	Register(NewWindowsTimezone())
+	Register(NewWindowsBootTime())
 
 	// Register Linux modules
-	Register(&LinuxProcessList{})
-	Register(&LinuxNetworkConnections{})
-	Register(&LinuxSyslogRecent{})
-	Register(&LinuxAuthLogs{})
-	Register(&LinuxCronJobs{})
-	Register(&LinuxLoggedInUsers{})
+	Register(NewLinuxProcessList())
+	Register(NewLinuxNetworkConnections())
+	Register(NewLinuxJournalCtl())
+	Register(NewLinuxSyslog())
+	Register(NewLinuxAuthLogs())
+	Register(NewLinuxWtmp())
+	Register(NewLinuxBtmp())
+	Register(NewLinuxCron())
+	Register(NewLinuxSystemdUnits())
+	Register(NewLinuxSystemdTimers())
+	Register(NewLinuxRcLocal())
+	Register(NewLinuxAuthorizedKeys())
+	Register(NewLinuxIpConfig())
+	Register(NewLinuxResolvConf())
+	Register(NewLinuxBashHistory())
+	Register(NewLinuxLoggedInUsers())
+	Register(NewLinuxPackages())
+	Register(NewLinuxKernelVersion())
 
 	logging.Info("Initialized %d modules", len(moduleRegistry))
 	return nil
@@ -75,13 +103,17 @@ func (m *Module) Name() string { return m.id }
 // OutputRelPath returns the output relative path
 func (m *Module) OutputRelPath() string { return m.outputRelPath }
 
-// Params returns the module parameters
-func (m *Module) Params() map[string]interface{} { return m.params }
-
 // Module is the base implementation for all modules
 type Module struct {
-	id          string
+	id            string
 	outputRelPath string
+}
+
+func NewModule(id string, outputRelPath string) Module {
+	return Module{
+		id:            id,
+		outputRelPath: outputRelPath,
+	}
 }
 
 // BaseWindowsModule provides Windows-specific functionality
@@ -101,4 +133,152 @@ func (b *BaseWindowsModule) executePowerShell(ctx context.Context, command strin
 // getPowerShellCommand escapes and wraps a command string
 func getPowerShellCommand(script string) string {
 	return fmt.Sprintf("& { %s }", script)
+}
+
+// WarningError indicates a non-fatal module issue.
+type WarningError struct {
+	msg string
+}
+
+func (w WarningError) Error() string { return w.msg }
+
+func NewWarningError(message string) error {
+	return WarningError{msg: message}
+}
+
+func IsWarning(err error) bool {
+	var warning WarningError
+	return errors.As(err, &warning)
+}
+
+func EnsureOutputDir(outputPath string) error {
+}
+
+func WriteOutput(outputPath string, content []byte) error {
+	if err := EnsureOutputDir(outputPath); err != nil {
+		return err
+	}
+	if err := os.WriteFile(outputPath, content, 0644); err != nil {
+		return fmt.Errorf("failed to write output: %w", err)
+	}
+	return nil
+}
+
+func WriteNotFound(outputPath string, message string) error {
+	content := fmt.Sprintf("NOT FOUND: %s\n", message)
+	return WriteOutput(outputPath, []byte(content))
+}
+
+var allowedTimeWindows = map[string]int{
+	"1d":  1,
+	"3d":  3,
+	"7d":  7,
+	"14d": 14,
+}
+
+var allowedMaxLines = map[int]struct{}{
+	500:   {},
+	1000:  {},
+	5000:  {},
+	10000: {},
+}
+
+var allowedMaxSizeMB = map[int]struct{}{
+	10:  {},
+	25:  {},
+	50:  {},
+	100: {},
+}
+
+func AllowedTimeWindow(value string) (int, bool) {
+	days, exists := allowedTimeWindows[value]
+	return days, exists
+}
+
+func IsAllowedMaxLines(value interface{}) bool {
+	if v, ok := value.(float64); ok {
+		_, exists := allowedMaxLines[int(v)]
+		return exists
+	}
+	if v, ok := value.(int); ok {
+		_, exists := allowedMaxLines[v]
+		return exists
+	}
+	return false
+}
+
+func IsAllowedMaxSizeMB(value interface{}) bool {
+	if v, ok := value.(float64); ok {
+		_, exists := allowedMaxSizeMB[int(v)]
+		return exists
+	}
+	if v, ok := value.(int); ok {
+		_, exists := allowedMaxSizeMB[v]
+		return exists
+	}
+	return false
+}
+
+func GetTimeWindowDays(params map[string]interface{}) int {
+	if value, ok := params["time_window"].(string); ok {
+		if days, exists := allowedTimeWindows[value]; exists {
+			return days
+		}
+	}
+	return allowedTimeWindows["7d"]
+}
+
+func GetMaxLines(params map[string]interface{}) (int, bool) {
+	value, ok := params["max_lines"]
+	if !ok {
+		return 0, false
+	}
+	if v, ok := value.(float64); ok {
+		lines := int(v)
+		if _, exists := allowedMaxLines[lines]; exists {
+			return lines, true
+		}
+	}
+	if v, ok := value.(int); ok {
+		if _, exists := allowedMaxLines[v]; exists {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func GetMaxSizeMB(params map[string]interface{}) (int, bool) {
+	value, ok := params["max_size_mb"]
+	if !ok {
+		return 0, false
+	}
+	if v, ok := value.(float64); ok {
+		size := int(v)
+		if _, exists := allowedMaxSizeMB[size]; exists {
+			return size, true
+		}
+	}
+	if v, ok := value.(int); ok {
+		if _, exists := allowedMaxSizeMB[v]; exists {
+			return v, true
+		}
+	}
+	return 0, false
+}
+
+func LimitOutput(content []byte, maxLines int, maxSizeMB int) []byte {
+	if maxSizeMB > 0 {
+		limit := maxSizeMB * 1024 * 1024
+		if len(content) > limit {
+			content = content[:limit]
+		}
+	}
+	if maxLines > 0 {
+		lines := strings.Split(string(content), "\n")
+		if len(lines) > maxLines {
+			lines = lines[:maxLines]
+			content = []byte(strings.Join(lines, "\n"))
+		}
+	}
+	return content
 }

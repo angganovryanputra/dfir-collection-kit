@@ -292,17 +292,17 @@ sequenceDiagram
 {
   "job_id": "JOB-2025-0001",
   "incident_id": "INC-2025-0142",
-  "os": "Windows 11 Pro",
+  "os": "windows/amd64",
   "work_dir": "/vault/evidence/INC-2025-0142/JOB-2025-0001",
   "modules": [
     {
-      "module_id": "memory_dump",
-      "output_relpath": "volatile/memory_dump.raw",
-      "params": {}
+      "module_id": "windows_eventlog_security",
+      "output_relpath": "logs/windows/security.evtx",
+      "params": {"time_window": "7d"}
     },
     {
-      "module_id": "process_list",
-      "output_relpath": "volatile/process_list.txt",
+      "module_id": "windows_process_list",
+      "output_relpath": "volatile/windows/process_list.csv",
       "params": {}
     }
   ]
@@ -313,21 +313,20 @@ sequenceDiagram
 
 ```python
 MODULE_REGISTRY = {
-    "memory_dump": {
-        "output_relpath": "volatile/memory_dump.raw",
+    "windows_eventlog_security": {
+        "os": "windows",
+        "output_relpath": "logs/windows/security.evtx",
+        "params": {"time_window": "7d"},
+    },
+    "windows_process_list": {
+        "os": "windows",
+        "output_relpath": "volatile/windows/process_list.csv",
         "params": {},
     },
-    "process_list": {
-        "output_relpath": "volatile/process_list.txt",
-        "params": {},
-    },
-    "network_connections": {
-        "output_relpath": "volatile/network_connections.txt",
-        "params": {},
-    },
-    "event_logs": {
-        "output_relpath": "logs/windows_event_logs.evtx",
-        "params": {},
+    "linux_journalctl": {
+        "os": "linux",
+        "output_relpath": "logs/linux/journalctl.log",
+        "params": {"time_window": "7d"},
     },
 }
 ```

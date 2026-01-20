@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -81,7 +80,6 @@ type DeviceRegistration struct {
 	IPAddress   string `json:"ip_address"`
 	Type        string `json:"type"`
 	OS          string `json:"os"`
-	OSVersion   string `json:"os_version"`
 	AgentVersion string `json:"agent_version"`
 	Status      string `json:"status"`
 }
@@ -92,7 +90,6 @@ type DeviceUpdate struct {
 	IPAddress     string  `json:"ip_address,omitempty"`
 	Type          string  `json:"type,omitempty"`
 	OS            string  `json:"os,omitempty"`
-	OSVersion     string  `json:"os_version,omitempty"`
 	AgentVersion  string  `json:"agent_version,omitempty"`
 	Status        string  `json:"status,omitempty"`
 	LastSeen      string  `json:"last_seen,omitempty"`
@@ -103,16 +100,7 @@ type DeviceUpdate struct {
 
 // Register sends the initial registration request to the backend
 func (c *Client) Register(ctx context.Context) (map[string]interface{}, error) {
-	payload := DeviceRegistration{
-		ID:          c.config.AgentID,
-		Hostname:    c.config.Hostname,
-		IPAddress:   c.config.IPAddress,
-		Type:        c.config.Type,
-		OS:          c.config.OSVersion,
-		OSVersion:   c.config.OSVersion,
-		AgentVersion: c.config.AgentVersion,
-		Status:      "ONLINE",
-	}
+	payload := c.buildRegistrationPayload()
 
 	resp, err := c.makeRequest(ctx, "POST", "/agents/register", payload, "")
 	if err != nil {
@@ -134,14 +122,27 @@ func (c *Client) Register(ctx context.Context) (map[string]interface{}, error) {
 	return result, nil
 }
 
+func (c *Client) buildRegistrationPayload() DeviceRegistration {
+	return DeviceRegistration{
+		ID:           c.config.AgentID,
+		Hostname:     c.config.Hostname,
+		IPAddress:    c.config.IPAddress,
+		Type:         c.config.Type,
+		OS:           c.config.OS,
+		AgentVersion: c.config.AgentVersion,
+		Status:       "ONLINE",
+	}
+}
+
 // Heartbeat sends a periodic status update to the backend
 func (c *Client) Heartbeat(ctx context.Context) error {
 	payload := DeviceUpdate{
 		Status:   "ONLINE",
 		LastSeen: time.Now().UTC().Format(time.RFC3339),
+		OS:       c.config.OS,
 	}
 
-	resp, err := c.makeRequest(ctx, "POST", "/"+c.config.AgentID+"/heartbeat", payload, "")
+	resp, err := c.makeRequest(ctx, "POST", "/agents/"+c.config.AgentID+"/heartbeat", payload, "")
 	if err != nil {
 		return err
 	}
@@ -173,7 +174,7 @@ type JobModule struct {
 
 // GetNextJob polls the backend for the next job to execute
 func (c *Client) GetNextJob(ctx context.Context) (*JobInstruction, error) {
-	url := "/" + c.config.AgentID + "/jobs/next"
+	url := "/agents/" + c.config.AgentID + "/jobs/next"
 
 	resp, err := c.makeRequest(ctx, "GET", url, nil, "")
 	if err != nil {
@@ -210,7 +211,7 @@ type JobStatusUpdate struct {
 
 // UpdateJobStatus sends a status update for a running job
 func (c *Client) UpdateJobStatus(ctx context.Context, jobID string, update JobStatusUpdate) error {
-	url := "/" + c.config.AgentID + "/jobs/" + jobID + "/status"
+	url := "/agents/" + c.config.AgentID + "/jobs/" + jobID + "/status"
 
 	resp, err := c.makeRequest(ctx, "POST", url, update, "")
 	if err != nil {
@@ -251,7 +252,7 @@ func (c *Client) UploadEvidence(ctx context.Context, jobID string, zipPath strin
 		return fmt.Errorf("failed to close multipart writer: %w", err)
 	}
 
-	url := "/" + c.config.AgentID + "/jobs/" + jobID + "/upload"
+	url := "/agents/" + c.config.AgentID + "/jobs/" + jobID + "/upload"
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+url, &body)
 	if err != nil {

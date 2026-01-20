@@ -1,186 +1,191 @@
 package modules
 
 import (
-	"bufio"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
-	"path/filepath"
-	"runtime"
-
-	"github.com/dfir/agent/internal/logging"
 )
 
-// LinuxProcessList collects running processes on Linux
 type LinuxProcessList struct {
 	Module
 }
 
-func (m *LinuxProcessList) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
-	logging.WithJob(mctx.JobID).Info("Collecting process list")
-
-	// Use ps command to get process list
-	cmd := exec.CommandContext(ctx, "ps", "aux", "--sort", "-pcpu", "--no-headers")
-
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("ps command failed: %w", err)
-	}
-
-	if err := os.WriteFile(outputPath, []byte(output), 0644); err != nil {
-		return fmt.Errorf("failed to write process list: %w", err)
-	}
-
-	logging.WithJob(mctx.JobID).Info("Process list collected")
-	return nil
-}
-
-func (m *LinuxProcessList) ID() string { return "linux_process_list" }
-
-// LinuxNetworkConnections collects network connections on Linux
 type LinuxNetworkConnections struct {
 	Module
 }
 
-func (m *LinuxNetworkConnections) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
-	logging.WithJob(mctx.JobID).Info("Collecting network connections")
-
-	// Use ss command to get TCP connections
-	cmd := exec.CommandContext(ctx, "ss", "-tupn", "-o", "state=established")
-
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("ss command failed: %w", err)
-	}
-
-	if err := os.WriteFile(outputPath, []byte(output), 0644); err != nil {
-		return fmt.Errorf("failed to write network connections: %w", err)
-	}
-
-	logging.WithJob(mctx.JobID).Info("Network connections collected")
-	return nil
-}
-
-func (m *LinuxNetworkConnections) ID() string { return "linux_network_connections" }
-
-// LinuxSyslogRecent collects recent system logs
-type LinuxSyslogRecent struct {
+type LinuxIpConfig struct {
 	Module
 }
 
-func (m *LinuxSyslogRecent) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
-	logging.WithJob(mctx.JobID).Info("Collecting system logs")
-
-	// Check for common syslog locations
-	syslogPaths := []string{
-		"/var/log/syslog",
-		"/var/log/messages",
-	}
-
-	var content []byte
-	for _, path := range syslogPaths {
-		if data, err := os.ReadFile(path); err == nil {
-			content = append(content, data...)
-			break
-		}
-	}
-
-	if len(content) == 0 {
-		logging.WithJob(mctx.JobID).Warning("No system log files found")
-		return nil
-	}
-
-	if err := os.WriteFile(outputPath, content, 0644); err != nil {
-		return fmt.Errorf("failed to write system logs: %w", err)
-	}
-
-	logging.WithJob(mctx.JobID).Info("System logs collected")
-	return nil
-}
-
-func (m *LinuxSyslogRecent) ID() string { return "linux_syslog_recent" }
-
-// LinuxAuthLogs collects authentication logs
-type LinuxAuthLogs struct {
+type LinuxResolvConf struct {
 	Module
 }
 
-func (m *LinuxAuthLogs) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
-	logging.WithJob(mctx.JobID).Info("Collecting authentication logs")
-
-	// Check for common auth log locations
-	authLogPaths := []string{
-		"/var/log/auth.log",
-		"/var/log/secure",
-	}
-
-	var content []byte
-	for _, path := range authLogPaths {
-		if data, err := os.ReadFile(path); err == nil {
-			content = append(content, data...)
-			break
-		}
-	}
-
-	if len(content) == 0 {
-		logging.WithJob(mctx.JobID).Warning("No authentication log files found")
-		return nil
-	}
-
-	if err := os.WriteFile(outputPath, content, 0644); err != nil {
-		return fmt.Errorf("failed to write authentication logs: %w", err)
-	}
-
-	logging.WithJob(mctx.JobID).Info("Authentication logs collected")
-	return nil
-}
-
-func (m *LinuxAuthLogs) ID() string { return "linux_auth_logs" }
-
-// LinuxCronJobs collects cron jobs and scheduled tasks
-type LinuxCronJobs struct {
+type LinuxBashHistory struct {
 	Module
 }
 
-func (m *LinuxCronJobs) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
-	logging.WithJob(mctx.JobID).Info("Collecting cron jobs")
-
-	// Get user crontab entries
-	cmd := exec.CommandContext(ctx, "crontab", "-l")
-
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("crontab command failed: %w", err)
-	}
-
-	if err := os.WriteFile(outputPath, []byte(output), 0644); err != nil {
-		return fmt.Errorf("failed to write cron jobs: %w", err)
-	}
-
-	logging.WithJob(mctx.JobID).Info("Cron jobs collected")
-	return nil
-}
-
-func (m *LinuxCronJobs) ID() string { return "linux_cron_jobs" }
-
-// LinuxLoggedInUsers collects logged-in user sessions
 type LinuxLoggedInUsers struct {
 	Module
 }
 
-func (m *LinuxLoggedInUsers) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
-	logging.WithJob(mctx.JobID).Info("Collecting logged-in users")
-
-	// Use who command to get logged-in users
-	cmd := exec.CommandContext(ctx, "who")
-
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("who command failed: %w", err)
-	}
-
-	if err := os.WriteFile(outputPath, []byte(output), 0644); err != nil {
-		return fmt.Errorf("failed to write logged-in users: %w", err)
-	}
-
-	logging.WithJob(mctx.JobID).Info("Logged-in users collected")
-	return nil
+type LinuxPackages struct {
+	Module
 }
 
-func (m *LinuxLoggedInUsers) ID() string { return "linux_logged_in_users" }
+type LinuxKernelVersion struct {
+	Module
+}
+
+func NewLinuxProcessList() *LinuxProcessList {
+	return &LinuxProcessList{Module: NewModule("linux_process_list", "volatile/linux/process_list.txt")}
+}
+
+func NewLinuxNetworkConnections() *LinuxNetworkConnections {
+	return &LinuxNetworkConnections{Module: NewModule("linux_network_connections", "volatile/linux/network_connections.txt")}
+}
+
+func NewLinuxIpConfig() *LinuxIpConfig {
+	return &LinuxIpConfig{Module: NewModule("linux_ip_config", "system/linux/ip_config.txt")}
+}
+
+func NewLinuxResolvConf() *LinuxResolvConf {
+	return &LinuxResolvConf{Module: NewModule("linux_resolv_conf", "system/linux/resolv.conf")}
+}
+
+func NewLinuxBashHistory() *LinuxBashHistory {
+	return &LinuxBashHistory{Module: NewModule("linux_bash_history", "system/linux/bash_history.txt")}
+}
+
+func NewLinuxLoggedInUsers() *LinuxLoggedInUsers {
+	return &LinuxLoggedInUsers{Module: NewModule("linux_logged_in_users", "system/linux/logged_in_users.txt")}
+}
+
+func NewLinuxPackages() *LinuxPackages {
+	return &LinuxPackages{Module: NewModule("linux_installed_packages", "system/linux/installed_packages.txt")}
+}
+
+func NewLinuxKernelVersion() *LinuxKernelVersion {
+	return &LinuxKernelVersion{Module: NewModule("linux_kernel_version", "system/linux/kernel_version.txt")}
+}
+
+func (m *LinuxProcessList) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	return runCommandToFile(ctx, outputPath, params, "ps", "aux", "--sort", "-pcpu")
+}
+
+func (m *LinuxNetworkConnections) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	if _, err := exec.LookPath("ss"); err == nil {
+		return runCommandToFile(ctx, outputPath, params, "ss", "-tupn")
+	}
+	if _, err := exec.LookPath("netstat"); err == nil {
+		return runCommandToFile(ctx, outputPath, params, "netstat", "-tupn")
+	}
+	note := "no ss/netstat available"
+	if writeErr := WriteNotFound(outputPath, note); writeErr != nil {
+		return writeErr
+	}
+	return NewWarningError(note)
+}
+
+func (m *LinuxIpConfig) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	if _, err := exec.LookPath("ip"); err != nil {
+		note := "ip command not available"
+		if writeErr := WriteNotFound(outputPath, note); writeErr != nil {
+			return writeErr
+		}
+		return NewWarningError(note)
+	}
+	cmd := exec.CommandContext(ctx, "ip", "addr")
+	addrOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ip addr failed: %w", err)
+	}
+	cmd = exec.CommandContext(ctx, "ip", "route")
+	routeOutput, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("ip route failed: %w", err)
+	}
+	combined := append([]byte("[ip addr]\n"), addrOutput...)
+	combined = addSeparator(combined)
+	combined = append(combined, []byte("[ip route]\n")...)
+	combined = append(combined, routeOutput...)
+	maxLines, _ := GetMaxLines(params)
+	maxSize, _ := GetMaxSizeMB(params)
+	combined = LimitOutput(combined, maxLines, maxSize)
+	return WriteOutput(outputPath, combined)
+}
+
+func (m *LinuxResolvConf) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	return copyIfExists(outputPath, "/etc/resolv.conf")
+}
+
+func (m *LinuxBashHistory) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	paths := listBashHistories()
+	if len(paths) == 0 {
+		if writeErr := WriteNotFound(outputPath, "bash_history not found"); writeErr != nil {
+			return writeErr
+		}
+		return NewWarningError("bash_history not found")
+	}
+	var combined []byte
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			combined = append(combined, []byte(fmt.Sprintf("[%s] not readable\n", path))...)
+			combined = addSeparator(combined)
+			continue
+		}
+		combined = append(combined, formatMultiFileContent("bash_history", path, data)...)
+		combined = addSeparator(combined)
+	}
+	maxLines, _ := GetMaxLines(params)
+	maxSize, _ := GetMaxSizeMB(params)
+	combined = LimitOutput(combined, maxLines, maxSize)
+	return WriteOutput(outputPath, combined)
+}
+
+func (m *LinuxLoggedInUsers) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	var combined []byte
+	commands := [][]string{{"who"}, {"w"}, {"last"}}
+	for _, cmdArgs := range commands {
+		cmd := exec.CommandContext(ctx, cmdArgs[0], cmdArgs[1:]...)
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			combined = append(combined, []byte(fmt.Sprintf("[%s] failed: %v\n", cmdArgs[0], err))...)
+			combined = addSeparator(combined)
+			continue
+		}
+		combined = append(combined, []byte(fmt.Sprintf("[%s]\n", cmdArgs[0]))...)
+		combined = append(combined, output...)
+		combined = addSeparator(combined)
+	}
+	maxLines, _ := GetMaxLines(params)
+	maxSize, _ := GetMaxSizeMB(params)
+	combined = LimitOutput(combined, maxLines, maxSize)
+	return WriteOutput(outputPath, combined)
+}
+
+func (m *LinuxPackages) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	if _, err := exec.LookPath("dpkg-query"); err == nil {
+		return runCommandToFile(ctx, outputPath, params, "dpkg-query", "-W", "-f", "${Package}\t${Version}\n")
+	}
+	if _, err := exec.LookPath("rpm"); err == nil {
+		return runCommandToFile(ctx, outputPath, params, "rpm", "-qa")
+	}
+	note := "no dpkg-query or rpm available"
+	if writeErr := WriteNotFound(outputPath, note); writeErr != nil {
+		return writeErr
+	}
+	return NewWarningError(note)
+}
+
+func (m *LinuxKernelVersion) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	cmd := exec.CommandContext(ctx, "uname", "-a")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("uname failed: %w", err)
+	}
+	return WriteOutput(outputPath, output)
+}

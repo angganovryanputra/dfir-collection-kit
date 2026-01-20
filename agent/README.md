@@ -12,25 +12,25 @@ The DFIR agent runs on target systems (Windows and Linux) and communicates with 
 
 ## Features
 
-- **OS Detection**: Automatically detects Windows or Linux at startup
+- **OS Detection**: Automatically detects OS/arch at startup
 - **Module System**: Extensible registry for collection modules
 - **Windows Modules**:
-  - Security event logs (7 days)
-  - System event logs (7 days)
-  - PowerShell event logs (7 days)
-  - Process list
-  - Network connections (established TCP connections)
-  - Scheduled tasks
-  - Autorun entries
+  - Security, System, Application event logs
+  - PowerShell Operational and Sysmon logs (if present)
+  - Process list, network connections, listening ports, DNS cache
+  - Scheduled tasks, services, run keys, startup folders, WMI subscriptions
+  - Local users, logged-on users
+  - System info, installed patches, timezone, boot time
 - **Linux Modules**:
-  - Process list
-  - Network connections (established TCP)
-  - System logs (syslog/messages)
-  - Authentication logs (auth.log/secure)
-  - Cron jobs
-  - Logged-in users
+  - systemd journal, syslog/messages, auth logs
+  - wtmp/btmp (last output)
+  - Cron, systemd services/timers, rc.local, authorized_keys
+  - Process list, network connections, IP config, resolv.conf
+  - Bash history, logged-in users
+  - Installed packages, kernel version
 - **Secure Communication**: Uses shared secret authentication
 - **Evidence ZIP**: Automatically creates compressed ZIP uploads
+- **Dry Run**: Execute modules locally without backend
 
 ## Architecture
 
@@ -85,6 +85,16 @@ DFIR_AGENT_SECRET=your-secret-here \
 ./dfir-agent
 ```
 
+## Dry Run
+
+```bash
+# Run selected modules locally without backend
+./dfir-agent --dry-run --modules windows_eventlog_security,windows_process_list
+
+# Specify output directory
+./dfir-agent --dry-run --modules linux_process_list,linux_journalctl --workdir ./output
+```
+
 ## Agent Lifecycle
 
 1. **Startup**:
@@ -130,8 +140,8 @@ Example job instruction:
   "work_dir": "/vault/evidence/INC-2025-001/JOB-INC-2025-001",
   "modules": [
     {
-      "module_id": "windows_event_logs_security_7d",
-      "output_relpath": "logs/Security.evtx",
+      "module_id": "windows_eventlog_security",
+      "output_relpath": "logs/windows/security.evtx",
       "params": { "time_window": "7d" }
     }
   ]
@@ -142,9 +152,9 @@ Example job instruction:
 
 The agent integrates with the existing backend API endpoints:
 - `POST /agents/register` - Initial registration
-- `POST /{agent_id}/heartbeat` - Status updates
-- `GET /{agent_id}/jobs/next` - Poll for jobs
-- `POST /{agent_id}/jobs/{job_id}/status` - Status updates
-- `POST /{agent_id}/jobs/{job_id}/upload` - Evidence upload
+- `POST /agents/{agent_id}/heartbeat` - Status updates
+- `GET /agents/{agent_id}/jobs/next` - Poll for jobs
+- `POST /agents/{agent_id}/jobs/{job_id}/status` - Status updates
+- `POST /agents/{agent_id}/jobs/{job_id}/upload` - Evidence upload
 
 See `backend/app/api/v1/endpoints/agents.py` for detailed API schemas.

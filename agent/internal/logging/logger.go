@@ -51,12 +51,27 @@ func Error(format string, v ...interface{}) {
 	logger.Output(2, fmt.Sprintf("[ERROR] "+format, v...))
 }
 
+type JobLogger struct {
+	jobID string
+}
+
 // WithJob adds job context to log messages
-func WithJob(jobID string) func(string, ...interface{}) string {
-	return func(format string, v ...interface{}) string {
-		args := make([]interface{}, 0, len(v)+1)
-		args[0] = fmt.Sprintf("[JOB:%s]", jobID)
-		copy(args, v)
-		return fmt.Sprintf(format, args...)
-	}
+func WithJob(jobID string) JobLogger {
+	return JobLogger{jobID: jobID}
+}
+
+func (j JobLogger) Info(format string, v ...interface{}) {
+	Info("[JOB:%s] "+format, append([]interface{}{j.jobID}, v...)...)
+}
+
+func (j JobLogger) Debug(format string, v ...interface{}) {
+	Debug("[JOB:%s] "+format, append([]interface{}{j.jobID}, v...)...)
+}
+
+func (j JobLogger) Warning(format string, v ...interface{}) {
+	Warning("[JOB:%s] "+format, append([]interface{}{j.jobID}, v...)...)
+}
+
+func (j JobLogger) Error(format string, v ...interface{}) {
+	Error("[JOB:%s] "+format, append([]interface{}{j.jobID}, v...)...)
 }
