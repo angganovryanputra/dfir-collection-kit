@@ -8,4 +8,5 @@ class EvidenceExportRequest(BaseModel):
 
 class EvidenceExportResponse(BaseModel):
     download_url: str
+    signature: str | None = None
     status: str = "ready"

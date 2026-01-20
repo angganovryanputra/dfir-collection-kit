@@ -9,6 +9,8 @@ class Settings(BaseSettings):
     ALLOWED_ORIGINS: str = "*"
     EVIDENCE_STORAGE_PATH: str = "/vault/evidence"
     MAX_UPLOAD_SIZE_MB: int = 10240
+    MAX_EXPORT_SIZE_MB: int = 2048
+    MAX_EXPORTS_PER_INCIDENT: int = 5
     AGENT_SHARED_SECRET: str = ""
     REQUIRE_AUTH: bool = True
 

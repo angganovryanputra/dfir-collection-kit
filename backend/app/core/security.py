@@ -20,10 +20,16 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
-def create_access_token(subject: str, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(
+    subject: str,
+    expires_delta: Optional[timedelta] = None,
+    claims: dict | None = None,
+) -> tuple[str, datetime]:
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode = {"sub": subject, "exp": expire}
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+    if claims:
+        to_encode.update(claims)
+    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM), expire
 
 
 def decode_access_token(token: str) -> dict:
@@ -51,3 +57,11 @@ def compute_chain_hash(
         ]
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def compute_export_signature(path: str) -> str:
+    hasher = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()

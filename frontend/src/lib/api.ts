@@ -18,6 +18,21 @@ const getAuthToken = () => {
   }
 };
 
+const handleAuthFailure = (path: string) => {
+  if (typeof window === "undefined") return;
+  if (path.startsWith("/auth/")) return;
+  localStorage.removeItem("dfir_auth");
+  localStorage.removeItem("dfir_logout_reason");
+  localStorage.setItem(
+    "dfir_logout_reason",
+    JSON.stringify({
+      reason: "expired",
+      timestamp: new Date().toISOString(),
+    })
+  );
+  window.location.href = "/login";
+};
+
 const request = async <T>(path: string, method: HttpMethod, body?: unknown): Promise<T> => {
   const url = `${getBaseUrl()}${path}`;
   const headers: Record<string, string> = {
@@ -33,6 +48,10 @@ const request = async <T>(path: string, method: HttpMethod, body?: unknown): Pro
     headers,
     body: body ? JSON.stringify(body) : undefined,
   });
+
+  if (response.status === 401) {
+    handleAuthFailure(path);
+  }
 
   if (!response.ok) {
     const message = await response.text();

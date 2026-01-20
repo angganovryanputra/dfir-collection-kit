@@ -1,45 +1,21 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
 from app.core.modules import build_modules
 from app.crud.collection_log import create_log_entries, delete_logs_for_incident, list_logs
+from app.crud.evidence import has_evidence_for_incident, lock_evidence_for_incident
 from app.crud.incident import create_incident, delete_incident, get_incident, list_incidents, update_incident
 from app.crud.job import create_job
+from app.models.device import Device
 from app.models.user import User
 from app.schemas.collection import CollectionLogEntry, CollectionStartResponse, CollectionStatusResponse
 from app.schemas.incident import IncidentCreate, IncidentOut, IncidentUpdate
 from app.schemas.job import JobCreate
+from app.services.audit_log_service import safe_record_event
 
 router = APIRouter()
-
-SIMULATED_COLLECTION_LOGS = [
-    {"level": "info", "message": "Initializing collection engine..."},
-    {"level": "success", "message": "Connection established to target: WS-FINANCE-01"},
-    {"level": "info", "message": "Starting volatile data acquisition..."},
-    {"level": "info", "message": "Collecting process list..."},
-    {"level": "success", "message": "Process list captured (342 processes)"},
-    {"level": "info", "message": "Collecting network connections..."},
-    {"level": "success", "message": "Network state captured (89 connections)"},
-    {"level": "info", "message": "Collecting memory dump..."},
-    {"level": "warning", "message": "Large memory footprint detected (32GB) - this may take time"},
-    {"level": "success", "message": "Memory acquisition complete"},
-    {"level": "info", "message": "Starting persistence mechanism scan..."},
-    {"level": "info", "message": "Scanning registry autorun keys..."},
-    {"level": "success", "message": "Registry scan complete (23 entries)"},
-    {"level": "info", "message": "Scanning scheduled tasks..."},
-    {"level": "success", "message": "Scheduled tasks captured (45 tasks)"},
-    {"level": "info", "message": "Scanning services..."},
-    {"level": "success", "message": "Services enumeration complete (189 services)"},
-    {"level": "info", "message": "Starting log collection..."},
-    {"level": "info", "message": "Collecting Windows Event Logs..."},
-    {"level": "success", "message": "Security log captured (50,000 events)"},
-    {"level": "success", "message": "System log captured (25,000 events)"},
-    {"level": "success", "message": "Application log captured (15,000 events)"},
-    {"level": "info", "message": "Generating evidence hashes..."},
-    {"level": "success", "message": "SHA-256 hashes computed for all artifacts"},
-    {"level": "success", "message": "Collection complete - transferring to vault..."},
-]
 
 PHASE_STEPS = [
     ("volatile", "Volatile Data"),
@@ -72,9 +48,24 @@ async def get_incident_endpoint(
 
 @router.post("/", response_model=IncidentOut, dependencies=[Depends(require_roles("operator", "admin"))])
 async def create_incident_endpoint(
-    payload: IncidentCreate, db: AsyncSession = Depends(get_db)
+    payload: IncidentCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> IncidentOut:
     incident = await create_incident(db, payload)
+    await safe_record_event(
+        db,
+        event_type="incident_created",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="backend",
+        action="create incident",
+        target_type="incident",
+        target_id=incident.id,
+        status="success",
+        message="Incident created",
+        metadata={"type": incident.type, "status": incident.status},
+    )
     return IncidentOut.model_validate(incident)
 
 
@@ -84,7 +75,9 @@ async def create_incident_endpoint(
     dependencies=[Depends(require_roles("operator", "admin"))],
 )
 async def start_collection_endpoint(
-    incident_id: str, db: AsyncSession = Depends(get_db)
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> CollectionStartResponse:
     incident = await get_incident(db, incident_id)
     if not incident:
@@ -106,14 +99,41 @@ async def start_collection_endpoint(
         incident = updated
 
     await delete_logs_for_incident(db, incident_id)
-    await create_log_entries(db, incident_id, 1, SIMULATED_COLLECTION_LOGS)
+    await create_log_entries(
+        db,
+        incident_id,
+        1,
+        [{"level": "info", "message": "Collection job initialized"}],
+    )
 
-    modules = build_modules(os_name="windows")
+    os_name = "windows"
+    if incident.target_endpoints:
+        result = await db.execute(
+            select(Device).where(Device.hostname == incident.target_endpoints[0])
+        )
+        device = result.scalar_one_or_none()
+        if device and device.os:
+            os_name = device.os
+    modules = build_modules(os_name=os_name)
     await create_job(
         db,
         JobCreate(id=f"JOB-{incident_id}", incident_id=incident_id),
         modules,
         f"{incident_id}/JOB-{incident_id}",
+    )
+
+    await safe_record_event(
+        db,
+        event_type="job_created",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="backend",
+        action="start collection",
+        target_type="incident",
+        target_id=incident_id,
+        status="success",
+        message="Collection started",
+        metadata={"job_id": f"JOB-{incident_id}", "module_count": len(modules)},
     )
 
     return CollectionStartResponse(
@@ -155,55 +175,23 @@ async def poll_collection_endpoint(
         raise HTTPException(status_code=404, detail="Incident not found")
 
     log_index = incident.last_log_index
-
-    if incident.status == "COLLECTION_COMPLETE":
-        return CollectionStatusResponse(
-            incident_id=incident.id,
-            status=incident.status,
-            progress=incident.collection_progress,
-            phase=incident.collection_phase or PHASE_STEPS[-1][0],
-            last_log_index=log_index,
-            logs=[],
-        )
-
-    if incident.status != "COLLECTION_IN_PROGRESS":
-        return CollectionStatusResponse(
-            incident_id=incident.id,
-            status=incident.status,
-            progress=incident.collection_progress,
-            phase=incident.collection_phase or PHASE_STEPS[0][0],
-            last_log_index=log_index,
-            logs=[],
-        )
-
-    next_index = min(log_index + 1, len(SIMULATED_COLLECTION_LOGS))
-    log_entries = await list_logs(db, incident_id, log_index, next_index)
-
-    progress = int(next_index / len(SIMULATED_COLLECTION_LOGS) * 100) if SIMULATED_COLLECTION_LOGS else 0
-    phase_index = min(len(PHASE_STEPS) - 1, int(progress / 25)) if PHASE_STEPS else 0
-    phase = PHASE_STEPS[phase_index][0]
-
-    status = "COLLECTION_IN_PROGRESS"
-    if next_index >= len(SIMULATED_COLLECTION_LOGS):
-        status = "COLLECTION_COMPLETE"
-
-    await update_incident(
-        db,
-        incident_id,
-        IncidentUpdate(
-            status=status,
-            collection_progress=progress,
-            collection_phase=phase,
-            last_log_index=next_index,
-        ),
-    )
+    log_entries = await list_logs(db, incident_id, log_index)
+    last_sequence = log_index
+    if log_entries:
+        last_sequence = log_entries[-1].sequence
+        if last_sequence != log_index:
+            await update_incident(
+                db,
+                incident_id,
+                IncidentUpdate(last_log_index=last_sequence),
+            )
 
     return CollectionStatusResponse(
         incident_id=incident.id,
-        status=status,
-        progress=progress,
-        phase=phase,
-        last_log_index=next_index,
+        status=incident.status,
+        progress=incident.collection_progress,
+        phase=incident.collection_phase or PHASE_STEPS[0][0],
+        last_log_index=last_sequence,
         logs=[
             CollectionLogEntry(
                 sequence=entry.sequence,
@@ -222,11 +210,29 @@ async def poll_collection_endpoint(
     dependencies=[Depends(require_roles("operator", "admin"))],
 )
 async def update_incident_endpoint(
-    incident_id: str, payload: IncidentUpdate, db: AsyncSession = Depends(get_db)
+    incident_id: str,
+    payload: IncidentUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> IncidentOut:
+    if payload.status == "CLOSED":
+        await lock_evidence_for_incident(db, incident_id)
     incident = await update_incident(db, incident_id, payload)
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
+    await safe_record_event(
+        db,
+        event_type="incident_updated",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="backend",
+        action="update incident",
+        target_type="incident",
+        target_id=incident.id,
+        status="success",
+        message="Incident updated",
+        metadata=payload.model_dump(exclude_unset=True),
+    )
     return IncidentOut.model_validate(incident)
 
 
@@ -235,9 +241,26 @@ async def update_incident_endpoint(
     dependencies=[Depends(require_roles("admin"))],
 )
 async def delete_incident_endpoint(
-    incident_id: str, db: AsyncSession = Depends(get_db)
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
+    if await has_evidence_for_incident(db, incident_id):
+        raise HTTPException(status_code=409, detail="Incident has evidence; deletion blocked")
     deleted = await delete_incident(db, incident_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Incident not found")
+    await safe_record_event(
+        db,
+        event_type="incident.delete",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="backend",
+        action="delete incident",
+        target_type="incident",
+        target_id=incident_id,
+        status="success",
+        message="Incident deleted",
+        metadata={},
+    )
     return {"status": "deleted"}

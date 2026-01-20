@@ -8,6 +8,7 @@ from app.models.user import User
 from app.models.collector import Collector
 from app.models.settings import SystemSettings
 from app.models.job import Job
+from app.models.audit_log import AuditLog
 
 __all__ = [
     "Incident",
@@ -21,4 +22,5 @@ __all__ = [
     "Collector",
     "SystemSettings",
     "Job",
+    "AuditLog",
 ]

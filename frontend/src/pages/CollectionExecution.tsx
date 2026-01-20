@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type { CollectionPhase } from "@/types/dfir";
 import { apiGet, apiPost } from "@/lib/api";
+import { getStoredRole, isViewerRole } from "@/lib/auth";
 
 
 type IncidentSummary = {
@@ -49,16 +50,6 @@ type CollectorSummary = {
   last_heartbeat: string;
 };
 
-type EvidenceFolderResponse = {
-  id: string;
-  incident_id: string;
-  type: string;
-  date: string;
-  files_count: number;
-  total_size: string;
-  status: string;
-};
-
 type CollectionLogResponse = {
   sequence: number;
   level: "info" | "success" | "warning" | "error";
@@ -75,11 +66,45 @@ type CollectionStatusResponse = {
   last_log_index: number;
 };
 
+type EvidenceFolderResponse = {
+  id: string;
+  incident_id: string;
+  type: string;
+  date: string;
+  files_count: number;
+  total_size: string;
+  status: "LOCKED" | "HASH_VERIFIED";
+};
+
+type EvidenceItemResponse = {
+  id: string;
+  incident_id: string;
+  name: string;
+  type: string;
+  size: string;
+  status: "COLLECTING" | "LOCKED" | "HASH_VERIFIED" | "EXPORTED";
+  hash: string;
+  collected_at: string;
+};
+
 const PHASE_NAME_MAP: Record<string, string> = {
   volatile: "Volatile Data",
   persistence: "Persistence Mechanisms",
   logs: "System Logs",
   hashing: "Evidence Hashing",
+};
+
+const PHASE_IDS = Object.keys(PHASE_NAME_MAP);
+
+const derivePhaseFromStatus = (status: string) => {
+  const match = status.match(/collecting\s*\((\d+)\/(\d+)\)/i);
+  if (!match) return null;
+  const current = Number(match[1]);
+  const total = Number(match[2]);
+  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) return null;
+  const ratio = Math.min(1, Math.max(0, current / total));
+  const index = Math.min(PHASE_IDS.length - 1, Math.floor(ratio * PHASE_IDS.length));
+  return PHASE_IDS[index] ?? null;
 };
 
 export default function CollectionExecution() {
@@ -98,8 +123,15 @@ export default function CollectionExecution() {
   const [incident, setIncident] = useState<IncidentSummary | null>(null);
   const [device, setDevice] = useState<DeviceSummary | null>(null);
   const [collector, setCollector] = useState<CollectorSummary | null>(null);
+  const [summary, setSummary] = useState({
+    artifacts: 0,
+    totalSize: "--",
+    hashAlg: "UNKNOWN",
+    status: "LOCKED" as "LOCKED" | "HASH_VERIFIED",
+  });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
+  const isViewer = isViewerRole(getStoredRole());
   const pollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedRef = useRef(false);
   const startedAtRef = useRef<number | null>(null);
@@ -115,7 +147,7 @@ export default function CollectionExecution() {
         const current = incidents.find((entry) => entry.id === incidentId) ?? null;
         setIncident(current);
 
-        const devices = await apiGet<DeviceSummary[]>("/devices");
+        const devices = await apiGet<DeviceSummary[]>("/agents");
         const matchedDevice = current?.target_endpoints.length
           ? devices.find((entry) => entry.hostname === current.target_endpoints[0]) ?? null
           : null;
@@ -134,6 +166,10 @@ export default function CollectionExecution() {
   useEffect(() => {
     const startCollection = async () => {
       if (!incidentId || startedRef.current) return;
+      if (isViewer) {
+        setErrorMessage("Viewer accounts cannot start collections.");
+        return;
+      }
       setIsStarting(true);
       try {
         await apiPost(`/incidents/${incidentId}/collect`, {});
@@ -148,7 +184,7 @@ export default function CollectionExecution() {
     };
 
     startCollection();
-  }, [incidentId]);
+  }, [incidentId, isViewer]);
 
   useEffect(() => {
     const pollStatus = async () => {
@@ -174,7 +210,8 @@ export default function CollectionExecution() {
           }
           return 0;
         });
-        const phaseId = status.phase ?? "volatile";
+        const derivedPhase = derivePhaseFromStatus(status.status);
+        const phaseId = status.phase ?? derivedPhase ?? "volatile";
         setPhases((prev) =>
           prev.map((phase) => {
             if (status.progress >= 100) {
@@ -194,6 +231,13 @@ export default function CollectionExecution() {
           setPhases((prev) =>
             prev.map((phase) => ({ ...phase, status: "complete", progress: 100 }))
           );
+          if (pollerRef.current) {
+            clearInterval(pollerRef.current);
+            pollerRef.current = null;
+          }
+        } else if (status.status === "COLLECTION_FAILED") {
+          setIsComplete(false);
+          setErrorMessage("Collection failed. Review logs for details.");
           if (pollerRef.current) {
             clearInterval(pollerRef.current);
             pollerRef.current = null;
@@ -219,9 +263,21 @@ export default function CollectionExecution() {
 
   useEffect(() => {
     const fetchExistingEvidence = async () => {
-      if (!incident || !isComplete) return;
+      if (!incidentId || !incident || !isComplete) return;
       try {
-        await apiGet<EvidenceFolderResponse[]>("/evidence/folders");
+        const folders = await apiGet<EvidenceFolderResponse[]>("/evidence/folders");
+        const folder = folders.find((entry) => entry.incident_id === incidentId) ?? null;
+        if (!folder) return;
+        const items = await apiGet<EvidenceItemResponse[]>(
+          `/evidence/items?incident_id=${folder.incident_id}`
+        );
+        const hasHash = items.some((item) => item.hash && item.hash.trim().length > 0);
+        setSummary({
+          artifacts: items.length || folder.files_count,
+          totalSize: folder.total_size || "--",
+          hashAlg: hasHash ? "SHA-256" : "UNKNOWN",
+          status: folder.status,
+        });
       } catch {
       }
     };
@@ -349,6 +405,7 @@ export default function CollectionExecution() {
                   variant="destructive"
                   size="lg"
                   className="w-full"
+                  disabled={isViewer}
                 >
                   <StopCircle className="w-4 h-4" />
                   EMERGENCY ABORT
@@ -360,10 +417,26 @@ export default function CollectionExecution() {
             {isComplete && (
               <TacticalPanel title="COLLECTION SUMMARY">
                 <div className="space-y-2 font-mono text-xs">
-                  <KeyValueRow label="ARTIFACTS:" value="47 files" valueClassName="text-primary" />
-                  <KeyValueRow label="TOTAL SIZE:" value="2.4 GB" valueClassName="text-primary" />
-                  <KeyValueRow label="HASH ALG:" value="SHA-256" valueClassName="text-primary" />
-                  <KeyValueRow label="STATUS:" value="HASH VERIFIED" valueClassName="text-primary" />
+                  <KeyValueRow
+                    label="ARTIFACTS:"
+                    value={`${summary.artifacts || 0} files`}
+                    valueClassName="text-primary"
+                  />
+                  <KeyValueRow
+                    label="TOTAL SIZE:"
+                    value={summary.totalSize}
+                    valueClassName="text-primary"
+                  />
+                  <KeyValueRow
+                    label="HASH ALG:"
+                    value={summary.hashAlg}
+                    valueClassName="text-primary"
+                  />
+                  <KeyValueRow
+                    label="STATUS:"
+                    value={summary.status === "HASH_VERIFIED" ? "HASH VERIFIED" : "LOCKED"}
+                    valueClassName="text-primary"
+                  />
                 </div>
               </TacticalPanel>
             )}

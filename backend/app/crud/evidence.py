@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.evidence import EvidenceFolder, EvidenceItem
@@ -9,6 +9,11 @@ from app.schemas.evidence import EvidenceFolderCreate, EvidenceItemCreate
 async def list_folders(db: AsyncSession) -> list[EvidenceFolder]:
     result = await db.execute(select(EvidenceFolder).order_by(EvidenceFolder.date.desc()))
     return list(result.scalars().all())
+
+
+async def get_folder(db: AsyncSession, folder_id: str) -> EvidenceFolder | None:
+    result = await db.execute(select(EvidenceFolder).where(EvidenceFolder.id == folder_id))
+    return result.scalar_one_or_none()
 
 
 async def create_folder(db: AsyncSession, payload: EvidenceFolderCreate) -> EvidenceFolder:
@@ -36,3 +41,23 @@ async def create_item(db: AsyncSession, payload: EvidenceItemCreate) -> Evidence
     db.add(item)
     await db.flush()
     return item
+
+
+async def has_evidence_for_incident(db: AsyncSession, incident_id: str) -> bool:
+    result = await db.execute(
+        select(EvidenceItem.id).where(EvidenceItem.incident_id == incident_id).limit(1)
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def lock_evidence_for_incident(db: AsyncSession, incident_id: str) -> None:
+    await db.execute(
+        update(EvidenceFolder)
+        .where(EvidenceFolder.incident_id == incident_id)
+        .values(status="LOCKED")
+    )
+    await db.execute(
+        update(EvidenceItem)
+        .where(EvidenceItem.incident_id == incident_id)
+        .values(status="LOCKED")
+    )

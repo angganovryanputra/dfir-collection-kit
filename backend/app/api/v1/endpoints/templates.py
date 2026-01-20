@@ -5,6 +5,7 @@ from app.core.deps import get_current_user, get_db, require_roles
 from app.crud.template import create_template, delete_template, get_template, list_templates, update_template
 from app.models.user import User
 from app.schemas.template import IncidentTemplateCreate, IncidentTemplateOut, IncidentTemplateUpdate
+from app.services.audit_log_service import safe_record_event
 
 router = APIRouter()
 
@@ -24,9 +25,27 @@ async def get_templates(
     dependencies=[Depends(require_roles("operator", "admin"))],
 )
 async def create_template_endpoint(
-    payload: IncidentTemplateCreate, db: AsyncSession = Depends(get_db)
+    payload: IncidentTemplateCreate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> IncidentTemplateOut:
-    template = await create_template(db, payload)
+    data = payload.model_dump()
+    data["created_by"] = user.username
+    data["usage_count"] = 0
+    template = await create_template(db, IncidentTemplateCreate(**data))
+    await safe_record_event(
+        db,
+        event_type="template.create",
+        actor_type="user",
+        actor_id=user.id,
+        source="backend",
+        action="create template",
+        target_type="preset",
+        target_id=template.id,
+        status="success",
+        message="Template created",
+        metadata={"name": template.name, "incident_type": template.incident_type},
+    )
     return IncidentTemplateOut.model_validate(template)
 
 
@@ -48,11 +67,30 @@ async def get_template_endpoint(
     dependencies=[Depends(require_roles("operator", "admin"))],
 )
 async def update_template_endpoint(
-    template_id: str, payload: IncidentTemplateUpdate, db: AsyncSession = Depends(get_db)
+    template_id: str,
+    payload: IncidentTemplateUpdate,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ) -> IncidentTemplateOut:
-    template = await update_template(db, template_id, payload)
+    data = payload.model_dump(exclude_unset=True)
+    data.pop("created_by", None)
+    data.pop("usage_count", None)
+    template = await update_template(db, template_id, IncidentTemplateUpdate(**data))
     if not template:
         raise HTTPException(status_code=404, detail="Template not found")
+    await safe_record_event(
+        db,
+        event_type="template.update",
+        actor_type="user",
+        actor_id=user.id,
+        source="backend",
+        action="update template",
+        target_type="preset",
+        target_id=template.id,
+        status="success",
+        message="Template updated",
+        metadata=data,
+    )
     return IncidentTemplateOut.model_validate(template)
 
 
@@ -64,4 +102,17 @@ async def delete_template_endpoint(template_id: str, db: AsyncSession = Depends(
     deleted = await delete_template(db, template_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Template not found")
+    await safe_record_event(
+        db,
+        event_type="template.delete",
+        actor_type="user",
+        actor_id="system",
+        source="backend",
+        action="delete template",
+        target_type="preset",
+        target_id=template_id,
+        status="success",
+        message="Template deleted",
+        metadata={},
+    )
     return {"status": "deleted"}

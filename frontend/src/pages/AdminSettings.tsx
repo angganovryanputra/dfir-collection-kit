@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,6 +10,7 @@ import { usePagination } from "@/hooks/usePagination";
 import { FormLabel } from "@/components/common/FormLabel";
 import { KeyValueRow } from "@/components/common/KeyValueRow";
 import { TableHeaderRow } from "@/components/common/TableHeaderRow";
+import { SearchInput } from "@/components/common/SearchInput";
 import { SelectableButton } from "@/components/common/SelectableButton";
 import {
   Users,
@@ -23,6 +25,7 @@ import {
   Power,
   RefreshCw,
   Shield,
+  FileText,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 
@@ -74,6 +77,26 @@ interface SystemSettingsResponse {
   export_format: string;
 }
 
+interface AuditLogEntry {
+  id: string;
+  event_id: string;
+  timestamp: string;
+  event_type: string;
+  actor_type: string;
+  actor_id: string;
+  source: string;
+  action: string;
+  target_type?: string | null;
+  target_id?: string | null;
+  status: string;
+  message: string;
+}
+
+interface AuditLogListResponse {
+  total: number;
+  entries: AuditLogEntry[];
+}
+
 const mapUser = (user: UserResponse): User => ({
   id: user.id,
   username: user.username,
@@ -92,9 +115,10 @@ const mapCollector = (collector: CollectorResponse): CollectorConfig => ({
 });
 
 
-type TabType = "users" | "collectors" | "system";
+type TabType = "users" | "collectors" | "system" | "audit";
 
 export default function AdminSettings() {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>("users");
   const [users, setUsers] = useState<User[]>([]);
   const [collectors, setCollectors] = useState<CollectorConfig[]>([]);
@@ -108,6 +132,13 @@ export default function AdminSettings() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isRefreshingCollectors, setIsRefreshingCollectors] = useState(false);
+  const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
+  const [auditEventType, setAuditEventType] = useState("");
+  const [auditActorId, setAuditActorId] = useState("");
+  const [auditTargetId, setAuditTargetId] = useState("");
+  const [auditTotal, setAuditTotal] = useState(0);
+  const [auditPage, setAuditPage] = useState(1);
+  const [auditItemsPerPage, setAuditItemsPerPage] = useState(25);
 
   const loadAdminData = async () => {
     setErrorMessage(null);
@@ -125,9 +156,46 @@ export default function AdminSettings() {
     }
   };
 
+  const loadAuditLogs = async () => {
+    setErrorMessage(null);
+    try {
+      const params = new URLSearchParams();
+      params.set("limit", String(auditItemsPerPage));
+      params.set("offset", String((auditPage - 1) * auditItemsPerPage));
+      if (auditEventType.trim()) params.set("event_type", auditEventType.trim());
+      if (auditActorId.trim()) params.set("actor_id", auditActorId.trim());
+      if (auditTargetId.trim()) params.set("target_id", auditTargetId.trim());
+      const response = await apiGet<AuditLogListResponse>(`/audit-logs?${params.toString()}`);
+      setAuditLogs(response.entries);
+      setAuditTotal(response.total);
+    } catch {
+      setErrorMessage("Unable to load audit log entries.");
+    }
+  };
+
   useEffect(() => {
+    if (activeTab !== "audit") return;
+    loadAuditLogs();
+  }, [activeTab, auditPage, auditItemsPerPage, auditEventType, auditActorId, auditTargetId]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem("dfir_auth");
+    if (!raw) {
+      navigate("/login", { replace: true });
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw) as { role?: string };
+      if (parsed.role !== "admin") {
+        navigate("/dashboard", { replace: true });
+        return;
+      }
+    } catch {
+      navigate("/login", { replace: true });
+      return;
+    }
     loadAdminData();
-  }, []);
+  }, [navigate]);
 
   const {
     paginatedItems: paginatedUsers,
@@ -138,6 +206,8 @@ export default function AdminSettings() {
     goToPage,
     setPerPage,
   } = usePagination(users);
+
+  const auditTotalPages = Math.max(1, Math.ceil(auditTotal / auditItemsPerPage));
 
   const getRoleColor = (role: User["role"]) => {
     switch (role) {
@@ -170,25 +240,14 @@ export default function AdminSettings() {
       setErrorMessage("Password is required.");
       return;
     }
-    const user: User = {
-      id: String(users.length + 1),
-      username: newUser.username.toUpperCase(),
-      role: newUser.role,
-      status: "active",
-      lastLogin: "-",
-      createdAt: new Date().toISOString(),
-    };
     try {
-      await apiPost("/users", {
-        id: user.id,
-        username: user.username,
-        role: user.role,
-        status: user.status,
-        last_login: user.lastLogin,
-        created_at: user.createdAt,
+      const created = await apiPost<UserResponse>("/users", {
+        username: newUser.username,
+        role: newUser.role,
+        status: "active",
         password: newUser.password,
       });
-      setUsers([...users, user]);
+      setUsers([...users, mapUser(created)]);
       setNewUser({ username: "", password: "", role: "operator" });
       setShowAddUser(false);
     } catch {
@@ -208,14 +267,13 @@ export default function AdminSettings() {
   const handleToggleUserStatus = async (id: string) => {
     const target = users.find((u) => u.id === id);
     if (!target) return;
-    const updated = {
+    const nextStatus: User["status"] = target.status === "active" ? "locked" : "active";
+    const updated: User = {
       ...target,
-      status: target.status === "active" ? "locked" : "active",
+      status: nextStatus,
     };
     try {
-      await apiPatch(`/users/${updated.id}`, {
-        status: updated.status,
-      });
+      await apiPatch(`/users/${updated.id}`, { status: updated.status });
       setUsers(users.map((u) => (u.id === id ? updated : u)));
     } catch {
       setErrorMessage("Unable to update user status.");
@@ -226,6 +284,7 @@ export default function AdminSettings() {
     { id: "users", label: "USER MANAGEMENT", icon: <Users className="w-4 h-4" /> },
     { id: "collectors", label: "COLLECTORS", icon: <Server className="w-4 h-4" /> },
     { id: "system", label: "SYSTEM CONFIG", icon: <Settings className="w-4 h-4" /> },
+    { id: "audit", label: "AUDIT LOGS", icon: <FileText className="w-4 h-4" /> },
   ];
 
   const refreshCollectors = async () => {
@@ -744,6 +803,119 @@ export default function AdminSettings() {
                     </Button>
                   </div>
 
+              </>
+            )}
+
+            {/* Audit Logs Tab */}
+            {activeTab === "audit" && (
+              <>
+                <div className="flex items-center justify-between">
+                  <h2 className="font-mono text-sm font-bold uppercase tracking-wider text-foreground">
+                    Audit Log Entries ({auditTotal})
+                  </h2>
+                  <Button variant="secondary" onClick={loadAuditLogs}>
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    REFRESH
+                  </Button>
+                </div>
+
+                <div className="grid grid-cols-12 gap-4">
+                  <div className="col-span-4">
+                    <SearchInput
+                      value={auditEventType}
+                      onChange={(event) => {
+                        setAuditEventType(event.target.value);
+                        setAuditPage(1);
+                      }}
+                      placeholder="Filter event_type..."
+                    />
+                  </div>
+                  <div className="col-span-4">
+                    <SearchInput
+                      value={auditActorId}
+                      onChange={(event) => {
+                        setAuditActorId(event.target.value);
+                        setAuditPage(1);
+                      }}
+                      placeholder="Filter actor_id..."
+                    />
+                  </div>
+                  <div className="col-span-4">
+                    <SearchInput
+                      value={auditTargetId}
+                      onChange={(event) => {
+                        setAuditTargetId(event.target.value);
+                        setAuditPage(1);
+                      }}
+                      placeholder="Filter target_id..."
+                    />
+                  </div>
+                </div>
+
+                <TacticalPanel
+                  title="AUDIT LOG"
+                  status="locked"
+                  className="flex-1 overflow-hidden flex flex-col"
+                  headerActions={
+                    <span className="font-mono text-xs text-muted-foreground">
+                      {auditTotal} ENTRIES
+                    </span>
+                  }
+                >
+                  <div className="flex-1 overflow-auto">
+                    <TableHeaderRow className="grid grid-cols-12 gap-4 sticky top-0 bg-card">
+                      <div className="col-span-3">Timestamp</div>
+                      <div className="col-span-2">Event</div>
+                      <div className="col-span-2">Actor</div>
+                      <div className="col-span-2">Action</div>
+                      <div className="col-span-2">Target</div>
+                      <div className="col-span-1">Status</div>
+                    </TableHeaderRow>
+
+                    {auditLogs.map((entry) => (
+                      <div
+                        key={entry.id}
+                        className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors"
+                      >
+                        <div className="col-span-3 font-mono text-xs text-muted-foreground">
+                          <div>{new Date(entry.timestamp).toLocaleDateString()}</div>
+                          <div className="text-[10px]">
+                            {new Date(entry.timestamp).toLocaleTimeString("en-US", {
+                              hour12: false,
+                            })}
+                          </div>
+                        </div>
+                        <div className="col-span-2 font-mono text-xs text-primary">
+                          {entry.event_type}
+                        </div>
+                        <div className="col-span-2 font-mono text-xs">
+                          {entry.actor_id}
+                        </div>
+                        <div className="col-span-2 font-mono text-xs text-muted-foreground">
+                          {entry.action}
+                        </div>
+                        <div className="col-span-2 font-mono text-xs text-muted-foreground">
+                          {entry.target_id ?? "-"}
+                        </div>
+                        <div className="col-span-1 font-mono text-xs uppercase text-muted-foreground">
+                          {entry.status}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  <TablePagination
+                    currentPage={auditPage}
+                    totalPages={auditTotalPages}
+                    totalItems={auditTotal}
+                    itemsPerPage={auditItemsPerPage}
+                    onPageChange={setAuditPage}
+                    onItemsPerPageChange={(value) => {
+                      setAuditItemsPerPage(value);
+                      setAuditPage(1);
+                    }}
+                  />
+                </TacticalPanel>
               </>
             )}
           </div>

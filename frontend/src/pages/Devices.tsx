@@ -102,11 +102,13 @@ export default function Devices() {
     collectionStatus: "idle" as Device["collectionStatus"],
   });
 
+  const agentManagedMessage = "Device registry is managed by collector agents.";
+
   const loadDevices = async () => {
     setIsLoading(true);
     setErrorMessage(null);
     try {
-      const data = await apiGet<DeviceResponse[]>("/devices");
+      const data = await apiGet<DeviceResponse[]>("/agents");
       setDevices(data.map(mapDevice));
     } catch {
       setErrorMessage("Unable to load devices.");
@@ -116,44 +118,8 @@ export default function Devices() {
   };
 
   const handleAddDevice = async () => {
-    if (!newDevice.hostname.trim() || !newDevice.ipAddress.trim() || !newDevice.os.trim()) {
-      setErrorMessage("Hostname, IP address, and OS are required.");
-      return;
-    }
-    setIsSavingDevice(true);
-    setErrorMessage(null);
-    try {
-      const payload = {
-        id: `DEV-${String(devices.length + 1).padStart(3, "0")}`,
-        hostname: newDevice.hostname.trim().toUpperCase(),
-        ip_address: newDevice.ipAddress.trim(),
-        type: newDevice.type,
-        os: newDevice.os.trim(),
-        agent_version: newDevice.agentVersion.trim(),
-        status: newDevice.status,
-        last_seen: new Date().toISOString(),
-        cpu_usage: 0,
-        memory_usage: 0,
-        collection_status: newDevice.collectionStatus,
-        registered_at: new Date().toISOString(),
-      };
-      const created = await apiPost<DeviceResponse>("/devices", payload);
-      setDevices((current) => [mapDevice(created), ...current]);
-      setIsAddDialogOpen(false);
-      setNewDevice({
-        hostname: "",
-        ipAddress: "",
-        type: "workstation",
-        os: "",
-        agentVersion: "2.1.0",
-        status: "online",
-        collectionStatus: "idle",
-      });
-    } catch {
-      setErrorMessage("Unable to add device.");
-    } finally {
-      setIsSavingDevice(false);
-    }
+    setErrorMessage(agentManagedMessage);
+    setIsAddDialogOpen(false);
   };
 
 
@@ -235,26 +201,11 @@ export default function Devices() {
   };
 
   const toggleDeviceStatus = async (device: Device) => {
-    const nextStatus = device.status === "online" ? "offline" : "online";
-    try {
-      await apiPatch(`/devices/${device.id}`, {
-        status: nextStatus,
-      });
-      setDevices((current) =>
-        current.map((item) => (item.id === device.id ? { ...item, status: nextStatus } : item))
-      );
-    } catch {
-      setErrorMessage("Unable to update device status.");
-    }
+    setErrorMessage(agentManagedMessage);
   };
 
   const removeDevice = async (deviceId: string) => {
-    try {
-      await apiDelete(`/devices/${deviceId}`);
-      setDevices((current) => current.filter((device) => device.id !== deviceId));
-    } catch {
-      setErrorMessage("Unable to remove device.");
-    }
+    setErrorMessage(agentManagedMessage);
   };
 
   const formatLastSeen = (lastSeen: string) => {

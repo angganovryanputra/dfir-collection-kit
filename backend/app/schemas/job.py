@@ -42,3 +42,5 @@ class JobInstruction(BaseModel):
 class JobStatusUpdate(BaseModel):
     status: str
     message: str | None = None
+    progress: int | None = None
+    log_tail: list[str] | None = None

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { apiPost } from "@/lib/api";
 
 interface NavItem {
   label: string;
@@ -54,8 +55,24 @@ export function AppSidebar({
 }: AppSidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
+  const authRole = (() => {
+    const raw = localStorage.getItem("dfir_auth");
+    if (!raw) return null;
+    try {
+      const parsed = JSON.parse(raw) as { role?: string };
+      return parsed.role ?? null;
+    } catch {
+      return null;
+    }
+  })();
+  const visibleSystemNavItems = authRole === "admin"
+    ? systemNavItems
+    : systemNavItems.filter((item) => item.path !== "/admin/settings");
 
   const handleLogout = () => {
+    void apiPost("/auth/logout", {}).catch(() => {
+      // ignore logout telemetry failures
+    });
     localStorage.removeItem("dfir_auth");
     localStorage.removeItem("dfir_logout_reason");
     localStorage.setItem(
@@ -173,7 +190,7 @@ export function AppSidebar({
             </div>
           )}
           <div className="space-y-1">
-            {systemNavItems.map((item) => (
+            {visibleSystemNavItems.map((item) => (
               <NavButton key={item.path} item={item} />
             ))}
           </div>

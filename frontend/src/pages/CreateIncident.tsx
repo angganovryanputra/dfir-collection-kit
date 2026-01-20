@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { ArrowLeft, Plus, X, AlertTriangle, Target, FileStack } from "lucide-react";
 import type { IncidentType } from "@/types/dfir";
 import { apiPost } from "@/lib/api";
+import { getStoredRole, isViewerRole } from "@/lib/auth";
 
 const incidentTypes: { value: IncidentType; label: string }[] = [
   { value: "RANSOMWARE", label: "RANSOMWARE" },
@@ -41,6 +42,7 @@ export default function CreateIncident() {
   const [isStarting, setIsStarting] = useState(false);
   const [customChecklist, setCustomChecklist] = useState<string[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const isViewer = isViewerRole(getStoredRole());
 
   // Apply template on mount
   useEffect(() => {
@@ -60,6 +62,7 @@ export default function CreateIncident() {
   }, []);
 
   const addEndpoint = () => {
+    if (isViewer) return;
     if (newEndpoint.trim() && !endpoints.includes(newEndpoint.trim())) {
       setEndpoints([...endpoints, newEndpoint.trim().toUpperCase()]);
       setNewEndpoint("");
@@ -67,10 +70,15 @@ export default function CreateIncident() {
   };
 
   const removeEndpoint = (endpoint: string) => {
+    if (isViewer) return;
     setEndpoints(endpoints.filter((e) => e !== endpoint));
   };
 
   const handleStartCollection = async () => {
+    if (isViewer) {
+      setErrorMessage("Viewer accounts cannot start collections.");
+      return;
+    }
     if (!incidentType || endpoints.length === 0 || !operatorName.trim()) {
       setErrorMessage("Complete incident type, targets, and operator.");
       return;
@@ -185,14 +193,16 @@ export default function CreateIncident() {
           <TacticalPanel title="INCIDENT TYPE" status={incidentType ? "online" : undefined}>
             <div className="grid grid-cols-3 gap-3">
               {incidentTypes.map((type) => (
-                <SelectableButton
-                  key={type.value}
-                  isActive={incidentType === type.value}
-                  onClick={() => setIncidentType(type.value)}
-                  className="p-4 text-left"
-                  activeClassName="border-primary bg-primary/10 text-primary glow-green"
-                  inactiveClassName="border-border bg-secondary text-muted-foreground hover:border-muted-foreground hover:text-foreground"
-                >
+                  <SelectableButton
+                    key={type.value}
+                    isActive={incidentType === type.value}
+                    onClick={() => {
+                      if (!isViewer) setIncidentType(type.value);
+                    }}
+                    className="p-4 text-left"
+                    activeClassName="border-primary bg-primary/10 text-primary glow-green"
+                    inactiveClassName="border-border bg-secondary text-muted-foreground hover:border-muted-foreground hover:text-foreground"
+                  >
                   <AlertTriangle className="w-4 h-4 mb-2" />
                   {type.label}
                 </SelectableButton>
@@ -216,7 +226,7 @@ export default function CreateIncident() {
                   onKeyDown={(e) => e.key === "Enter" && addEndpoint()}
                   placeholder="Enter hostname or IP address"
                 />
-                <Button variant="outline" onClick={addEndpoint}>
+                <Button variant="outline" onClick={addEndpoint} disabled={isViewer}>
                   <Plus className="w-4 h-4" />
                   ADD
                 </Button>
@@ -236,6 +246,7 @@ export default function CreateIncident() {
                       </div>
                       <button
                         onClick={() => removeEndpoint(endpoint)}
+                        disabled={isViewer}
                         className="text-muted-foreground hover:text-destructive transition-colors"
                       >
                         <X className="w-4 h-4" />
@@ -282,7 +293,7 @@ export default function CreateIncident() {
               size="lg"
               className="flex-1"
               onClick={handleStartCollection}
-              disabled={!isValid || isStarting}
+              disabled={!isValid || isStarting || isViewer}
             >
               {isStarting ? (
                 <>

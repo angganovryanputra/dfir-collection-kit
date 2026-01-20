@@ -165,6 +165,10 @@ type JobInstruction struct {
 	Modules    []JobModule     `json:"modules"`
 }
 
+type JobStatusResponse struct {
+	Status string `json:"status"`
+}
+
 // JobModule represents a module to execute
 type JobModule struct {
 	ModuleID     string                 `json:"module_id"`
@@ -199,6 +203,29 @@ func (c *Client) GetNextJob(ctx context.Context) (*JobInstruction, error) {
 
 	logging.WithJob(job.JobID).Info("Received job: %s", job.JobID)
 	return &job, nil
+}
+
+// GetJobStatus retrieves the current status for a job
+func (c *Client) GetJobStatus(ctx context.Context, jobID string) (string, error) {
+	url := "/agents/" + c.config.AgentID + "/jobs/" + jobID
+
+	resp, err := c.makeRequest(ctx, "GET", url, nil, "")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("get job status failed: status %d: %s", resp.StatusCode, string(body))
+	}
+
+	var job JobStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&job); err != nil {
+		return "", fmt.Errorf("failed to decode job status: %w", err)
+	}
+
+	return job.Status, nil
 }
 
 // JobStatusUpdate represents a job status update

@@ -33,6 +33,13 @@ type SequenceContext = {
   logoutReason?: string | null;
 };
 
+type CurrentUserResponse = {
+  id: string;
+  username: string;
+  role: "operator" | "viewer" | "admin";
+  status: string;
+};
+
 type SequenceStep = {
   getText: (context: SequenceContext) => string;
   minDelay: number;
@@ -326,7 +333,6 @@ const parseErrorMessage = (error: unknown): string => {
 export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
-  console.log("[Login] Component mounted, location:", location.pathname);
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -694,6 +700,20 @@ export default function Login() {
           "dfir_auth",
           JSON.stringify({ username, role, token: response.access_token })
         );
+
+        try {
+          const me = await apiGet<CurrentUserResponse>("/users/me");
+          localStorage.setItem(
+            "dfir_auth",
+            JSON.stringify({
+              username: me.username,
+              role: me.role,
+              token: response.access_token,
+            })
+          );
+        } catch {
+          // fallback to provided role
+        }
 
         await wait(350, 1, 0);
         navigate("/dashboard");

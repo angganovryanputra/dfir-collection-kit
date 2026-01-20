@@ -42,6 +42,38 @@ func NewExecutor(cfg *config.Config, apiClient *api.Client) *Executor {
 
 // Run executes a job by processing all modules in sequence
 func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, workDir string, moduleList []api.JobModule) error {
+	intPtr := func(value int) *int {
+		return &value
+	}
+
+	isCancelled := func(status string) bool {
+		switch status {
+		case "cancelled", "canceled", "CANCELLED", "CANCELED":
+			return true
+		default:
+			return false
+		}
+	}
+
+	checkCancellation := func() error {
+		if e.apiClient == nil {
+			return nil
+		}
+		status, err := e.apiClient.GetJobStatus(ctx, jobID)
+		if err != nil {
+			return err
+		}
+		if isCancelled(status) {
+			_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+				Status:  "cancelled",
+				Message: "Job cancelled by operator",
+				LogTail: []string{"Job cancelled by operator"},
+			})
+			return fmt.Errorf("job cancelled")
+		}
+		return nil
+	}
+
 	job := &Job{
 		ID:         jobID,
 		IncidentID:  incidentID,
@@ -74,7 +106,7 @@ func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, wor
 	if e.apiClient != nil {
 		if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 			Status:   "collecting",
-			Progress: 0,
+			Progress: intPtr(0),
 			Message:  "Job started",
 		}); err != nil {
 			return fmt.Errorf("failed to report job start: %w", err)
@@ -84,8 +116,21 @@ func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, wor
 	// Execute modules in sequence
 	totalModules := len(moduleList)
 	for i, module := range moduleList {
+		if err := checkCancellation(); err != nil {
+			return err
+		}
 		job.CurrentModule = module.ModuleID
 		job.Status = fmt.Sprintf("collecting (%d/%d)", i+1, totalModules)
+
+		if e.apiClient != nil {
+			if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+				Status:  job.Status,
+				Message: fmt.Sprintf("Executing %s", module.ModuleID),
+				LogTail: []string{fmt.Sprintf("Executing module %s", module.ModuleID)},
+			}); err != nil {
+				logJob.Warning("Failed to report module start: %v", err)
+			}
+		}
 
 		logJob.Info("Executing module: %s", module.ModuleID)
 		logJob.Debug("Output path: %s", module.OutputRelPath)
@@ -110,8 +155,9 @@ func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, wor
 		if e.apiClient != nil {
 			if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 				Status:   job.Status,
-				Progress: &job.Progress,
+				Progress: intPtr(job.Progress),
 				Message:  fmt.Sprintf("Completed %s", module.ModuleID),
+				LogTail:  []string{fmt.Sprintf("Completed module %s", module.ModuleID)},
 			}); err != nil {
 				logJob.Warning("Failed to update progress: %v", err)
 			}
@@ -120,6 +166,9 @@ func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, wor
 
 	// Report job completion
 	logJob.Info("All modules completed, starting ZIP creation")
+	if err := checkCancellation(); err != nil {
+		return err
+	}
 	if err := e.createEvidenceZip(ctx, job); err != nil {
 		logJob.Error("Failed to create evidence ZIP: %w", err)
 		return err
@@ -129,6 +178,9 @@ func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, wor
 
 	// Upload evidence
 	if e.apiClient != nil {
+		if err := checkCancellation(); err != nil {
+			return err
+		}
 		if err := e.apiClient.UploadEvidence(ctx, jobID, filepath.Join(workDir, "collection.zip")); err != nil {
 			logJob.Error("Failed to upload evidence: %w", err)
 			return err
@@ -139,8 +191,9 @@ func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, wor
 		// Report job completion
 		if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 			Status:  "complete",
-			Progress: 100,
+			Progress: intPtr(100),
 			Message: "Job completed successfully",
+			LogTail: []string{"Evidence uploaded successfully", "Collection complete"},
 		}); err != nil {
 			logJob.Warning("Failed to report job completion: %v", err)
 		}
@@ -184,6 +237,7 @@ func (e *Executor) executeModule(ctx context.Context, job *Job, module api.JobMo
 				e.apiClient.UpdateJobStatus(ctx, job.ID, api.JobStatusUpdate{
 					Status:  job.Status,
 					Message: fmt.Sprintf("Warning in %s: %v", module.ModuleID, err),
+					LogTail: []string{fmt.Sprintf("Warning in %s: %v", module.ModuleID, err)},
 				})
 			}
 			return nil

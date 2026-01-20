@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     agents,
     auth,
+    audit_logs,
     chain_of_custody,
     collectors,
     devices,
@@ -18,6 +19,7 @@ from app.api.v1.endpoints import (
 api_router = APIRouter()
 
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
+api_router.include_router(audit_logs.router, prefix="/audit-logs", tags=["audit-logs"])
 api_router.include_router(incidents.router, prefix="/incidents", tags=["incidents"])
 api_router.include_router(devices.router, prefix="/devices", tags=["devices"])
 api_router.include_router(templates.router, prefix="/templates", tags=["templates"])

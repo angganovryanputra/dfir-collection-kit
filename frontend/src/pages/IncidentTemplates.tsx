@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import type { IncidentType } from "@/types/dfir";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { getStoredRole, isViewerRole } from "@/lib/auth";
 
 interface IncidentTemplate {
   id: string;
@@ -119,6 +120,7 @@ export default function IncidentTemplates() {
   const [newEndpoint, setNewEndpoint] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const isViewer = isViewerRole(getStoredRole());
 
   const loadTemplates = async () => {
     setErrorMessage(null);
@@ -138,12 +140,14 @@ export default function IncidentTemplates() {
   const paginatedTemplates = pagination.paginatedItems;
 
   const openCreateDialog = () => {
+    if (isViewer) return;
     setEditingTemplate(null);
     setFormData(initialFormData);
     setIsDialogOpen(true);
   };
 
   const openEditDialog = (template: IncidentTemplate) => {
+    if (isViewer) return;
     setEditingTemplate(template);
     setFormData({
       name: template.name,
@@ -156,6 +160,7 @@ export default function IncidentTemplates() {
   };
 
   const addEndpoint = () => {
+    if (isViewer) return;
     if (newEndpoint.trim() && !formData.defaultEndpoints.includes(newEndpoint.trim())) {
       setFormData({
         ...formData,
@@ -178,6 +183,7 @@ export default function IncidentTemplates() {
       .filter((item) => allowedModuleSet.has(item.toUpperCase()));
 
   const removeEndpoint = (endpoint: string) => {
+    if (isViewer) return;
     setFormData({
       ...formData,
       defaultEndpoints: formData.defaultEndpoints.filter((e) => e !== endpoint),
@@ -185,6 +191,7 @@ export default function IncidentTemplates() {
   };
 
   const addChecklistItem = () => {
+    if (isViewer) return;
     setFormData({
       ...formData,
       preflightChecklist: [...formData.preflightChecklist, ""],
@@ -192,12 +199,14 @@ export default function IncidentTemplates() {
   };
 
   const updateChecklistItem = (index: number, value: string) => {
+    if (isViewer) return;
     const updated = [...formData.preflightChecklist];
     updated[index] = value;
     setFormData({ ...formData, preflightChecklist: updated });
   };
 
   const removeChecklistItem = (index: number) => {
+    if (isViewer) return;
     setFormData({
       ...formData,
       preflightChecklist: formData.preflightChecklist.filter((_, i) => i !== index),
@@ -205,6 +214,7 @@ export default function IncidentTemplates() {
   };
 
   const handleSave = async () => {
+    if (isViewer) return;
     if (!formData.name || !formData.incidentType) return;
 
     setIsSaving(true);
@@ -255,6 +265,7 @@ export default function IncidentTemplates() {
   };
 
   const duplicateTemplate = async (template: IncidentTemplate) => {
+    if (isViewer) return;
     const duplicate: IncidentTemplate = {
       ...template,
       id: `TPL-${String(templates.length + 1).padStart(3, "0")}`,
@@ -272,6 +283,7 @@ export default function IncidentTemplates() {
   };
 
   const deleteTemplate = async (id: string) => {
+    if (isViewer) return;
     try {
       await apiDelete(`/templates/${id}`);
       setTemplates(templates.filter((t) => t.id !== id));
@@ -281,6 +293,7 @@ export default function IncidentTemplates() {
   };
 
   const useTemplate = (template: IncidentTemplate) => {
+    if (isViewer) return;
     navigate("/incidents/create", { state: { template } });
   };
 
@@ -296,8 +309,8 @@ export default function IncidentTemplates() {
     <AppLayout
       title="INCIDENT TEMPLATES"
       subtitle="MANAGE COLLECTION OPERATION TEMPLATES"
-      headerActions={
-        <Button variant="tactical" onClick={openCreateDialog}>
+        headerActions={
+        <Button variant="tactical" onClick={openCreateDialog} disabled={isViewer}>
           <Plus className="w-4 h-4 mr-2" />
           CREATE TEMPLATE
         </Button>
@@ -368,6 +381,7 @@ export default function IncidentTemplates() {
                           variant="outline"
                           size="sm"
                           onClick={() => useTemplate(template)}
+                          disabled={isViewer}
                         >
                           USE
                         </Button>
@@ -375,6 +389,7 @@ export default function IncidentTemplates() {
                           variant="ghost"
                           size="icon"
                           onClick={() => openEditDialog(template)}
+                          disabled={isViewer}
                         >
                           <Edit className="w-4 h-4" />
                         </Button>
@@ -382,6 +397,7 @@ export default function IncidentTemplates() {
                           variant="ghost"
                           size="icon"
                           onClick={() => duplicateTemplate(template)}
+                          disabled={isViewer}
                         >
                           <Copy className="w-4 h-4" />
                         </Button>
@@ -389,6 +405,7 @@ export default function IncidentTemplates() {
                           variant="ghost"
                           size="icon"
                           onClick={() => deleteTemplate(template.id)}
+                          disabled={isViewer}
                           className="text-destructive hover:text-destructive"
                         >
                           <Trash2 className="w-4 h-4" />
@@ -442,13 +459,15 @@ export default function IncidentTemplates() {
               </FormLabel>
               <div className="grid grid-cols-3 gap-2">
                 {incidentTypes.map((type) => (
-                  <SelectableButton
-                    key={type.value}
-                    type="button"
-                    isActive={formData.incidentType === type.value}
-                    onClick={() => setFormData({ ...formData, incidentType: type.value })}
-                    className="p-3"
-                  >
+                <SelectableButton
+                  key={type.value}
+                  type="button"
+                  isActive={formData.incidentType === type.value}
+                  onClick={() => {
+                    if (!isViewer) setFormData({ ...formData, incidentType: type.value });
+                  }}
+                  className="p-3"
+                >
                     {type.label}
                   </SelectableButton>
                 ))}
@@ -482,7 +501,7 @@ export default function IncidentTemplates() {
                   placeholder="Add default endpoint"
                 />
 
-                <Button type="button" variant="outline" onClick={addEndpoint}>
+                <Button type="button" variant="outline" onClick={addEndpoint} disabled={isViewer}>
                   <Plus className="w-4 h-4" />
                 </Button>
               </div>
@@ -498,6 +517,7 @@ export default function IncidentTemplates() {
                       <button
                         type="button"
                         onClick={() => removeEndpoint(endpoint)}
+                        disabled={isViewer}
                         className="text-muted-foreground hover:text-destructive"
                       >
                         <X className="w-3 h-3" />
@@ -526,6 +546,7 @@ export default function IncidentTemplates() {
                       variant="ghost"
                       size="icon"
                       onClick={() => removeChecklistItem(index)}
+                      disabled={isViewer}
                       className="text-destructive hover:text-destructive"
                     >
                       <X className="w-4 h-4" />
@@ -537,6 +558,7 @@ export default function IncidentTemplates() {
                   variant="outline"
                   size="sm"
                   onClick={addChecklistItem}
+                  disabled={isViewer}
                   className="w-full"
                 >
                   <Plus className="w-4 h-4 mr-2" />
@@ -554,7 +576,7 @@ export default function IncidentTemplates() {
             <Button
               variant="tactical"
               onClick={handleSave}
-              disabled={!isFormValid || isSaving}
+              disabled={!isFormValid || isSaving || isViewer}
               className="flex-1"
             >
               {isSaving ? (

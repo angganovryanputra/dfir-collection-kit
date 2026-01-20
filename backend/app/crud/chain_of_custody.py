@@ -32,6 +32,9 @@ def verify_entries(entries: list[ChainOfCustodyEntry]) -> None:
 
 
 async def create_entry(db: AsyncSession, payload: ChainOfCustodyEntryCreate) -> ChainOfCustodyEntry:
+    existing = await db.execute(select(ChainOfCustodyEntry).where(ChainOfCustodyEntry.id == payload.id))
+    if existing.scalar_one_or_none():
+        raise ValueError("Chain-of-custody entry already exists")
     last_entry = await db.execute(
         select(ChainOfCustodyEntry)
         .where(ChainOfCustodyEntry.incident_id == payload.incident_id)
