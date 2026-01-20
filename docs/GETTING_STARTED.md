@@ -80,13 +80,15 @@ Watch for the following messages indicating success:
 
 ### Step 6: Login with Default Credentials
 
+Set `DFIR_SEED_PASSWORD` before seeding to control the admin password.
+
 ```
-Username: admin
-Password: admin123
+Username: ADMIN
+Password: <DFIR_SEED_PASSWORD>
 Role: Admin
 ```
 
-**⚠️ IMPORTANT**: Change the default password immediately after first login!
+If `DFIR_SEED_PASSWORD` is not set, the seed prints a generated password once during initialization.
 
 ## Local Development Setup
 

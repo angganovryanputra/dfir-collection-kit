@@ -87,3 +87,8 @@ temp/
 # Backup files
 *.bak
 *.backup
+ 
+ # Local frontend artifacts
+ frontend/Dockerfile.dev
+ frontend/src/App.test.tsx
+ frontend/test.html

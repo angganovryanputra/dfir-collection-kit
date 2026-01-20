@@ -35,6 +35,7 @@ services:
       EVIDENCE_STORAGE_PATH: /vault/evidence
       AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:-local-agent-secret}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
+      DFIR_SEED_PASSWORD: ${DFIR_SEED_PASSWORD:-}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -55,17 +56,17 @@ services:
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: dfir-frontend
     environment:
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://backend:8000/api/v1}
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
     ports:
       - "127.0.0.1:5173:5173"
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost:5173 || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://0.0.0.0:5173/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -133,11 +133,11 @@ This will:
 
 The system is seeded with a default admin user:
 
-- **Username**: `admin`
-- **Password**: `admin123`
+- **Username**: `ADMIN`
+- **Password**: set via `DFIR_SEED_PASSWORD` (if not set, the seed prints a generated password once)
 - **Role**: Admin
 
-**⚠️ IMPORTANT**: Change the default password immediately after first login!
+**⚠️ IMPORTANT**: Set `DFIR_SEED_PASSWORD` before seeding for public deployments.
 
 ## Security Notes
 

@@ -44,6 +44,8 @@ type DiagnosticsResponse = {
   server_time?: string | null;
   backend_version?: string | null;
   client_ip?: string | null;
+  collectors_online?: number | null;
+  collectors_total?: number | null;
 };
 
 type DiagnosticsState = {
@@ -51,6 +53,8 @@ type DiagnosticsState = {
   handshakeLatencyMs: number | null;
   serverTime: string | null;
   backendVersion: string | null;
+  collectorsOnline: number | null;
+  collectorsTotal: number | null;
 };
 
 type ConnectionInfo = {
@@ -322,6 +326,8 @@ const parseErrorMessage = (error: unknown): string => {
 export default function Login() {
   const navigate = useNavigate();
   const location = useLocation();
+  console.log("[Login] Component mounted, location:", location.pathname);
+
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState<"operator" | "viewer">("operator");
@@ -342,6 +348,8 @@ export default function Login() {
     handshakeLatencyMs: null,
     serverTime: null,
     backendVersion: null,
+    collectorsOnline: null,
+    collectorsTotal: null,
   });
 
   const connectionInfoRef = useRef<ConnectionInfo>(getConnectionDetails());
@@ -381,7 +389,6 @@ export default function Login() {
   });
 
   const connectionSpeedFactorRef = useRef(getConnectionSpeedFactor(connectionInfoRef.current));
-  const diagnosticsLoadedRef = useRef(false);
 
   const isMountedRef = useRef(true);
 
@@ -432,7 +439,6 @@ export default function Login() {
     let cancelled = false;
 
     const fetchDiagnostics = async () => {
-      if (diagnosticsLoadedRef.current) return;
       try {
         const start = performance.now();
         const response = await fetch(`${API_BASE_URL}/status/diagnostics`);
@@ -447,8 +453,9 @@ export default function Login() {
           handshakeLatencyMs: latency,
           serverTime: data.server_time ?? null,
           backendVersion: data.backend_version ?? null,
+          collectorsOnline: data.collectors_online ?? null,
+          collectorsTotal: data.collectors_total ?? null,
         };
-        diagnosticsLoadedRef.current = true;
         setDiagnostics(newDiagnostics);
         bootContextRef.current = {
           ...bootContextRef.current,
@@ -474,9 +481,11 @@ export default function Login() {
     };
 
     const timeout = setTimeout(fetchDiagnostics, 150);
+    const interval = setInterval(fetchDiagnostics, 30000);
     return () => {
       cancelled = true;
       clearTimeout(timeout);
+      clearInterval(interval);
     };
   }, [clientIp]);
 
@@ -871,227 +880,226 @@ export default function Login() {
     );
   }
 
-  // Auth loading screen
-  if (isLoading) {
-    const stagePrefixes = [
-      "[AUTH] Validating",
-      "[AUTH] Checking",
-      "[SEC ] Verifying",
-      "[SYS ] Establishing",
-    ];
+  const systemStatusLabel = diagnostics.dbStatus === "ok"
+    ? "OPERATIONAL"
+    : diagnostics.dbStatus === "degraded"
+      ? "DEGRADED"
+      : diagnostics.dbStatus === "error"
+        ? "OFFLINE"
+        : "UNKNOWN";
 
-    const firstPendingStageIndex = stagePrefixes.findIndex(
-      (prefix) => !authMessages.some((msg) => msg.startsWith(prefix)),
-    );
+  const collectorsLabel = diagnostics.collectorsOnline == null
+    ? "COLLECTORS: --"
+    : `COLLECTORS: ${diagnostics.collectorsOnline} ONLINE${
+        diagnostics.collectorsTotal == null ? "" : ` / ${diagnostics.collectorsTotal} TOTAL`
+      }`;
 
-    const authStageStatus = stagePrefixes.map((prefix, index) => {
-      if (firstPendingStageIndex === -1) {
-        return "done";
-      }
-      if (index < firstPendingStageIndex) return "done";
-      if (index === firstPendingStageIndex) return "active";
-      return "pending";
-    });
+  const statusTimestamp = diagnostics.serverTime
+    ? new Date(diagnostics.serverTime).toISOString()
+    : new Date().toISOString();
 
-    const authProgress = Math.min(1, authMessages.length / authTotalSteps);
-    return (
-      <>
-        <Dialog open={authFailureDialogOpen} onOpenChange={setAuthFailureDialogOpen}>
-          <DialogContent className="bg-background border border-destructive/40 text-foreground max-w-md">
-            <DialogHeader>
-              <DialogTitle className="flex items-center gap-2 text-destructive">
-                <AlertCircle className="h-4 w-4" />
-                AUTH VALIDATION FAILED
-              </DialogTitle>
-              <DialogDescription className="text-muted-foreground">
-                {authFailureMessage || "Invalid username or password."}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="mt-4 space-y-2 text-sm font-mono">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Public IP</span>
-                <span>{clientIp ?? "unknown"}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Connection</span>
-                <span>{connectionLabel}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Timestamp</span>
-                <span>{new Date().toLocaleTimeString()}</span>
-              </div>
+  const loginScreen = (
+    <>
+      <Dialog open={authFailureDialogOpen} onOpenChange={setAuthFailureDialogOpen}>
+        <DialogContent className="bg-background border border-destructive/40 text-foreground max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertCircle className="h-4 w-4" />
+              AUTH VALIDATION FAILED
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {authFailureMessage || "Invalid username or password."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-4 space-y-2 text-sm font-mono">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Public IP</span>
+              <span>{clientIp ?? "unknown"}</span>
             </div>
-            <DialogFooter className="mt-6">
-              <Button variant="tactical" onClick={() => setAuthFailureDialogOpen(false)}>
-                RETRY AUTH
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-        <div className="min-h-screen bg-background tactical-grid flex flex-col">
-
-      {/* Top Warning Banner */}
-      <WarningBanner variant="critical" className="border-x-0 border-t-0">
-        RESTRICTED SYSTEM — AUTHORIZED PERSONNEL ONLY — ALL ACCESS IS LOGGED AND MONITORED
-      </WarningBanner>
-
-      <div className="flex-1 flex items-center justify-center p-8">
-        <div className="w-full max-w-md space-y-8">
-          {/* Logo / Header */}
-          <div className="text-center space-y-4">
-            <div className="inline-flex items-center justify-center w-20 h-20 border-2 border-primary/30 bg-card relative">
-              <Shield className="w-10 h-10 text-primary" />
-              {bootComplete && (
-                <div className="absolute -top-1 -right-1 w-3 h-3 bg-primary rounded-full animate-pulse" />
-              )}
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Connection</span>
+              <span>{connectionLabel}</span>
             </div>
-            <div className="space-y-2">
-              <h1 className="font-mono text-2xl font-bold tracking-wider text-foreground">
-                DFIR RAPID COLLECTION KIT
-              </h1>
-              <p className="font-mono text-sm text-muted-foreground uppercase tracking-wider">
-                Evidence Collection System v2.1.0
-              </p>
-              {bootComplete && (
-                <p className="font-mono text-xs text-primary">
-                  ● SYSTEM READY
-                </p>
-              )}
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Timestamp</span>
+              <span>{new Date().toLocaleTimeString()}</span>
             </div>
           </div>
+          <DialogFooter className="mt-6">
+            <Button variant="tactical" onClick={() => setAuthFailureDialogOpen(false)}>
+              RETRY AUTH
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <div className="min-h-screen bg-background tactical-grid flex flex-col">
+        {/* Top Warning Banner */}
+        <WarningBanner variant="critical" className="border-x-0 border-t-0">
+          RESTRICTED SYSTEM — AUTHORIZED PERSONNEL ONLY — ALL ACCESS IS LOGGED AND MONITORED
+        </WarningBanner>
 
-          {/* Login Form */}
-          {errorMessage && (
-            <Alert variant="destructive" className="border-destructive/50 bg-destructive/10 text-destructive-foreground">
-              <AlertCircle className="h-4 w-4" />
-              <div>
-                <AlertTitle>Access Denied</AlertTitle>
-                <AlertDescription>{errorMessage}</AlertDescription>
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="w-full max-w-md space-y-8">
+            {/* Logo / Header */}
+            <div className="text-center space-y-4">
+              <div className="inline-flex items-center justify-center w-20 h-20 border-2 border-primary/30 bg-card relative">
+                <Shield className="w-10 h-10 text-primary" />
+                {bootComplete && (
+                  <div className="absolute -top-1 -right-1 w-3 h-3 bg-primary rounded-full animate-pulse" />
+                )}
               </div>
-            </Alert>
-          )}
-
-          <form onSubmit={handleLogin} className="space-y-6">
-            <div className="border border-border bg-card p-6 space-y-6">
-              <div className="panel-header -mx-6 -mt-6 mb-6">
-                <Lock className="w-4 h-4" />
-                <span>SYSTEM ACCESS</span>
-              </div>
-
-              {/* Username */}
               <div className="space-y-2">
-                <FormLabel>
-                  Username
-                </FormLabel>
-                <InputWithIcon
-                  icon={<User className="w-4 h-4" />}
-                  type="text"
-                  value={username}
-                  onChange={(e) => {
-                    setUsername(e.target.value);
-                    if (errorMessage) {
-                      setErrorMessage(null);
-                    }
-                  }}
-                  placeholder="Enter username"
-                  required
-                />
+                <h1 className="font-mono text-2xl font-bold tracking-wider text-foreground">
+                  DFIR RAPID COLLECTION KIT
+                </h1>
+                <p className="font-mono text-sm text-muted-foreground uppercase tracking-wider">
+                  Evidence Collection System v2.1.0
+                </p>
+                {bootComplete && (
+                  <p className="font-mono text-xs text-primary">
+                    ● SYSTEM READY
+                  </p>
+                )}
               </div>
-
-              {/* Password */}
-              <div className="space-y-2">
-                <FormLabel>
-                  Password
-                </FormLabel>
-                <InputWithIcon
-                  icon={<Lock className="w-4 h-4" />}
-                  type="password"
-                  value={password}
-                  onChange={(e) => {
-                    setPassword(e.target.value);
-                    if (errorMessage) {
-                      setErrorMessage(null);
-                    }
-                  }}
-                  placeholder="Enter password"
-                  required
-                />
-              </div>
-
-              {/* Role Selection */}
-              <div className="space-y-2">
-                <FormLabel>
-                  Access Level
-                </FormLabel>
-                <div className="grid grid-cols-2 gap-3">
-                  <SelectableButton
-                    type="button"
-                    isActive={role === "operator"}
-                    onClick={() => {
-                      setRole("operator");
-                      if (errorMessage) {
-                        setErrorMessage(null);
-                      }
-                    }}
-                    className="p-3"
-                    activeClassName="border-primary bg-primary/10 text-primary glow-green"
-                    inactiveClassName="border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
-                  >
-                    Operator
-                  </SelectableButton>
-                  <SelectableButton
-                    type="button"
-                    isActive={role === "viewer"}
-                    onClick={() => {
-                      setRole("viewer");
-                      if (errorMessage) {
-                        setErrorMessage(null);
-                      }
-                    }}
-                    className="p-3"
-                    activeClassName="border-primary bg-primary/10 text-primary glow-green"
-                    inactiveClassName="border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
-                  >
-                    Viewer
-                  </SelectableButton>
-                </div>
-              </div>
-
-              {/* Submit */}
-              <Button
-                type="submit"
-                variant="tactical"
-                className="w-full"
-                disabled={isLoading}
-              >
-                ACCESS SYSTEM
-              </Button>
             </div>
-          </form>
 
-          {/* Footer */}
-          <div className="text-center space-y-2">
-            <p className="font-mono text-xs text-muted-foreground">
-              SESSION TIMEOUT: 15 MINUTES IDLE
-            </p>
-            <p className="font-mono text-xs text-destructive">
-              UNAUTHORIZED ACCESS IS A CRIMINAL OFFENSE
-            </p>
+            {/* Login Form */}
+            {errorMessage && (
+              <Alert variant="destructive" className="border-destructive/50 bg-destructive/10 text-destructive-foreground">
+                <AlertCircle className="h-4 w-4" />
+                <div>
+                  <AlertTitle>Access Denied</AlertTitle>
+                  <AlertDescription>{errorMessage}</AlertDescription>
+                </div>
+              </Alert>
+            )}
+
+            <form onSubmit={handleLogin} className="space-y-6">
+              <div className="border border-border bg-card p-6 space-y-6">
+                <div className="panel-header -mx-6 -mt-6 mb-6">
+                  <Lock className="w-4 h-4" />
+                  <span>SYSTEM ACCESS</span>
+                </div>
+
+                {/* Username */}
+                <div className="space-y-2">
+                  <FormLabel>
+                    Username
+                  </FormLabel>
+                  <InputWithIcon
+                    icon={<User className="w-4 h-4" />}
+                    type="text"
+                    value={username}
+                    onChange={(e) => {
+                      setUsername(e.target.value);
+                      if (errorMessage) {
+                        setErrorMessage(null);
+                      }
+                    }}
+                    placeholder="Enter username"
+                    required
+                  />
+                </div>
+
+                {/* Password */}
+                <div className="space-y-2">
+                  <FormLabel>
+                    Password
+                  </FormLabel>
+                  <InputWithIcon
+                    icon={<Lock className="w-4 h-4" />}
+                    type="password"
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      if (errorMessage) {
+                        setErrorMessage(null);
+                      }
+                    }}
+                    placeholder="Enter password"
+                    required
+                  />
+                </div>
+
+                {/* Role Selection */}
+                <div className="space-y-2">
+                  <FormLabel>
+                    Access Level
+                  </FormLabel>
+                  <div className="grid grid-cols-2 gap-3">
+                    <SelectableButton
+                      type="button"
+                      isActive={role === "operator"}
+                      onClick={() => {
+                        setRole("operator");
+                        if (errorMessage) {
+                          setErrorMessage(null);
+                        }
+                      }}
+                      className="p-3"
+                      activeClassName="border-primary bg-primary/10 text-primary glow-green"
+                      inactiveClassName="border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
+                    >
+                      Operator
+                    </SelectableButton>
+                    <SelectableButton
+                      type="button"
+                      isActive={role === "viewer"}
+                      onClick={() => {
+                        setRole("viewer");
+                        if (errorMessage) {
+                          setErrorMessage(null);
+                        }
+                      }}
+                      className="p-3"
+                      activeClassName="border-primary bg-primary/10 text-primary glow-green"
+                      inactiveClassName="border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
+                    >
+                      Viewer
+                    </SelectableButton>
+                  </div>
+                </div>
+
+                {/* Submit */}
+                <Button
+                  type="submit"
+                  variant="tactical"
+                  className="w-full"
+                  disabled={isLoading}
+                >
+                  ACCESS SYSTEM
+                </Button>
+              </div>
+            </form>
+
+            {/* Footer */}
+            <div className="text-center space-y-2">
+              <p className="font-mono text-xs text-muted-foreground">
+                SESSION TIMEOUT: 15 MINUTES IDLE
+              </p>
+              <p className="font-mono text-xs text-destructive">
+                UNAUTHORIZED ACCESS IS A CRIMINAL OFFENSE
+              </p>
+            </div>
           </div>
         </div>
-      </div>
 
-      {/* Bottom Status Bar */}
-      <div className="border-t border-border bg-secondary px-4 py-2 flex items-center justify-between font-mono text-xs text-muted-foreground">
-        <span className="flex items-center gap-2">
-          <span className="w-2 h-2 bg-primary rounded-full" />
-          SYS: OPERATIONAL
-        </span>
-        <span>COLLECTORS: 3 ONLINE</span>
-        <span>{new Date().toISOString()}</span>
+        {/* Bottom Status Bar */}
+        <div className="border-t border-border bg-secondary px-4 py-2 flex items-center justify-between font-mono text-xs text-muted-foreground">
+          <span className="flex items-center gap-2">
+            <span className="w-2 h-2 bg-primary rounded-full" />
+            SYS: {systemStatusLabel}
+          </span>
+          <span>{collectorsLabel}</span>
+          <span>{statusTimestamp}</span>
+        </div>
       </div>
-    </div>
     </>
   );
-}
+
+  if (isLoading) {
+    return loginScreen;
+  }
+
+  return loginScreen;
 }

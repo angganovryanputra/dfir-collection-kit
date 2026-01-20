@@ -1,20 +1,20 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import Login from "./Login";
 
 const Index = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
     const auth = localStorage.getItem("dfir_auth");
-    if (auth) {
-      navigate("/dashboard");
-      return;
-    }
-    navigate("/login");
-  }, [navigate]);
 
-  return <Login />;
+    if (auth) {
+      window.location.href = "/dashboard";
+    } else {
+      window.location.href = "/login";
+    }
+  }, []);
+
+  return null;
 };
 
 export default Index;
