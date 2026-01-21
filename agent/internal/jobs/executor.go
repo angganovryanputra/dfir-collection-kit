@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -41,7 +42,15 @@ func NewExecutor(cfg *config.Config, apiClient *api.Client) *Executor {
 }
 
 // Run executes a job by processing all modules in sequence
-func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, workDir string, moduleList []api.JobModule) error {
+func (e *Executor) Run(
+    ctx context.Context,
+    jobID string,
+    incidentID string,
+    workDir string,
+    moduleList []api.JobModule,
+    timeoutMinutes int,
+    retryAttempts int,
+) error {
 	intPtr := func(value int) *int {
 		return &value
 	}
@@ -114,6 +123,7 @@ func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, wor
 	}
 
 	// Execute modules in sequence
+	moduleTimeout := time.Duration(timeoutMinutes) * time.Minute
 	totalModules := len(moduleList)
 	for i, module := range moduleList {
 		if err := checkCancellation(); err != nil {
@@ -136,18 +146,56 @@ func (e *Executor) Run(ctx context.Context, jobID string, incidentID string, wor
 		logJob.Debug("Output path: %s", module.OutputRelPath)
 		logJob.Debug("Params: %v", module.Params)
 
-		if err := e.executeModule(ctx, job, module); err != nil {
-			logJob.Error("Module failed: %s - %v", module.ModuleID, err)
-
-			// Report module failure
+		attempts := retryAttempts + 1
+		if attempts < 1 {
+			attempts = 1
+		}
+		var execErr error
+		for attempt := 1; attempt <= attempts; attempt++ {
+			if err := checkCancellation(); err != nil {
+				return err
+			}
+			moduleCtx := ctx
+			var cancel context.CancelFunc
+			if timeoutMinutes > 0 {
+				moduleCtx, cancel = context.WithTimeout(ctx, moduleTimeout)
+			}
+			execErr = e.executeModule(moduleCtx, job, module)
+			if cancel != nil {
+				cancel()
+			}
+			if errors.Is(execErr, context.DeadlineExceeded) {
+				logJob.Warning("Module timed out: %s", module.ModuleID)
+				if e.apiClient != nil {
+					e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+						Status:  job.Status,
+						Message: fmt.Sprintf("Timeout in %s", module.ModuleID),
+						LogTail: []string{fmt.Sprintf("Timeout in %s", module.ModuleID)},
+					})
+				}
+			}
+			if execErr == nil {
+				break
+			}
+			logJob.Warning("Module attempt %d/%d failed: %s - %v", attempt, attempts, module.ModuleID, execErr)
 			if e.apiClient != nil {
 				e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
-					Status:   "failed",
-					Message:  fmt.Sprintf("Module %s failed: %v", module.ModuleID, err),
+					Status:  job.Status,
+					Message: fmt.Sprintf("Retry %d/%d for %s", attempt, attempts, module.ModuleID),
+					LogTail: []string{fmt.Sprintf("Retry %d/%d for %s", attempt, attempts, module.ModuleID)},
 				})
 			}
+		}
 
-			return fmt.Errorf("module execution failed: %w", err)
+		if execErr != nil {
+			logJob.Error("Module failed: %s - %v", module.ModuleID, execErr)
+			if e.apiClient != nil {
+				e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+					Status:  "failed",
+					Message: fmt.Sprintf("Module %s failed: %v", module.ModuleID, execErr),
+				})
+			}
+			return fmt.Errorf("module execution failed: %w", execErr)
 		}
 
 		// Update progress

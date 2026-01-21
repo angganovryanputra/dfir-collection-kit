@@ -4,9 +4,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user, get_db, require_roles
 from app.core.modules import build_modules
 from app.crud.device import get_device
-from app.crud.job import create_job, get_job, list_jobs_for_incident, update_job_status
+from app.crud.job import count_active_jobs, create_job, get_job, list_jobs_for_incident, update_job_status
 from app.schemas.job import JobCreate, JobOut
 from app.services.audit_log_service import safe_record_event
+from app.services.system_settings_service import get_runtime_settings
 
 router = APIRouter()
 
@@ -17,6 +18,11 @@ async def create_job_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user=Depends(get_current_user),
 ) -> JobOut:
+    runtime_settings = await get_runtime_settings(db)
+    if runtime_settings.max_concurrent_jobs > 0:
+        active_jobs = await count_active_jobs(db)
+        if active_jobs >= runtime_settings.max_concurrent_jobs:
+            raise HTTPException(status_code=409, detail="Job concurrency limit reached")
     device = await get_device(db, payload.agent_id) if payload.agent_id else None
     if not payload.module_ids and not device:
         raise HTTPException(status_code=400, detail="module_ids required when agent_id is missing")

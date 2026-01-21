@@ -91,16 +91,9 @@ export default function CreateIncident() {
         id: incidentId,
         type: incidentType,
         status: "COLLECTION_IN_PROGRESS",
+        template_id: template?.id ?? null,
         target_endpoints: endpoints,
         operator: operatorName.trim().toUpperCase(),
-      });
-      await apiPost("/chain-of-custody", {
-        id: `${incidentId}-created`,
-        incident_id: incidentId,
-        timestamp: new Date().toISOString(),
-        action: "INCIDENT CREATED",
-        actor: operatorName.trim().toUpperCase(),
-        target: incidentId,
       });
       navigate(`/incidents/${incidentId}/collect`);
     } catch {

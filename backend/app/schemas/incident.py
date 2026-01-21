@@ -7,6 +7,7 @@ from pydantic import BaseModel
 class IncidentBase(BaseModel):
     type: str
     status: str
+    template_id: str | None = None
     target_endpoints: List[str]
     operator: str
 

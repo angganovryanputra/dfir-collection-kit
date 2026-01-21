@@ -6,7 +6,6 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import settings
 from app.core.deps import get_current_user, get_db, require_roles
 from app.core.evidence_files import (
     append_chain_log,
@@ -30,11 +29,13 @@ from app.schemas.evidence import EvidenceFolderCreate, EvidenceItemCreate
 from app.schemas.incident import IncidentUpdate
 from app.schemas.job import JobCreate, JobInstruction, JobModule, JobOut, JobStatusUpdate
 from app.services.audit_log_service import safe_record_event
+from app.services.system_settings_service import get_runtime_settings
 
 router = APIRouter()
 
 
 def verify_agent_secret(agent_token: str | None) -> None:
+    from app.core.config import settings
     if not settings.AGENT_SHARED_SECRET:
         raise HTTPException(status_code=503, detail="Agent shared secret not configured")
     if not agent_token or agent_token != settings.AGENT_SHARED_SECRET:
@@ -146,8 +147,9 @@ async def create_job_for_agent(
     device = await get_device(db, agent_id)
     if not device and not payload.module_ids:
         raise HTTPException(status_code=400, detail="module_ids required when agent is unknown")
+    runtime_settings = await get_runtime_settings(db)
     modules = build_modules(payload.module_ids, device.os if device else None)
-    output_path = str(Path(settings.EVIDENCE_STORAGE_PATH) / payload.incident_id / payload.id)
+    output_path = str(Path(runtime_settings.evidence_storage_path) / payload.incident_id / payload.id)
     job = await create_job(db, payload, modules, output_path)
     await safe_record_event(
         db,
@@ -172,6 +174,7 @@ async def get_next_job(
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
 ) -> JobInstruction:
     verify_agent_secret(agent_token)
+    runtime_settings = await get_runtime_settings(db)
     job = await get_next_job_for_agent(db, agent_id)
     if not job:
         raise HTTPException(status_code=404, detail="No pending jobs")
@@ -202,6 +205,8 @@ async def get_next_job(
         os=device_os,
         work_dir=job.output_path,
         modules=modules,
+        collection_timeout_min=runtime_settings.collection_timeout_min,
+        retry_attempts=runtime_settings.retry_attempts,
     )
 
 
@@ -295,9 +300,11 @@ async def upload_job_evidence(
     if not job or job.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    base_path = Path(settings.EVIDENCE_STORAGE_PATH) / job.incident_id / job.id
+    runtime_settings = await get_runtime_settings(db)
+
+    base_path = Path(runtime_settings.evidence_storage_path) / job.incident_id / job.id
     zip_path = base_path / "collection.zip"
-    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    max_bytes = runtime_settings.max_file_size_gb * 1024 * 1024 * 1024
     size = save_upload(file, zip_path, max_bytes)
 
     await safe_record_event(
@@ -318,7 +325,7 @@ async def upload_job_evidence(
     extracted_files = extract_zip(zip_path, extracted_dir)
 
     manifest_path = base_path / "hashes.sha256"
-    write_hash_manifest(extracted_files, manifest_path, extracted_dir)
+    write_hash_manifest(extracted_files, manifest_path, extracted_dir, runtime_settings.hash_algorithm)
     await safe_record_event(
         db,
         event_type="evidence_hashed",
@@ -336,7 +343,7 @@ async def upload_job_evidence(
     timestamp = datetime.utcnow().isoformat() + "Z"
     chain_log_path = base_path / "chain-of-custody.log"
     append_chain_log(chain_log_path, f"{timestamp} | UPLOAD | AGENT {agent_id} | {zip_path.name}")
-    chain_log_hash = hash_file(chain_log_path)
+    chain_log_hash = hash_file(chain_log_path, runtime_settings.hash_algorithm)
     append_chain_log(chain_log_path, f"{timestamp} | HASH | {chain_log_hash}")
 
     total_size = sum(p.stat().st_size for p in extracted_files)
@@ -352,7 +359,7 @@ async def upload_job_evidence(
     await create_folder(db, folder_payload)
 
     for idx, item in enumerate(extracted_files, start=1):
-        item_hash = hash_file(item)
+        item_hash = hash_file(item, runtime_settings.hash_algorithm)
         item_payload = EvidenceItemCreate(
             id=f"{job.id}-{idx}",
             incident_id=job.incident_id,
@@ -378,6 +385,20 @@ async def upload_job_evidence(
     )
 
     write_lock_marker(base_path / "LOCKED")
+    try:
+        await create_entry(
+            db,
+            ChainOfCustodyEntryCreate(
+                id=f"coc-lock-{job.id}",
+                incident_id=job.incident_id,
+                timestamp=datetime.utcnow().isoformat() + "Z",
+                action="EVIDENCE LOCKED",
+                actor="SYSTEM",
+                target=job.id,
+            ),
+        )
+    except Exception:
+        pass
     await safe_record_event(
         db,
         event_type="evidence_locked",
@@ -392,5 +413,19 @@ async def upload_job_evidence(
         metadata={"job_id": job_id},
     )
     await update_job_status(db, job_id, "completed")
+    try:
+        await create_entry(
+            db,
+            ChainOfCustodyEntryCreate(
+                id=f"coc-complete-{job.id}",
+                incident_id=job.incident_id,
+                timestamp=datetime.utcnow().isoformat() + "Z",
+                action="COLLECTION COMPLETED",
+                actor="SYSTEM",
+                target=job.id,
+            ),
+        )
+    except Exception:
+        pass
 
     return {"status": "uploaded", "bytes": size}

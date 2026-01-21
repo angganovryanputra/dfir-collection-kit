@@ -37,6 +37,8 @@ class JobInstruction(BaseModel):
     os: str | None = None
     work_dir: str | None = None
     modules: list[JobModule]
+    collection_timeout_min: int | None = None
+    retry_attempts: int | None = None
 
 
 class JobStatusUpdate(BaseModel):

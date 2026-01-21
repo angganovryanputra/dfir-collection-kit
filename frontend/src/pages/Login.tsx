@@ -307,27 +307,36 @@ const AUTH_STAGE_LABELS = ["CRED", "PERM", "SEC", "SES"];
   };
 
 
-const parseErrorMessage = (error: unknown): string => {
+const parseErrorMessage = (error: unknown): { message: string; clientIp?: string | null } => {
   if (error instanceof Error) {
     try {
-      const parsed = JSON.parse(error.message) as { detail?: string };
-      if (parsed?.detail) {
-        return parsed.detail;
+      const parsed = JSON.parse(error.message) as {
+        detail?: string | { message?: string; client_ip?: string };
+        client_ip?: string;
+      };
+      if (typeof parsed?.detail === "string") {
+        return { message: parsed.detail, clientIp: parsed.client_ip };
+      }
+      if (parsed?.detail && typeof parsed.detail === "object") {
+        return {
+          message: parsed.detail.message ?? "Login failed. Please check your credentials.",
+          clientIp: parsed.detail.client_ip ?? parsed.client_ip,
+        };
       }
     } catch {
       // ignore JSON parsing issues
     }
 
     if (/401/.test(error.message) || /Invalid credentials/i.test(error.message)) {
-      return "Invalid credentials";
+      return { message: "Login failed. Please check your credentials." };
     }
 
     if (error.message.trim().length > 0) {
-      return error.message;
+      return { message: error.message };
     }
   }
 
-  return "Authentication failed. Please verify your credentials and try again.";
+  return { message: "Login failed. Please check your credentials." };
 };
 
 export default function Login() {
@@ -347,6 +356,7 @@ export default function Login() {
   const [authTotalSteps, setAuthTotalSteps] = useState(preAuthSteps.length + successAuthSteps.length);
   const [authFailureDialogOpen, setAuthFailureDialogOpen] = useState(false);
   const [authFailureMessage, setAuthFailureMessage] = useState<string>("");
+  const [authFailureIp, setAuthFailureIp] = useState<string | null>(null);
   const [logoutReason, setLogoutReason] = useState<string | null>(null);
   const [logoutTimestamp, setLogoutTimestamp] = useState<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<DiagnosticsState>({
@@ -532,22 +542,10 @@ export default function Login() {
   }, [location.state]);
 
   useEffect(() => {
-    if (!authFailureDialogOpen) return;
-    if (clientIp) return;
-    const fetchPublicIp = async () => {
-      try {
-        const response = await fetch("https://api.ipify.org?format=json");
-        if (!response.ok) return;
-        const data = (await response.json()) as { ip?: string };
-        if (data.ip) {
-          setClientIp(data.ip);
-          authContextRef.current.clientIp = data.ip;
-        }
-      } catch {
-      }
-    };
-    fetchPublicIp();
-  }, [authFailureDialogOpen, clientIp]);
+    if (authFailureIp) {
+      authContextRef.current.clientIp = authFailureIp;
+    }
+  }, [authFailureIp]);
 
   useEffect(() => {
     if (!logoutReason) return;
@@ -642,6 +640,7 @@ export default function Login() {
     };
     setAuthFailureDialogOpen(false);
     setAuthFailureMessage("");
+    setAuthFailureIp(null);
     setLogoutReason(null);
     setLogoutTimestamp(null);
     localStorage.removeItem("dfir_logout_reason");
@@ -673,7 +672,7 @@ export default function Login() {
 
       try {
         const { apiPost, apiGet } = await import("@/lib/api");
-        const response = await apiPost<{ access_token: string }>("/auth/login", {
+        const response = await apiPost<{ access_token: string; username?: string; role?: CurrentUserResponse["role"] }>("/auth/login", {
           username,
           password,
           role,
@@ -698,7 +697,11 @@ export default function Login() {
 
         localStorage.setItem(
           "dfir_auth",
-          JSON.stringify({ username, role, token: response.access_token })
+          JSON.stringify({
+            username: response.username ?? username,
+            role: response.role ?? role,
+            token: response.access_token,
+          })
         );
 
         try {
@@ -722,9 +725,10 @@ export default function Login() {
         setAuthTotalSteps(preAuthSteps.length + failureAuthSteps.length);
         await completeSequence(failureAuthSteps);
         if (isMountedRef.current) {
-          const message = parseErrorMessage(error);
-          setErrorMessage(message);
-          setAuthFailureMessage(message || "Invalid username or password.");
+          const parsed = parseErrorMessage(error);
+          setErrorMessage(parsed.message);
+          setAuthFailureMessage(parsed.message || "Login failed. Please check your credentials.");
+          setAuthFailureIp(parsed.clientIp ?? null);
           setAuthFailureDialogOpen(true);
         }
       } finally {
@@ -758,7 +762,7 @@ export default function Login() {
             <div className="mt-4 space-y-2 text-sm font-mono">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Public IP</span>
-                <span>{clientIp ?? "unknown"}</span>
+                <span>{authFailureIp ?? clientIp ?? "unknown"}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Connection</span>
@@ -934,7 +938,7 @@ export default function Login() {
           <div className="mt-4 space-y-2 text-sm font-mono">
             <div className="flex justify-between">
               <span className="text-muted-foreground">Public IP</span>
-              <span>{clientIp ?? "unknown"}</span>
+              <span>{authFailureIp ?? clientIp ?? "unknown"}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Connection</span>
@@ -1010,6 +1014,7 @@ export default function Login() {
                     icon={<User className="w-4 h-4" />}
                     type="text"
                     value={username}
+                    disabled={isLoading}
                     onChange={(e) => {
                       setUsername(e.target.value);
                       if (errorMessage) {
@@ -1030,6 +1035,7 @@ export default function Login() {
                     icon={<Lock className="w-4 h-4" />}
                     type="password"
                     value={password}
+                    disabled={isLoading}
                     onChange={(e) => {
                       setPassword(e.target.value);
                       if (errorMessage) {
@@ -1051,6 +1057,7 @@ export default function Login() {
                       type="button"
                       isActive={role === "operator"}
                       onClick={() => {
+                        if (isLoading) return;
                         setRole("operator");
                         if (errorMessage) {
                           setErrorMessage(null);
@@ -1066,6 +1073,7 @@ export default function Login() {
                       type="button"
                       isActive={role === "viewer"}
                       onClick={() => {
+                        if (isLoading) return;
                         setRole("viewer");
                         if (errorMessage) {
                           setErrorMessage(null);
@@ -1081,14 +1089,14 @@ export default function Login() {
                 </div>
 
                 {/* Submit */}
-                <Button
-                  type="submit"
-                  variant="tactical"
-                  className="w-full"
-                  disabled={isLoading}
-                >
-                  ACCESS SYSTEM
-                </Button>
+                  <Button
+                    type="submit"
+                    variant="tactical"
+                    className="w-full"
+                    disabled={isLoading}
+                  >
+                    {isLoading ? "AUTHENTICATING..." : "ACCESS SYSTEM"}
+                  </Button>
               </div>
             </form>
 

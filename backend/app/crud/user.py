@@ -17,7 +17,7 @@ async def list_users(db: AsyncSession) -> list[User]:
 async def create_user(db: AsyncSession, payload: UserCreate) -> User:
     data = payload.model_dump()
     password = data.pop("password")
-    username = data.get("username", "").strip().upper()
+    username = data.get("username", "").strip().lower()
     user = User(
         id=str(uuid4()),
         username=username,
@@ -45,7 +45,8 @@ async def update_user(db: AsyncSession, user_id: str, payload: UserUpdate) -> Us
 
 
 async def get_user_by_username(db: AsyncSession, username: str) -> User | None:
-    result = await db.execute(select(User).where(User.username == username))
+    normalized = username.strip().lower()
+    result = await db.execute(select(User).where(func.lower(User.username) == normalized))
     return result.scalar_one_or_none()
 
 

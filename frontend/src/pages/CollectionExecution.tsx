@@ -129,6 +129,7 @@ export default function CollectionExecution() {
     hashAlg: "UNKNOWN",
     status: "LOCKED" as "LOCKED" | "HASH_VERIFIED",
   });
+  const [completionMessage, setCompletionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const isViewer = isViewerRole(getStoredRole());
@@ -147,9 +148,10 @@ export default function CollectionExecution() {
         const current = incidents.find((entry) => entry.id === incidentId) ?? null;
         setIncident(current);
 
-        const devices = await apiGet<DeviceSummary[]>("/agents");
-        const matchedDevice = current?.target_endpoints.length
-          ? devices.find((entry) => entry.hostname === current.target_endpoints[0]) ?? null
+        const devices = await apiGet<DeviceSummary[]>("/devices");
+        const target = current?.target_endpoints[0]?.toLowerCase() ?? "";
+        const matchedDevice = target
+          ? devices.find((entry) => entry.hostname.toLowerCase() === target) ?? null
           : null;
         setDevice(matchedDevice);
 
@@ -228,6 +230,7 @@ export default function CollectionExecution() {
         );
         if (status.status === "COLLECTION_COMPLETE") {
           setIsComplete(true);
+          setCompletionMessage("Collection completed. Chain-of-custody updated.");
           setPhases((prev) =>
             prev.map((phase) => ({ ...phase, status: "complete", progress: 100 }))
           );
@@ -238,6 +241,7 @@ export default function CollectionExecution() {
         } else if (status.status === "COLLECTION_FAILED") {
           setIsComplete(false);
           setErrorMessage("Collection failed. Review logs for details.");
+          setCompletionMessage(null);
           if (pollerRef.current) {
             clearInterval(pollerRef.current);
             pollerRef.current = null;
@@ -325,6 +329,12 @@ export default function CollectionExecution() {
           <WarningBanner variant="critical" className="animate-pulse">
             <AlertTriangle className="inline w-4 h-4 mr-2" />
             {errorMessage}
+          </WarningBanner>
+        )}
+
+        {completionMessage && !errorMessage && (
+          <WarningBanner variant="warning">
+            {completionMessage}
           </WarningBanner>
         )}
 

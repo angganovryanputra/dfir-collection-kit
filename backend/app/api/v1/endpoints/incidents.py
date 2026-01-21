@@ -1,19 +1,25 @@
 from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime
+from uuid import uuid4
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
 from app.core.modules import build_modules
 from app.crud.collection_log import create_log_entries, delete_logs_for_incident, list_logs
+from app.crud.chain_of_custody import create_entry
 from app.crud.evidence import has_evidence_for_incident, lock_evidence_for_incident
 from app.crud.incident import create_incident, delete_incident, get_incident, list_incidents, update_incident
-from app.crud.job import create_job
+from app.crud.job import count_active_jobs, create_job
 from app.models.device import Device
 from app.models.user import User
+from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
 from app.schemas.collection import CollectionLogEntry, CollectionStartResponse, CollectionStatusResponse
 from app.schemas.incident import IncidentCreate, IncidentOut, IncidentUpdate
 from app.schemas.job import JobCreate
 from app.services.audit_log_service import safe_record_event
+from app.services.system_settings_service import get_runtime_settings
 
 router = APIRouter()
 
@@ -52,6 +58,11 @@ async def create_incident_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> IncidentOut:
+    runtime_settings = await get_runtime_settings(db)
+    if runtime_settings.max_concurrent_jobs > 0:
+        active_jobs = await count_active_jobs(db)
+        if active_jobs >= runtime_settings.max_concurrent_jobs:
+            raise HTTPException(status_code=409, detail="Job concurrency limit reached")
     incident = await create_incident(db, payload)
     await safe_record_event(
         db,
@@ -66,6 +77,20 @@ async def create_incident_endpoint(
         message="Incident created",
         metadata={"type": incident.type, "status": incident.status},
     )
+    try:
+        await create_entry(
+            db,
+            ChainOfCustodyEntryCreate(
+                id=f"coc-{incident.id}-{uuid4().hex[:8]}",
+                incident_id=incident.id,
+                timestamp=datetime.utcnow().isoformat() + "Z",
+                action="INCIDENT CREATED",
+                actor=current_user.username,
+                target=incident.id,
+            ),
+        )
+    except Exception:
+        pass
     return IncidentOut.model_validate(incident)
 
 
@@ -105,6 +130,20 @@ async def start_collection_endpoint(
         1,
         [{"level": "info", "message": "Collection job initialized"}],
     )
+    try:
+        await create_entry(
+            db,
+            ChainOfCustodyEntryCreate(
+                id=f"coc-{incident_id}-{uuid4().hex[:8]}",
+                incident_id=incident_id,
+                timestamp=datetime.utcnow().isoformat() + "Z",
+                action="COLLECTION STARTED",
+                actor=current_user.username,
+                target=incident_id,
+            ),
+        )
+    except Exception:
+        pass
 
     os_name = "windows"
     if incident.target_endpoints:
@@ -115,6 +154,11 @@ async def start_collection_endpoint(
         if device and device.os:
             os_name = device.os
     modules = build_modules(os_name=os_name)
+    runtime_settings = await get_runtime_settings(db)
+    if runtime_settings.max_concurrent_jobs > 0:
+        active_jobs = await count_active_jobs(db)
+        if active_jobs >= runtime_settings.max_concurrent_jobs:
+            raise HTTPException(status_code=409, detail="Job concurrency limit reached")
     await create_job(
         db,
         JobCreate(id=f"JOB-{incident_id}", incident_id=incident_id),

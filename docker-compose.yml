@@ -36,6 +36,7 @@ services:
       AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:-local-agent-secret}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
       DFIR_SEED_PASSWORD: ${DFIR_SEED_PASSWORD:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -84,4 +85,3 @@ volumes:
     driver: local
   dfir_evidence:
     driver: local
-

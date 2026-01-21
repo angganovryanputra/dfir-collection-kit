@@ -22,6 +22,6 @@ class AuditLog(Base):
     target_id: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String)
     message: Mapped[str] = mapped_column(Text)
-    metadata: Mapped[dict] = mapped_column(JSONB)
+    event_metadata: Mapped[dict] = mapped_column("metadata", JSONB)
     previous_hash: Mapped[str | None] = mapped_column(String, nullable=True)
     entry_hash: Mapped[str] = mapped_column(String, index=True)

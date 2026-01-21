@@ -1,50 +1,113 @@
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db
 from app.core.security import create_access_token, verify_password
+from app.crud.audit_log import count_recent_login_failures
 from app.crud.user import get_user_by_username, update_last_login
 from app.models.user import User
 from app.schemas.auth import LoginRequest, Token
 from app.schemas.user import RoleEnum
 from app.services.audit_log_service import safe_record_event
+from app.services.system_settings_service import get_runtime_settings
 
 router = APIRouter()
 
 
 @router.post("/login", response_model=Token)
-async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token:
-    user = await get_user_by_username(db, payload.username.upper())
+async def login(
+    payload: LoginRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> Token:
+    runtime_settings = await get_runtime_settings(db)
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    forwarded_ip = forwarded.split(",")[0].strip() if forwarded else ""
+    client_ip = forwarded_ip or (request.client.host if request.client else "unknown")
+    user = await get_user_by_username(db, payload.username)
+    normalized_username = payload.username.strip().lower()
+    if user and runtime_settings.max_failed_logins > 0:
+        # Use a rolling window based on log retention for failed login attempts.
+        window_days = max(runtime_settings.log_retention_days, 1)
+        failure_count = await count_recent_login_failures(db, user.username, window_days)
+        if failure_count >= runtime_settings.max_failed_logins:
+            await safe_record_event(
+                db,
+                event_type="auth.login_failure",
+                actor_type="user",
+                actor_id=normalized_username,
+                source="backend",
+                action="login attempt",
+                target_type="auth",
+                target_id=None,
+                status="failure",
+                message="Login blocked",
+            metadata={"reason": "max_failed_logins", "client_ip": client_ip},
+            )
+            raise HTTPException(
+                status_code=403,
+                detail={"message": "Login failed. Please check your credentials.", "client_ip": client_ip},
+            )
     if not user or not verify_password(payload.password, user.password_hash):
         await safe_record_event(
             db,
             event_type="auth.login_failure",
             actor_type="user",
-            actor_id=payload.username.upper(),
+            actor_id=normalized_username,
             source="backend",
             action="login attempt",
             target_type="auth",
             target_id=None,
             status="failure",
             message="Login failed",
-            metadata={"reason": "invalid_credentials"},
+            metadata={"reason": "invalid_credentials", "client_ip": client_ip},
         )
-        raise HTTPException(status_code=401, detail="Invalid credentials")
+        raise HTTPException(
+            status_code=401,
+            detail={"message": "Login failed. Please check your credentials.", "client_ip": client_ip},
+        )
     if user.status.lower() != "active":
         await safe_record_event(
             db,
             event_type="auth.login_failure",
             actor_type="user",
-            actor_id=user.id,
+            actor_id=normalized_username,
             source="backend",
             action="login attempt",
             target_type="auth",
             target_id=None,
             status="failure",
             message="Login blocked",
-            metadata={"reason": "user_inactive"},
+            metadata={"reason": "user_inactive", "client_ip": client_ip},
         )
-        raise HTTPException(status_code=403, detail="User is not active")
+        raise HTTPException(
+            status_code=403,
+            detail={"message": "Login failed. Please check your credentials.", "client_ip": client_ip},
+        )
+    if payload.role and user.role != "admin" and payload.role != user.role:
+        await safe_record_event(
+            db,
+            event_type="auth.login_failure",
+            actor_type="user",
+            actor_id=normalized_username,
+            source="backend",
+            action="login attempt",
+            target_type="auth",
+            target_id=None,
+            status="failure",
+            message="Login blocked",
+            metadata={
+                "reason": "role_mismatch",
+                "selected_role": payload.role,
+                "client_ip": client_ip,
+            },
+        )
+        raise HTTPException(
+            status_code=403,
+            detail={"message": "Role selection does not match account role.", "client_ip": client_ip},
+        )
     await update_last_login(db, user.id)
     await safe_record_event(
         db,
@@ -57,10 +120,11 @@ async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)) -> To
         target_id=None,
         status="success",
         message="Login succeeded",
-        metadata={"username": user.username, "role": user.role},
+        metadata={"username": user.username, "role": user.role, "client_ip": client_ip},
     )
     token, expires_at = create_access_token(
         user.username,
+        expires_delta=timedelta(minutes=runtime_settings.session_timeout_min),
         claims={"user_id": user.id, "role": user.role, "username": user.username},
     )
     return Token(

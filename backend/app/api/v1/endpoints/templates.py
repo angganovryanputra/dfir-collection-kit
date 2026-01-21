@@ -2,7 +2,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
-from app.crud.template import create_template, delete_template, get_template, list_templates, update_template
+from app.crud.template import (
+    create_template,
+    delete_template,
+    get_template,
+    increment_usage,
+    list_templates,
+    update_template,
+)
 from app.models.user import User
 from app.schemas.template import IncidentTemplateCreate, IncidentTemplateOut, IncidentTemplateUpdate
 from app.services.audit_log_service import safe_record_event
@@ -116,3 +123,32 @@ async def delete_template_endpoint(template_id: str, db: AsyncSession = Depends(
         metadata={},
     )
     return {"status": "deleted"}
+
+
+@router.post(
+    "/{template_id}/use",
+    response_model=IncidentTemplateOut,
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
+async def use_template_endpoint(
+    template_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> IncidentTemplateOut:
+    template = await increment_usage(db, template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    await safe_record_event(
+        db,
+        event_type="template.used",
+        actor_type="user",
+        actor_id=user.id,
+        source="backend",
+        action="use template",
+        target_type="preset",
+        target_id=template.id,
+        status="success",
+        message="Template used",
+        metadata={"name": template.name, "usage_count": template.usage_count},
+    )
+    return IncidentTemplateOut.model_validate(template)

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -88,7 +89,6 @@ export default function Devices() {
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [filterType, setFilterType] = useState<FilterType>("all");
   const [devices, setDevices] = useState<Device[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isSavingDevice, setIsSavingDevice] = useState(false);
@@ -102,30 +102,65 @@ export default function Devices() {
     collectionStatus: "idle" as Device["collectionStatus"],
   });
 
-  const agentManagedMessage = "Device registry is managed by collector agents.";
+  const devicesQuery = useQuery({
+    queryKey: ["devices"],
+    queryFn: () => apiGet<DeviceResponse[]>("/devices"),
+    onError: () => setErrorMessage("Unable to load devices."),
+  });
 
-  const loadDevices = async () => {
-    setIsLoading(true);
+  useEffect(() => {
+    if (devicesQuery.data) {
+      setDevices(devicesQuery.data.map(mapDevice));
+      setErrorMessage(null);
+    }
+  }, [devicesQuery.data]);
+
+  const handleAddDevice = async () => {
+    if (!newDevice.hostname.trim() || !newDevice.ipAddress.trim()) {
+      setErrorMessage("Hostname and IP address are required.");
+      return;
+    }
+    setIsSavingDevice(true);
     setErrorMessage(null);
     try {
-      const data = await apiGet<DeviceResponse[]>("/agents");
-      setDevices(data.map(mapDevice));
+      const now = new Date().toISOString();
+      const response = await apiPost<DeviceResponse>("/devices", {
+        id: crypto.randomUUID(),
+        hostname: newDevice.hostname.trim().toUpperCase(),
+        ip_address: newDevice.ipAddress.trim(),
+        type: newDevice.type,
+        os: newDevice.os.trim() || "unknown",
+        agent_version: newDevice.agentVersion.trim() || "unknown",
+        status: newDevice.status,
+        last_seen: now,
+        cpu_usage: null,
+        memory_usage: null,
+        collection_status: newDevice.collectionStatus,
+        registered_at: now,
+      });
+      setDevices((current) => [...current, mapDevice(response)]);
+      setIsAddDialogOpen(false);
+      setNewDevice({
+        hostname: "",
+        ipAddress: "",
+        type: "workstation",
+        os: "",
+        agentVersion: "2.1.0",
+        status: "online",
+        collectionStatus: "idle",
+      });
     } catch {
-      setErrorMessage("Unable to load devices.");
+      setErrorMessage("Unable to add device.");
     } finally {
-      setIsLoading(false);
+      setIsSavingDevice(false);
     }
   };
 
-  const handleAddDevice = async () => {
-    setErrorMessage(agentManagedMessage);
-    setIsAddDialogOpen(false);
+
+  const refreshDevices = () => {
+    setErrorMessage(null);
+    devicesQuery.refetch();
   };
-
-
-  useEffect(() => {
-    loadDevices();
-  }, []);
 
   const filteredDevices = devices.filter((device) => {
     const matchesSearch =
@@ -201,11 +236,26 @@ export default function Devices() {
   };
 
   const toggleDeviceStatus = async (device: Device) => {
-    setErrorMessage(agentManagedMessage);
+    const nextStatus = device.status === "online" ? "offline" : "online";
+    try {
+      const response = await apiPatch<DeviceResponse>(`/devices/${device.id}`, {
+        status: nextStatus,
+        last_seen: new Date().toISOString(),
+      });
+      const mapped = mapDevice(response);
+      setDevices((current) => current.map((item) => (item.id === mapped.id ? mapped : item)));
+    } catch {
+      setErrorMessage("Unable to update device status.");
+    }
   };
 
   const removeDevice = async (deviceId: string) => {
-    setErrorMessage(agentManagedMessage);
+    try {
+      await apiDelete(`/devices/${deviceId}`);
+      setDevices((current) => current.filter((device) => device.id !== deviceId));
+    } catch {
+      setErrorMessage("Unable to remove device.");
+    }
   };
 
   const formatLastSeen = (lastSeen: string) => {
@@ -291,9 +341,9 @@ export default function Devices() {
 
 
           <div className="flex gap-2">
-            <Button variant="secondary" onClick={loadDevices} disabled={isLoading}>
-              <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
-              {isLoading ? "REFRESHING" : "REFRESH"}
+            <Button variant="secondary" onClick={refreshDevices} disabled={devicesQuery.isFetching}>
+              <RefreshCw className={`w-4 h-4 mr-2 ${devicesQuery.isFetching ? "animate-spin" : ""}`} />
+              {devicesQuery.isFetching ? "REFRESHING" : "REFRESH"}
             </Button>
             <Button variant="tactical" onClick={() => setIsAddDialogOpen(true)}>
               <Plus className="w-4 h-4 mr-2" />
@@ -328,81 +378,81 @@ export default function Devices() {
             </TableHeaderRow>
 
             {/* Rows */}
-            {paginatedItems.map((device) => (
-              <div
-                key={device.id}
-                className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors items-center"
-              >
-                <div className="col-span-2 flex items-center gap-2">
-                  <div className={`${device.status === "online" ? "text-primary" : "text-muted-foreground"}`}>
-                    {getDeviceIcon(device.type)}
-                  </div>
-                  <span className="font-mono text-sm font-bold truncate">
-                    {device.hostname}
-                  </span>
-                </div>
-                <div className="col-span-1">
-                  <span className="font-mono text-xs text-muted-foreground uppercase">
-                    {device.type}
-                  </span>
-                </div>
-                <div className="col-span-2 font-mono text-sm text-muted-foreground">
-                  {device.ipAddress}
-                </div>
-                <div className="col-span-2 font-mono text-xs text-muted-foreground truncate">
-                  {device.os}
-                </div>
-                <div className="col-span-1">
-                  <span className={`font-mono text-xs ${
-                    device.agentVersion === "2.1.0" ? "text-primary" : "text-warning"
-                  }`}>
-                    v{device.agentVersion}
-                  </span>
-                </div>
-                <div className="col-span-1">
-                  {getStatusIndicator(device.status)}
-                </div>
-                <div className="col-span-1 font-mono text-xs text-muted-foreground">
-                  <div className="flex items-center gap-1">
-                    <Clock className="w-3 h-3" />
-                    {formatLastSeen(device.lastSeen)}
-                  </div>
-                </div>
-                <div className="col-span-1">
-                  {getCollectionStatus(device.collectionStatus)}
-                </div>
-                <div className="col-span-1 flex items-center gap-1">
-                  <Button variant="ghost" size="sm" title="Configure">
-                    <Settings className="w-3 h-3" />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    title="Toggle Status"
-                    onClick={() => toggleDeviceStatus(device)}
-                  >
-                    <Power
-                      className={`w-3 h-3 ${device.status === "online" ? "text-primary" : "text-muted-foreground"}`}
-                    />
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    title="Remove"
-                    onClick={() => removeDevice(device.id)}
-                  >
-                    <Trash2 className="w-3 h-3 text-destructive" />
-                  </Button>
-                </div>
+            {paginatedItems.length === 0 ? (
+              <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">
+                No devices available.
               </div>
-            ))}
-
-            {paginatedItems.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-12 text-muted-foreground">
-                <Monitor className="w-12 h-12 mb-4 opacity-50" />
-                <span className="font-mono text-sm">NO DEVICES FOUND</span>
-              </div>
+            ) : (
+              paginatedItems.map((device) => (
+                <div
+                  key={device.id}
+                  className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors items-center"
+                >
+                  <div className="col-span-2 flex items-center gap-2">
+                    <div className={`${device.status === "online" ? "text-primary" : "text-muted-foreground"}`}>
+                      {getDeviceIcon(device.type)}
+                    </div>
+                    <span className="font-mono text-sm font-bold truncate">
+                      {device.hostname}
+                    </span>
+                  </div>
+                  <div className="col-span-1">
+                    <span className="font-mono text-xs text-muted-foreground uppercase">
+                      {device.type}
+                    </span>
+                  </div>
+                  <div className="col-span-2 font-mono text-sm text-muted-foreground">
+                    {device.ipAddress}
+                  </div>
+                  <div className="col-span-2 font-mono text-xs text-muted-foreground truncate">
+                    {device.os}
+                  </div>
+                  <div className="col-span-1">
+                    <span className={`font-mono text-xs ${
+                      device.agentVersion === "2.1.0" ? "text-primary" : "text-warning"
+                    }`}>
+                      v{device.agentVersion}
+                    </span>
+                  </div>
+                  <div className="col-span-1">
+                    {getStatusIndicator(device.status)}
+                  </div>
+                  <div className="col-span-1 font-mono text-xs text-muted-foreground">
+                    <div className="flex items-center gap-1">
+                      <Clock className="w-3 h-3" />
+                      {formatLastSeen(device.lastSeen)}
+                    </div>
+                  </div>
+                  <div className="col-span-1">
+                    {getCollectionStatus(device.collectionStatus)}
+                  </div>
+                  <div className="col-span-1 flex items-center gap-1">
+                    <Button variant="ghost" size="sm" title="Configure">
+                      <Settings className="w-3 h-3" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Toggle Status"
+                      onClick={() => toggleDeviceStatus(device)}
+                    >
+                      <Power
+                        className={`w-3 h-3 ${device.status === "online" ? "text-primary" : "text-muted-foreground"}`}
+                      />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      title="Remove"
+                      onClick={() => removeDevice(device.id)}
+                    >
+                      <Trash2 className="w-3 h-3 text-destructive" />
+                    </Button>
+                  </div>
+                </div>
+              ))
             )}
+
           </div>
 
           {/* Pagination */}

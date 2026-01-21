@@ -1,4 +1,5 @@
 import { ReactNode, useState, useEffect } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { WarningBanner } from "@/components/WarningBanner";
 import type { Incident, Collector } from "@/types/dfir";
@@ -70,26 +71,52 @@ export function AppLayout({
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [collectors, setCollectors] = useState<Collector[]>([]);
+  const [currentUser, setCurrentUser] = useState<{ username: string; role: string } | null>(null);
 
   useEffect(() => {
     const interval = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(interval);
   }, []);
 
+  const incidentsQuery = useQuery({
+    queryKey: ["incidents"],
+    queryFn: () => apiGet<IncidentResponse[]>("/incidents"),
+  });
+
+  const collectorsQuery = useQuery({
+    queryKey: ["collectors"],
+    queryFn: () => apiGet<CollectorResponse[]>("/collectors"),
+  });
+
   useEffect(() => {
-    const load = async () => {
+    if (incidentsQuery.data) {
+      setIncidents(incidentsQuery.data.map(mapIncident));
+    }
+  }, [incidentsQuery.data]);
+
+  useEffect(() => {
+    if (collectorsQuery.data) {
+      setCollectors(collectorsQuery.data.map(mapCollector));
+    }
+  }, [collectorsQuery.data]);
+
+  useEffect(() => {
+    const raw = localStorage.getItem("dfir_auth");
+    if (raw) {
       try {
-        const [incidentsData, collectorsData] = await Promise.all([
-          apiGet<IncidentResponse[]>("/incidents"),
-          apiGet<CollectorResponse[]>("/collectors"),
-        ]);
-        setIncidents(incidentsData.map(mapIncident));
-        setCollectors(collectorsData.map(mapCollector));
+        const parsed = JSON.parse(raw) as { username?: string; role?: string };
+        if (parsed.username && parsed.role) {
+          setCurrentUser({ username: parsed.username, role: parsed.role });
+        }
       } catch {
-        // ignore sidebar stats errors
+        // ignore parse errors
       }
-    };
-    load();
+    }
+    apiGet<{ username: string; role: string }>("/users/me")
+      .then((data) => setCurrentUser({ username: data.username, role: data.role }))
+      .catch(() => {
+        // ignore user fetch errors
+      });
   }, []);
 
   const activeIncidents = incidents.filter((i) => i.status !== "CLOSED").length;
@@ -153,7 +180,9 @@ export function AppLayout({
             <span className="w-2 h-2 bg-primary rounded-full" />
             SYS: OPERATIONAL
           </span>
-          <span>OPERATOR: J.SMITH | ROLE: OPERATOR</span>
+          <span>
+            OPERATOR: {currentUser?.username ?? "UNKNOWN"} | ROLE: {currentUser?.role ?? "UNKNOWN"}
+          </span>
           <span>{currentTime.toLocaleTimeString()}</span>
         </footer>
       </div>

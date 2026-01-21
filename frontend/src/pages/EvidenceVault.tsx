@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -49,6 +50,10 @@ interface EvidenceItemResponse {
   collected_at: string;
 }
 
+interface DiagnosticsResponse {
+  storage_used_percent: number | null;
+}
+
 const mapFolder = (folder: EvidenceFolderResponse): EvidenceFolder => ({
   id: folder.id,
   incidentId: folder.incident_id,
@@ -81,61 +86,80 @@ export default function EvidenceVault() {
   const [isExporting, setIsExporting] = useState(false);
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await apiGet<EvidenceFolderResponse[]>("/evidence/folders");
-        const mapped = data.map(mapFolder);
-        setFolders(mapped);
-        if (incidentId) {
-          const match = mapped.find((folder) => folder.incidentId === incidentId);
-          if (match) {
-            setSelectedFolder(match.id);
-          }
-        }
-      } catch {
-        setErrorMessage("Unable to load evidence folders.");
-      }
-    };
-    load();
-  }, [incidentId]);
+    if (!incidentId) return;
+    const match = folders.find((folder) => folder.incidentId === incidentId);
+    if (match) {
+      setSelectedFolder(match.id);
+    }
+  }, [incidentId, folders]);
+
+  const foldersQuery = useQuery<EvidenceFolderResponse[]>({
+    queryKey: ["evidence-folders"],
+    queryFn: () => apiGet<EvidenceFolderResponse[]>("/evidence/folders"),
+  });
+
+  const diagnosticsQuery = useQuery<DiagnosticsResponse>({
+    queryKey: ["diagnostics"],
+    queryFn: () => apiGet<DiagnosticsResponse>("/status/diagnostics"),
+  });
 
   useEffect(() => {
-    const loadEvidence = async () => {
-      if (!selectedFolder) {
-        setEvidenceItems([]);
-        return;
-      }
-      const folder = folders.find((f) => f.id === selectedFolder);
-      if (!folder) return;
-      try {
-        const items = await apiGet<EvidenceItemResponse[]>(
-          `/evidence/items?incident_id=${folder.incidentId}`
-        );
-        setEvidenceItems(items.map(mapEvidence));
-      } catch {
-        setErrorMessage("Unable to load evidence items.");
-      }
-    };
-    loadEvidence();
-  }, [selectedFolder, folders]);
+    if (foldersQuery.data) {
+      setFolders(foldersQuery.data.map(mapFolder));
+      setErrorMessage(null);
+    }
+  }, [foldersQuery.data]);
 
   const selectedFolderData = folders.find((f) => f.id === selectedFolder);
+
+  const itemsQuery = useQuery<EvidenceItemResponse[]>({
+    queryKey: ["evidence-items", selectedFolderData?.incidentId],
+    queryFn: () =>
+      apiGet<EvidenceItemResponse[]>(
+        `/evidence/items?incident_id=${selectedFolderData?.incidentId}`
+      ),
+    enabled: Boolean(selectedFolderData),
+  });
+
+  useEffect(() => {
+    if (foldersQuery.error || itemsQuery.error) {
+      setErrorMessage("Unable to load evidence data.");
+    }
+  }, [foldersQuery.error, itemsQuery.error]);
+
+  useEffect(() => {
+    if (itemsQuery.data) {
+      setEvidenceItems(itemsQuery.data.map(mapEvidence));
+      setErrorMessage(null);
+    }
+  }, [itemsQuery.data]);
+
   const evidenceList = selectedFolder ? evidenceItems : [];
 
   const filteredEvidence = evidenceList.filter((e) =>
     e.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
+  const capacityPercent = diagnosticsQuery.data?.storage_used_percent ?? null;
+  const formattedCapacity = capacityPercent !== null
+    ? `${Math.round(capacityPercent)}%`
+    : "--";
+
   const handleExportAll = async () => {
     if (!selectedFolderData) return;
     setIsExporting(true);
     setErrorMessage(null);
     try {
-      const response = await apiPost<{ download_url: string }>("/evidence/exports", {
+      const response = await apiPost<{ download_url: string; signature?: string | null }>(
+        "/evidence/exports",
+        {
         incident_id: selectedFolderData.incidentId,
-      });
+      }
+      );
       const baseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
-      const target = baseUrl ? `${baseUrl.replace(/\/$/, "")}${response.download_url}` : response.download_url;
+      const url = baseUrl ? `${baseUrl.replace(/\/$/, "")}${response.download_url}` : response.download_url;
+      const signature = response.signature ? `?signature=${response.signature}` : "";
+      const target = `${url}${signature}`;
       window.location.assign(target);
     } catch {
       setErrorMessage("Unable to export evidence package.");
@@ -148,11 +172,16 @@ export default function EvidenceVault() {
     setIsExporting(true);
     setErrorMessage(null);
     try {
-      const response = await apiPost<{ download_url: string }>("/evidence/exports", {
+      const response = await apiPost<{ download_url: string; signature?: string | null }>(
+        "/evidence/exports",
+        {
         evidence_id: evidenceId,
-      });
+      }
+      );
       const baseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
-      const target = baseUrl ? `${baseUrl.replace(/\/$/, "")}${response.download_url}` : response.download_url;
+      const url = baseUrl ? `${baseUrl.replace(/\/$/, "")}${response.download_url}` : response.download_url;
+      const signature = response.signature ? `?signature=${response.signature}` : "";
+      const target = `${url}${signature}`;
       window.location.assign(target);
     } catch {
       setErrorMessage("Unable to export evidence file.");
@@ -169,7 +198,9 @@ export default function EvidenceVault() {
         <div className="flex items-center gap-2 font-mono text-xs">
           <HardDrive className="w-4 h-4 text-muted-foreground" />
           <span className="text-muted-foreground">CAPACITY:</span>
-          <span className="text-warning">78%</span>
+          <span className={capacityPercent !== null && capacityPercent >= 75 ? "text-warning" : "text-muted-foreground"}>
+            {formattedCapacity}
+          </span>
         </div>
       }
     >
@@ -184,50 +215,56 @@ export default function EvidenceVault() {
           <div className="col-span-4">
             <TacticalPanel title="CASE FOLDERS" status="online" className="h-full">
               <div className="space-y-2">
-                {folders.map((folder) => (
-                  <button
-                    key={folder.id}
-                    onClick={() => setSelectedFolder(folder.id)}
-                    className={`w-full text-left p-4 border transition-all ${
-                      selectedFolder === folder.id
-                        ? "border-primary bg-primary/10"
-                        : "border-border bg-secondary/50 hover:border-muted-foreground"
-                    }`}
-                  >
-                    <div className="flex items-start gap-3">
-                      <Folder
-                        className={`w-5 h-5 mt-0.5 ${
-                          selectedFolder === folder.id
-                            ? "text-primary"
-                            : "text-muted-foreground"
-                        }`}
-                      />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono text-sm font-bold truncate">
-                            {folder.incidentId}
-                          </span>
-                          {folder.status === "HASH_VERIFIED" && (
-                            <CheckCircle2 className="w-3 h-3 text-status-verified shrink-0" />
-                          )}
+                {folders.length === 0 ? (
+                  <div className="p-4 text-center font-mono text-xs text-muted-foreground">
+                    No evidence folders available.
+                  </div>
+                ) : (
+                  folders.map((folder) => (
+                    <button
+                      key={folder.id}
+                      onClick={() => setSelectedFolder(folder.id)}
+                      className={`w-full text-left p-4 border transition-all ${
+                        selectedFolder === folder.id
+                          ? "border-primary bg-primary/10"
+                          : "border-border bg-secondary/50 hover:border-muted-foreground"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <Folder
+                          className={`w-5 h-5 mt-0.5 ${
+                            selectedFolder === folder.id
+                              ? "text-primary"
+                              : "text-muted-foreground"
+                          }`}
+                        />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-sm font-bold truncate">
+                              {folder.incidentId}
+                            </span>
+                            {folder.status === "HASH_VERIFIED" && (
+                              <CheckCircle2 className="w-3 h-3 text-status-verified shrink-0" />
+                            )}
+                          </div>
+                          <div className="font-mono text-xs text-muted-foreground mt-1">
+                            {folder.type.replace("_", " ")}
+                          </div>
+                          <div className="font-mono text-xs text-muted-foreground">
+                            {folder.filesCount} files • {folder.totalSize}
+                          </div>
                         </div>
-                        <div className="font-mono text-xs text-muted-foreground mt-1">
-                          {folder.type.replace("_", " ")}
-                        </div>
-                        <div className="font-mono text-xs text-muted-foreground">
-                          {folder.filesCount} files • {folder.totalSize}
-                        </div>
+                        <ChevronRight
+                          className={`w-4 h-4 shrink-0 ${
+                            selectedFolder === folder.id
+                              ? "text-primary"
+                              : "text-muted-foreground"
+                          }`}
+                        />
                       </div>
-                      <ChevronRight
-                        className={`w-4 h-4 shrink-0 ${
-                          selectedFolder === folder.id
-                            ? "text-primary"
-                            : "text-muted-foreground"
-                        }`}
-                      />
-                    </div>
-                  </button>
-                ))}
+                    </button>
+                  ))
+                )}
               </div>
             </TacticalPanel>
           </div>
@@ -290,54 +327,60 @@ export default function EvidenceVault() {
                     </TableHeaderRow>
 
                     {/* Rows */}
-                    {filteredEvidence.map((evidence) => (
-                      <div
-                        key={evidence.id}
-                        className="grid grid-cols-12 gap-4 px-4 py-3 bg-secondary/30 hover:bg-secondary/50 transition-colors border border-transparent hover:border-border"
-                      >
-                        <div className="col-span-4 flex items-center gap-2">
-                          <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
-                          <span className="font-mono text-sm truncate">
-                            {evidence.name}
-                          </span>
-                        </div>
-                        <div className="col-span-2 font-mono text-sm text-muted-foreground">
-                          {evidence.type}
-                        </div>
-                        <div className="col-span-2 font-mono text-sm text-muted-foreground">
-                          {evidence.size}
-                        </div>
-                        <div className="col-span-2">
-                          <div className="flex items-center gap-1.5">
-                            {evidence.status === "HASH_VERIFIED" ? (
-                              <>
-                                <CheckCircle2 className="w-3 h-3 text-status-verified" />
-                                <span className="font-mono text-xs text-status-verified">
-                                  VERIFIED
-                                </span>
-                              </>
-                            ) : (
-                              <>
-                                <Lock className="w-3 h-3 text-status-locked" />
-                                <span className="font-mono text-xs text-status-locked">
-                                  LOCKED
-                                </span>
-                              </>
-                            )}
+                    {filteredEvidence.length === 0 ? (
+                      <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">
+                        No evidence items available.
+                      </div>
+                    ) : (
+                      filteredEvidence.map((evidence) => (
+                        <div
+                          key={evidence.id}
+                          className="grid grid-cols-12 gap-4 px-4 py-3 bg-secondary/30 hover:bg-secondary/50 transition-colors border border-transparent hover:border-border"
+                        >
+                          <div className="col-span-4 flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+                            <span className="font-mono text-sm truncate">
+                              {evidence.name}
+                            </span>
+                          </div>
+                          <div className="col-span-2 font-mono text-sm text-muted-foreground">
+                            {evidence.type}
+                          </div>
+                          <div className="col-span-2 font-mono text-sm text-muted-foreground">
+                            {evidence.size}
+                          </div>
+                          <div className="col-span-2">
+                            <div className="flex items-center gap-1.5">
+                              {evidence.status === "HASH_VERIFIED" ? (
+                                <>
+                                  <CheckCircle2 className="w-3 h-3 text-status-verified" />
+                                  <span className="font-mono text-xs text-status-verified">
+                                    VERIFIED
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  <Lock className="w-3 h-3 text-status-locked" />
+                                  <span className="font-mono text-xs text-status-locked">
+                                    LOCKED
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                          <div className="col-span-2">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleExportItem(evidence.id)}
+                              disabled={isExporting}
+                            >
+                              <Download className="w-3 h-3" />
+                            </Button>
                           </div>
                         </div>
-                        <div className="col-span-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleExportItem(evidence.id)}
-                            disabled={isExporting}
-                          >
-                            <Download className="w-3 h-3" />
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 </TacticalPanel>
               </>

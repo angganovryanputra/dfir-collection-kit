@@ -124,7 +124,15 @@ func (a *Agent) pollAndExecuteJob(ctx context.Context) error {
 
 	a.state = StateRunning
 
-	if err := a.executor.Run(ctx, job.JobID, job.IncidentID, job.WorkDir, job.Modules); err != nil {
+	if err := a.executor.Run(
+		ctx,
+		job.JobID,
+		job.IncidentID,
+		job.WorkDir,
+		job.Modules,
+		job.CollectionTimeoutMin,
+		job.RetryAttempts,
+	); err != nil {
 		return err
 	}
 

@@ -24,6 +24,7 @@ export interface Incident {
   id: string;
   type: IncidentType;
   status: IncidentStatus;
+  templateId?: string | null;
   targetEndpoints: string[];
   operator: string;
   createdAt: string;

@@ -36,6 +36,16 @@ async def update_template(
     return template
 
 
+async def increment_usage(db: AsyncSession, template_id: str) -> IncidentTemplate | None:
+    result = await db.execute(select(IncidentTemplate).where(IncidentTemplate.id == template_id))
+    template = result.scalar_one_or_none()
+    if not template:
+        return None
+    template.usage_count += 1
+    await db.flush()
+    return template
+
+
 async def delete_template(db: AsyncSession, template_id: str) -> bool:
     result = await db.execute(select(IncidentTemplate).where(IncidentTemplate.id == template_id))
     template = result.scalar_one_or_none()

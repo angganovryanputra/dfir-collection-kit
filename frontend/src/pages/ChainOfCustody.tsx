@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -21,34 +22,77 @@ export default function ChainOfCustody() {
   const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
   const [custodyLog, setCustodyLog] = useState<(ChainOfCustodyEntry & { incidentId: string })[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const hasIntegrityError = errorMessage?.toLowerCase().includes("integrity");
+
+  const custodyQuery = useQuery({
+    queryKey: ["chain-of-custody"],
+    queryFn: () =>
+      apiGet<{
+        id: string;
+        incident_id: string;
+        timestamp: string;
+        action: string;
+        actor: string;
+        target: string;
+      }[]>("/chain-of-custody"),
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : "Unable to load custody log.";
+      setErrorMessage(message.includes("integrity") ? message : "Unable to load custody log.");
+    },
+  });
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await apiGet<{
-          id: string;
-          incident_id: string;
-          timestamp: string;
-          action: string;
-          actor: string;
-          target: string;
-        }[]>("/chain-of-custody");
-        setCustodyLog(
-          data.map((entry) => ({
-            id: entry.id,
-            incidentId: entry.incident_id,
-            timestamp: entry.timestamp,
-            action: entry.action,
-            actor: entry.actor,
-            target: entry.target,
-          }))
-        );
-      } catch {
-        setErrorMessage("Unable to load custody log.");
+    if (custodyQuery.data) {
+      setCustodyLog(
+        custodyQuery.data.map((entry) => ({
+          id: entry.id,
+          incidentId: entry.incident_id,
+          timestamp: entry.timestamp,
+          action: entry.action,
+          actor: entry.actor,
+          target: entry.target,
+        }))
+      );
+      setErrorMessage(null);
+    }
+  }, [custodyQuery.data]);
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    setErrorMessage(null);
+    try {
+      const baseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
+      const base = baseUrl?.trim() || "http://localhost:8000/api/v1";
+      const params = selectedIncident ? `?incident_id=${encodeURIComponent(selectedIncident)}` : "";
+      const url = `${base}/chain-of-custody/export${params}`;
+      const raw = localStorage.getItem("dfir_auth");
+      const token = raw ? (JSON.parse(raw) as { token?: string }).token : null;
+      const response = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || `Request failed: ${response.status}`);
       }
-    };
-    load();
-  }, []);
+      const blob = await response.blob();
+      const downloadUrl = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = downloadUrl;
+      link.download = selectedIncident
+        ? `chain_of_custody_${selectedIncident}.csv`
+        : "chain_of_custody.csv";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(downloadUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to export custody log.";
+      setErrorMessage(message.includes("integrity") ? message : "Unable to export custody log.");
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   const incidents = [...new Set(custodyLog.map((l) => l.incidentId))];
 
@@ -100,6 +144,11 @@ export default function ChainOfCustody() {
             {errorMessage}
           </div>
         )}
+        {hasIntegrityError && (
+          <div className="mb-4 font-mono text-xs text-muted-foreground">
+            Integrity verification failed. Review custody hashes before continuing.
+          </div>
+        )}
         {/* Filters */}
         <div className="flex items-center gap-4 mb-6">
           <SearchInput
@@ -126,10 +175,15 @@ export default function ChainOfCustody() {
               </SelectableButton>
             ))}
           </div>
-          <Button variant="secondary">
-            <Download className="w-4 h-4 mr-2" />
-            EXPORT
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button variant="secondary" onClick={handleExport} disabled={isExporting}>
+              <Download className="w-4 h-4 mr-2" />
+              {isExporting ? "EXPORTING" : "EXPORT"}
+            </Button>
+            <span className="font-mono text-xs text-muted-foreground">
+              Signature required for downloads.
+            </span>
+          </div>
         </div>
 
         {/* Log Table */}
@@ -153,37 +207,43 @@ export default function ChainOfCustody() {
             </TableHeaderRow>
 
             {/* Rows */}
-            {paginatedItems.map((entry, index) => (
-              <div
-                key={index}
-                className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors"
-              >
-                <div className="col-span-3 font-mono text-sm text-muted-foreground">
-                  <div>{new Date(entry.timestamp).toLocaleDateString()}</div>
-                  <div className="text-xs">
-                    {new Date(entry.timestamp).toLocaleTimeString("en-US", {
-                      hour12: false,
-                    })}
+            {paginatedItems.length === 0 ? (
+              <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">
+                No chain-of-custody entries available.
+              </div>
+            ) : (
+              paginatedItems.map((entry, index) => (
+                <div
+                  key={index}
+                  className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors"
+                >
+                  <div className="col-span-3 font-mono text-sm text-muted-foreground">
+                    <div>{new Date(entry.timestamp).toLocaleDateString()}</div>
+                    <div className="text-xs">
+                      {new Date(entry.timestamp).toLocaleTimeString("en-US", {
+                        hour12: false,
+                      })}
+                    </div>
+                  </div>
+                  <div className="col-span-3">
+                    <span
+                      className={`font-mono text-sm font-bold ${getActionColor(
+                        entry.action
+                      )}`}
+                    >
+                      {entry.action}
+                    </span>
+                  </div>
+                  <div className="col-span-2 font-mono text-sm">
+                    {entry.actor}
+                  </div>
+                  <div className="col-span-4 font-mono text-sm text-muted-foreground flex items-center gap-2">
+                    <FileText className="w-3 h-3 shrink-0" />
+                    <span className="truncate">{entry.target}</span>
                   </div>
                 </div>
-                <div className="col-span-3">
-                  <span
-                    className={`font-mono text-sm font-bold ${getActionColor(
-                      entry.action
-                    )}`}
-                  >
-                    {entry.action}
-                  </span>
-                </div>
-                <div className="col-span-2 font-mono text-sm">
-                  {entry.actor}
-                </div>
-                <div className="col-span-4 font-mono text-sm text-muted-foreground flex items-center gap-2">
-                  <FileText className="w-3 h-3 shrink-0" />
-                  <span className="truncate">{entry.target}</span>
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
 
           {/* Pagination */}

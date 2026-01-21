@@ -262,6 +262,12 @@ The chain-of-custody uses cryptographic hashing to ensure tamper evidence:
 
 Any tampering with a CoC entry will cause verification to fail.
 
+**API Endpoints**
+
+- `GET /api/v1/chain-of-custody` (optional `incident_id` filter)
+- `POST /api/v1/chain-of-custody` (operator/admin create entry)
+- `GET /api/v1/chain-of-custody/export` (CSV export, optional `incident_id`)
+
 ## Agent Architecture (Go - Future)
 
 ### Agent Workflow
@@ -305,9 +311,13 @@ sequenceDiagram
       "output_relpath": "volatile/windows/process_list.csv",
       "params": {}
     }
-  ]
+  ],
+  "collection_timeout_min": 60,
+  "retry_attempts": 3
 }
 ```
+
+The backend may include `collection_timeout_min` and `retry_attempts` to bound overall collection time and guide agent-side retry behavior.
 
 ### Module Registry
 
@@ -427,6 +437,7 @@ Role-based access control (RBAC):
 - Append-only chain-of-custody logs
 - Chain verification on read (returns 409 if corrupted)
 - Locked evidence folders (append-only after collection)
+- Evidence export downloads require a signature query param generated on export
 
 ## Deployment Patterns
 

@@ -3,9 +3,11 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_db, require_roles
-from app.crud.audit_log import list_entries_with_total
+from app.core.deps import get_current_user, get_db, require_roles
+from app.crud.audit_log import list_entries_with_total, prune_old_entries
 from app.schemas.audit_log import AuditLogListResponse, AuditLogOut
+from app.services.audit_log_service import safe_record_event
+from app.services.system_settings_service import get_runtime_settings
 
 router = APIRouter()
 
@@ -45,6 +47,12 @@ async def get_audit_logs(
         target_type = "evidence"
         target_filter = evidence_id
 
+    try:
+        runtime_settings = await get_runtime_settings(db)
+        await prune_old_entries(db, runtime_settings.log_retention_days)
+    except Exception:
+        pass
+
     entries, total = await list_entries_with_total(
         db,
         event_type=event_type,
@@ -60,3 +68,26 @@ async def get_audit_logs(
         total=total,
         entries=[AuditLogOut.model_validate(entry) for entry in entries],
     )
+
+
+@router.post("/prune", dependencies=[Depends(require_roles("admin"))])
+async def prune_audit_logs(
+    db: AsyncSession = Depends(get_db),
+    user=Depends(get_current_user),
+) -> dict:
+    runtime_settings = await get_runtime_settings(db)
+    pruned = await prune_old_entries(db, runtime_settings.log_retention_days)
+    await safe_record_event(
+        db,
+        event_type="audit_logs_pruned",
+        actor_type="user",
+        actor_id=user.id,
+        source="backend",
+        action="prune audit logs",
+        target_type="audit_log",
+        target_id=None,
+        status="success",
+        message="Audit logs pruned",
+        metadata={"retention_days": runtime_settings.log_retention_days, "deleted": pruned},
+    )
+    return {"deleted": pruned}

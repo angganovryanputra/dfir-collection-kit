@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,12 @@ import { TableHeaderRow } from "@/components/common/TableHeaderRow";
 import { SearchInput } from "@/components/common/SearchInput";
 import { SelectableButton } from "@/components/common/SelectableButton";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   Users,
   Server,
   Settings,
@@ -20,7 +27,6 @@ import {
   Trash2,
   Edit2,
   Save,
-  X,
   UserPlus,
   Power,
   RefreshCw,
@@ -129,8 +135,13 @@ export default function AdminSettings() {
     password: "",
     role: "operator",
   });
+  const [isEditUserOpen, setIsEditUserOpen] = useState(false);
+  const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [editUserRole, setEditUserRole] = useState<User["role"]>("operator");
+  const [editUserStatus, setEditUserStatus] = useState<User["status"]>("active");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [isSavingUser, setIsSavingUser] = useState(false);
   const [isRefreshingCollectors, setIsRefreshingCollectors] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLogEntry[]>([]);
   const [auditEventType, setAuditEventType] = useState("");
@@ -140,20 +151,52 @@ export default function AdminSettings() {
   const [auditPage, setAuditPage] = useState(1);
   const [auditItemsPerPage, setAuditItemsPerPage] = useState(25);
 
+  const usersQuery = useQuery({
+    queryKey: ["users"],
+    queryFn: () => apiGet<UserResponse[]>("/users"),
+    onError: () => setErrorMessage("Unable to load admin configuration."),
+  });
+
+  const collectorsQuery = useQuery({
+    queryKey: ["collectors"],
+    queryFn: () => apiGet<CollectorResponse[]>("/collectors"),
+    onError: () => setErrorMessage("Unable to load admin configuration."),
+  });
+
+  const settingsQuery = useQuery({
+    queryKey: ["system-settings"],
+    queryFn: () => apiGet<SystemSettingsResponse | null>("/settings"),
+    onError: () => setErrorMessage("Unable to load admin configuration."),
+  });
+
+  useEffect(() => {
+    if (usersQuery.data) {
+      setUsers(usersQuery.data.map(mapUser));
+      setErrorMessage(null);
+    }
+  }, [usersQuery.data]);
+
+  useEffect(() => {
+    if (collectorsQuery.data) {
+      setCollectors(collectorsQuery.data.map(mapCollector));
+      setErrorMessage(null);
+    }
+  }, [collectorsQuery.data]);
+
+  useEffect(() => {
+    if (settingsQuery.data) {
+      setSystemSettings(settingsQuery.data);
+      setErrorMessage(null);
+    }
+  }, [settingsQuery.data]);
+
   const loadAdminData = async () => {
     setErrorMessage(null);
-    try {
-      const [usersData, collectorsData, settingsData] = await Promise.all([
-        apiGet<UserResponse[]>("/users"),
-        apiGet<CollectorResponse[]>("/collectors"),
-        apiGet<SystemSettingsResponse | null>("/settings"),
-      ]);
-      setUsers(usersData.map(mapUser));
-      setCollectors(collectorsData.map(mapCollector));
-      setSystemSettings(settingsData);
-    } catch {
-      setErrorMessage("Unable to load admin configuration.");
-    }
+    await Promise.all([
+      usersQuery.refetch(),
+      collectorsQuery.refetch(),
+      settingsQuery.refetch(),
+    ]);
   };
 
   const loadAuditLogs = async () => {
@@ -280,6 +323,48 @@ export default function AdminSettings() {
     }
   };
 
+  const openEditUserDialog = (user: User) => {
+    setErrorMessage(null);
+    setEditingUser(user);
+    setEditUserRole(user.role);
+    setEditUserStatus(user.status);
+    setIsEditUserOpen(true);
+  };
+
+  const handleAddUserDialogChange = (open: boolean) => {
+    setShowAddUser(open);
+    if (open) {
+      setErrorMessage(null);
+    }
+  };
+
+  const handleEditDialogChange = (open: boolean) => {
+    setIsEditUserOpen(open);
+    if (!open) {
+      setEditingUser(null);
+    }
+  };
+
+  const handleSaveUser = async () => {
+    if (!editingUser) return;
+    setIsSavingUser(true);
+    setErrorMessage(null);
+    try {
+      const updated = await apiPatch<UserResponse>(`/users/${editingUser.id}`, {
+        role: editUserRole,
+        status: editUserStatus,
+      });
+      const mapped = mapUser(updated);
+      setUsers(users.map((user) => (user.id === mapped.id ? mapped : user)));
+      setIsEditUserOpen(false);
+      setEditingUser(null);
+    } catch {
+      setErrorMessage("Unable to update user.");
+    } finally {
+      setIsSavingUser(false);
+    }
+  };
+
   const tabs: { id: TabType; label: string; icon: React.ReactNode }[] = [
     { id: "users", label: "USER MANAGEMENT", icon: <Users className="w-4 h-4" /> },
     { id: "collectors", label: "COLLECTORS", icon: <Server className="w-4 h-4" /> },
@@ -352,76 +437,12 @@ export default function AdminSettings() {
                   </h2>
                   <Button
                     variant="tactical"
-                    onClick={() => setShowAddUser(true)}
+                    onClick={() => handleAddUserDialogChange(true)}
                   >
                     <UserPlus className="w-4 h-4 mr-2" />
                     ADD USER
                   </Button>
                 </div>
-
-                {/* Add User Form */}
-                {showAddUser && (
-                  <TacticalPanel title="ADD NEW USER" status="active">
-                    <div className="flex items-end gap-4">
-                      <div className="flex-1 space-y-2">
-                        <FormLabel className="text-muted-foreground uppercase">
-                          Username
-                        </FormLabel>
-                        <Input
-                          value={newUser.username}
-                          onChange={(e) =>
-                            setNewUser({ ...newUser, username: e.target.value })
-                          }
-                          placeholder="Enter username"
-                        />
-                      </div>
-                      <div className="flex-1 space-y-2">
-                        <FormLabel className="text-muted-foreground uppercase">
-                          Password
-                        </FormLabel>
-                        <Input
-                          type="password"
-                          value={newUser.password}
-                          onChange={(e) =>
-                            setNewUser({ ...newUser, password: e.target.value })
-                          }
-                          placeholder="Enter password"
-                        />
-                      </div>
-                      <div className="w-48 space-y-2">
-                        <FormLabel className="text-muted-foreground uppercase">
-                          Role
-                        </FormLabel>
-                        <div className="flex gap-2">
-                          {(["operator", "viewer", "admin"] as const).map((role) => (
-                            <button
-                              key={role}
-                              onClick={() => setNewUser({ ...newUser, role })}
-                              className={`flex-1 p-2 border font-mono text-xs uppercase transition-all ${
-                                newUser.role === role
-                                  ? getRoleColor(role)
-                                  : "border-border bg-secondary text-muted-foreground"
-                              }`}
-                            >
-                              {role}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-                      <Button variant="tactical" onClick={handleAddUser}>
-                        <Save className="w-4 h-4 mr-2" />
-                        SAVE
-                      </Button>
-                      <Button
-                        variant="secondary"
-                        onClick={() => setShowAddUser(false)}
-                      >
-                        <X className="w-4 h-4 mr-2" />
-                        CANCEL
-                      </Button>
-                    </div>
-                  </TacticalPanel>
-                )}
 
                 {/* Users Table */}
                 <TacticalPanel title="USER ACCOUNTS" className="flex flex-col">
@@ -436,62 +457,73 @@ export default function AdminSettings() {
                     </TableHeaderRow>
 
                     {/* Rows */}
-                    {paginatedUsers.map((user) => (
-                      <div
-                        key={user.id}
-                        className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors items-center"
-                      >
-                        <div className="col-span-3 font-mono text-sm font-bold">
-                          {user.username}
-                        </div>
-                        <div className="col-span-2">
-                          <span
-                            className={`px-2 py-1 font-mono text-xs uppercase border ${getRoleColor(
-                              user.role
-                            )}`}
-                          >
-                            {user.role}
-                          </span>
-                        </div>
-                        <div className="col-span-2">
-                          {getStatusIndicator(user.status)}
-                        </div>
-                        <div className="col-span-2 font-mono text-xs text-muted-foreground">
-                          {user.lastLogin === "-"
-                            ? "-"
-                            : new Date(user.lastLogin).toLocaleDateString()}
-                        </div>
-                        <div className="col-span-3 flex items-center gap-2">
-                          <Button variant="ghost" size="sm" title="Edit User">
-                            <Edit2 className="w-3 h-3" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleToggleUserStatus(user.id)}
-                            title={user.status === "active" ? "Lock User" : "Unlock User"}
-                          >
-                            <Power
-                              className={`w-3 h-3 ${
-                                user.status === "active"
-                                  ? "text-primary"
-                                  : "text-warning"
-                              }`}
-                            />
-                          </Button>
-                          {user.role !== "admin" && (
+                    {paginatedUsers.length === 0 ? (
+                      <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">
+                        No users available.
+                      </div>
+                    ) : (
+                      paginatedUsers.map((user) => (
+                        <div
+                          key={user.id}
+                          className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors items-center"
+                        >
+                          <div className="col-span-3 font-mono text-sm font-bold">
+                            {user.username}
+                          </div>
+                          <div className="col-span-2">
+                            <span
+                              className={`px-2 py-1 font-mono text-xs uppercase border ${getRoleColor(
+                                user.role
+                              )}`}
+                            >
+                              {user.role}
+                            </span>
+                          </div>
+                          <div className="col-span-2">
+                            {getStatusIndicator(user.status)}
+                          </div>
+                          <div className="col-span-2 font-mono text-xs text-muted-foreground">
+                            {user.lastLogin === "-"
+                              ? "-"
+                              : new Date(user.lastLogin).toLocaleDateString()}
+                          </div>
+                          <div className="col-span-3 flex items-center gap-2">
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleDeleteUser(user.id)}
-                              title="Delete User"
+                              title="Edit User"
+                              onClick={() => openEditUserDialog(user)}
                             >
-                              <Trash2 className="w-3 h-3 text-destructive" />
+                              <Edit2 className="w-3 h-3" />
                             </Button>
-                          )}
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleToggleUserStatus(user.id)}
+                              title={user.status === "active" ? "Lock User" : "Unlock User"}
+                            >
+                              <Power
+                                className={`w-3 h-3 ${
+                                  user.status === "active"
+                                    ? "text-primary"
+                                    : "text-warning"
+                                }`}
+                              />
+                            </Button>
+                            {user.role !== "admin" && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDeleteUser(user.id)}
+                                title="Delete User"
+                              >
+                                <Trash2 className="w-3 h-3 text-destructive" />
+                              </Button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                   <TablePagination
                     currentPage={currentPage}
@@ -627,10 +659,13 @@ export default function AdminSettings() {
                         <FormLabel className="text-muted-foreground uppercase">
                           Hash Algorithm
                         </FormLabel>
-                         <Input
+                        <Input
                           defaultValue={systemSettings?.hash_algorithm ?? "SHA-256"}
                           disabled
                         />
+                        <p className="font-mono text-xs text-muted-foreground">
+                          Locked to safe defaults.
+                        </p>
 
                       </div>
                     </div>
@@ -774,6 +809,9 @@ export default function AdminSettings() {
                           defaultValue={systemSettings?.export_format ?? "JSON"}
                           disabled
                         />
+                        <p className="font-mono text-xs text-muted-foreground">
+                          Locked to safe defaults.
+                        </p>
                       </div>
                     </div>
                   </TacticalPanel>
@@ -790,6 +828,7 @@ export default function AdminSettings() {
                         try {
                           const updated = await apiPut<SystemSettingsResponse>("/settings", systemSettings);
                           setSystemSettings(updated);
+                          await loadAdminData();
                         } catch {
                           setErrorMessage("Unable to save system settings.");
                         } finally {
@@ -921,6 +960,144 @@ export default function AdminSettings() {
           </div>
         </div>
       </div>
+      <Dialog open={showAddUser} onOpenChange={handleAddUserDialogChange}>
+        <DialogContent className="max-w-xl bg-card border-border">
+          <DialogHeader>
+            <DialogTitle className="font-mono text-lg tracking-wider">ADD USER</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-5">
+            <div className="space-y-2">
+              <FormLabel className="text-muted-foreground uppercase">Username</FormLabel>
+              <Input
+                value={newUser.username}
+                onChange={(event) =>
+                  setNewUser({ ...newUser, username: event.target.value })
+                }
+                placeholder="Enter username"
+              />
+            </div>
+            <div className="space-y-2">
+              <FormLabel className="text-muted-foreground uppercase">Password</FormLabel>
+              <Input
+                type="password"
+                value={newUser.password}
+                onChange={(event) =>
+                  setNewUser({ ...newUser, password: event.target.value })
+                }
+                placeholder="Enter password"
+              />
+            </div>
+            <div className="space-y-2">
+              <FormLabel className="text-muted-foreground uppercase">Role</FormLabel>
+              <div className="flex gap-2">
+                {(["operator", "viewer", "admin"] as const).map((role) => (
+                  <SelectableButton
+                    key={role}
+                    isActive={newUser.role === role}
+                    onClick={() => setNewUser({ ...newUser, role })}
+                    className="flex-1 p-2"
+                    activeClassName={getRoleColor(role)}
+                    inactiveClassName="border-border bg-secondary text-muted-foreground"
+                  >
+                    {role}
+                  </SelectableButton>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-3 pt-4 border-t border-border">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => handleAddUserDialogChange(false)}
+              >
+                CANCEL
+              </Button>
+              <Button
+                variant="tactical"
+                className="flex-1"
+                onClick={handleAddUser}
+              >
+                SAVE USER
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={isEditUserOpen} onOpenChange={handleEditDialogChange}>
+        <DialogContent className="max-w-xl bg-card border-border">
+          <DialogHeader>
+            <DialogTitle className="font-mono text-lg tracking-wider">EDIT USER</DialogTitle>
+          </DialogHeader>
+          {editingUser && (
+            <div className="space-y-5">
+              <div className="space-y-2">
+                <FormLabel className="text-muted-foreground uppercase">
+                  Username
+                </FormLabel>
+                <Input value={editingUser.username} disabled />
+              </div>
+              <div className="space-y-2">
+                <FormLabel className="text-muted-foreground uppercase">
+                  Role
+                </FormLabel>
+                <div className="flex gap-2">
+                  {(["operator", "viewer", "admin"] as const).map((role) => (
+                    <button
+                      key={role}
+                      onClick={() => setEditUserRole(role)}
+                      className={`flex-1 p-2 border font-mono text-xs uppercase transition-all ${
+                        editUserRole === role
+                          ? getRoleColor(role)
+                          : "border-border bg-secondary text-muted-foreground"
+                      }`}
+                    >
+                      {role}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <FormLabel className="text-muted-foreground uppercase">
+                  Status
+                </FormLabel>
+                <div className="flex gap-2">
+                  {(["active", "inactive", "locked"] as const).map((status) => (
+                    <button
+                      key={status}
+                      onClick={() => setEditUserStatus(status)}
+                      className={`flex-1 p-2 border font-mono text-xs uppercase transition-all ${
+                        editUserStatus === status
+                          ? "border-primary/30 bg-primary/10 text-primary"
+                          : "border-border bg-secondary text-muted-foreground"
+                      }`}
+                    >
+                      {status}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex gap-3 pt-4 border-t border-border">
+                <Button
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => handleEditDialogChange(false)}
+                  disabled={isSavingUser}
+                >
+                  CANCEL
+                </Button>
+                <Button
+                  variant="tactical"
+                  className="flex-1"
+                  onClick={handleSaveUser}
+                  disabled={isSavingUser}
+                >
+                  {isSavingUser ? "SAVING" : "SAVE CHANGES"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </AppLayout>
   );
 }

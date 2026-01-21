@@ -1,4 +1,5 @@
 from datetime import datetime
+import shutil
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import func, select, text
@@ -8,6 +9,7 @@ from app.core.config import settings
 from app.core.deps import get_db
 from app.models.collector import Collector
 from app.schemas.status import DiagnosticsResponse
+from app.services.system_settings_service import get_runtime_settings
 
 router = APIRouter()
 
@@ -34,6 +36,24 @@ async def get_diagnostics(request: Request, db: AsyncSession = Depends(get_db)) 
         collectors_total = 0
         collectors_online = 0
 
+    storage_total_bytes = None
+    storage_used_bytes = None
+    storage_free_bytes = None
+    storage_used_percent = None
+    try:
+        runtime_settings = await get_runtime_settings(db)
+        usage = shutil.disk_usage(runtime_settings.evidence_storage_path)
+        storage_total_bytes = usage.total
+        storage_used_bytes = usage.used
+        storage_free_bytes = usage.free
+        if usage.total > 0:
+            storage_used_percent = (usage.used / usage.total) * 100
+    except Exception:
+        storage_total_bytes = None
+        storage_used_bytes = None
+        storage_free_bytes = None
+        storage_used_percent = None
+
     return DiagnosticsResponse(
         db_status=db_status,
         server_time=datetime.utcnow(),
@@ -41,4 +61,8 @@ async def get_diagnostics(request: Request, db: AsyncSession = Depends(get_db)) 
         client_ip=client_ip,
         collectors_online=collectors_online,
         collectors_total=collectors_total,
+        storage_total_bytes=storage_total_bytes,
+        storage_used_bytes=storage_used_bytes,
+        storage_free_bytes=storage_free_bytes,
+        storage_used_percent=storage_used_percent,
     )

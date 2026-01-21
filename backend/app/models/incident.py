@@ -14,6 +14,7 @@ class Incident(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True)
     type: Mapped[str] = mapped_column(String, index=True)
     status: Mapped[str] = mapped_column(String, index=True)
+    template_id: Mapped[str | None] = mapped_column(String, nullable=True)
     target_endpoints: Mapped[List[str]] = mapped_column(ARRAY(String))
     operator: Mapped[str] = mapped_column(String)
     collection_progress: Mapped[int] = mapped_column(default=0)

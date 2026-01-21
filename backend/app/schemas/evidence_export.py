@@ -10,3 +10,4 @@ class EvidenceExportResponse(BaseModel):
     download_url: str
     signature: str | None = None
     status: str = "ready"
+    format: str | None = None

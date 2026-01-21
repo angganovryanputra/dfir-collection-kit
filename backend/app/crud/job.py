@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.job import Job
@@ -55,3 +55,12 @@ async def update_job_status(db: AsyncSession, job_id: str, status: str, message:
         job.message = message
     await db.flush()
     return job
+
+
+async def count_active_jobs(db: AsyncSession) -> int:
+    result = await db.execute(
+        select(func.count()).select_from(Job).where(
+            Job.status.not_in(["complete", "failed", "cancelled"])
+        )
+    )
+    return int(result.scalar_one())

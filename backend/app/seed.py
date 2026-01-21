@@ -26,14 +26,45 @@ def parse_dt(value: str) -> datetime:
 
 
 async def seed_data(session: AsyncSession) -> None:
-    default_password = os.getenv("DFIR_SEED_PASSWORD")
-    if not default_password:
-        default_password = secrets.token_urlsafe(16)
-    password_hash = get_password_hash(default_password)
-    if not os.getenv("DFIR_SEED_PASSWORD"):
-        print(f"Seed password: {default_password}")
+    demo_password = os.getenv("DFIR_SEED_PASSWORD")
+    if not demo_password:
+        demo_password = secrets.token_urlsafe(16)
+    demo_password_hash = get_password_hash(demo_password)
+    admin_password = os.getenv("DFIR_DEFAULT_ADMIN_PASSWORD", "admin123!")
+    operator_password = os.getenv("DFIR_DEFAULT_OPERATOR_PASSWORD", "operator123!")
+    viewer_password = os.getenv("DFIR_DEFAULT_VIEWER_PASSWORD", "viewer123!")
+    admin_password_hash = get_password_hash(admin_password)
+    operator_password_hash = get_password_hash(operator_password)
+    viewer_password_hash = get_password_hash(viewer_password)
 
     users = [
+        User(
+            id="seed-admin",
+            username="admin",
+            role="admin",
+            status="active",
+            last_login="-",
+            created_at=datetime.utcnow().isoformat() + "Z",
+            password_hash=admin_password_hash,
+        ),
+        User(
+            id="seed-operator",
+            username="operator1",
+            role="operator",
+            status="active",
+            last_login="-",
+            created_at=datetime.utcnow().isoformat() + "Z",
+            password_hash=operator_password_hash,
+        ),
+        User(
+            id="seed-viewer",
+            username="viewer1",
+            role="viewer",
+            status="active",
+            last_login="-",
+            created_at=datetime.utcnow().isoformat() + "Z",
+            password_hash=viewer_password_hash,
+        ),
         User(
             id="1",
             username="J.SMITH",
@@ -41,7 +72,7 @@ async def seed_data(session: AsyncSession) -> None:
             status="active",
             last_login="2025-01-09T10:30:00Z",
             created_at="2024-06-15T08:00:00Z",
-            password_hash=password_hash,
+            password_hash=demo_password_hash,
         ),
         User(
             id="2",
@@ -50,7 +81,7 @@ async def seed_data(session: AsyncSession) -> None:
             status="active",
             last_login="2025-01-08T16:45:00Z",
             created_at="2024-07-20T10:00:00Z",
-            password_hash=password_hash,
+            password_hash=demo_password_hash,
         ),
         User(
             id="3",
@@ -59,16 +90,7 @@ async def seed_data(session: AsyncSession) -> None:
             status="active",
             last_login="2025-01-09T09:00:00Z",
             created_at="2024-09-01T14:00:00Z",
-            password_hash=password_hash,
-        ),
-        User(
-            id="4",
-            username="ADMIN",
-            role="admin",
-            status="active",
-            last_login="2025-01-09T08:00:00Z",
-            created_at="2024-01-01T00:00:00Z",
-            password_hash=password_hash,
+            password_hash=demo_password_hash,
         ),
         User(
             id="5",
@@ -77,7 +99,7 @@ async def seed_data(session: AsyncSession) -> None:
             status="locked",
             last_login="2025-01-05T12:00:00Z",
             created_at="2024-08-10T09:00:00Z",
-            password_hash=password_hash,
+            password_hash=demo_password_hash,
         ),
     ]
 
@@ -317,7 +339,7 @@ async def seed_data(session: AsyncSession) -> None:
         session_timeout_min=15,
         max_failed_logins=5,
         log_retention_days=365,
-        export_format="JSON",
+        export_format="ZIP",
     )
 
     session.add_all(users)

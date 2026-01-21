@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -122,19 +123,18 @@ export default function IncidentTemplates() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const isViewer = isViewerRole(getStoredRole());
 
-  const loadTemplates = async () => {
-    setErrorMessage(null);
-    try {
-      const data = await apiGet<TemplateResponse[]>("/templates");
-      setTemplates(data.map(mapTemplate));
-    } catch {
-      setErrorMessage("Unable to load templates.");
-    }
-  };
+  const templatesQuery = useQuery({
+    queryKey: ["templates"],
+    queryFn: () => apiGet<TemplateResponse[]>("/templates"),
+    onError: () => setErrorMessage("Unable to load templates."),
+  });
 
   useEffect(() => {
-    loadTemplates();
-  }, []);
+    if (templatesQuery.data) {
+      setTemplates(templatesQuery.data.map(mapTemplate));
+      setErrorMessage(null);
+    }
+  }, [templatesQuery.data]);
 
   const pagination = usePagination(templates);
   const paginatedTemplates = pagination.paginatedItems;
@@ -229,7 +229,7 @@ export default function IncidentTemplates() {
           description: formData.description,
           preflightChecklist: sanitizeChecklist(formData.preflightChecklist),
         };
-        await apiPatch(`/templates/${updatedTemplate.id}`, {
+        const response = await apiPatch<TemplateResponse>(`/templates/${updatedTemplate.id}`, {
           name: updatedTemplate.name,
           incident_type: updatedTemplate.incidentType,
           default_endpoints: updatedTemplate.defaultEndpoints,
@@ -238,23 +238,18 @@ export default function IncidentTemplates() {
           created_by: updatedTemplate.createdBy,
           usage_count: updatedTemplate.usageCount,
         });
-        setTemplates((current) =>
-          current.map((t) => (t.id === editingTemplate.id ? updatedTemplate : t))
-        );
+        const mapped = mapTemplate(response);
+        setTemplates((current) => current.map((t) => (t.id === mapped.id ? mapped : t)));
       } else {
-        const newTemplate: IncidentTemplate = {
+        const response = await apiPost<TemplateResponse>("/templates", {
           id: `TPL-${String(templates.length + 1).padStart(3, "0")}`,
           name: formData.name.toUpperCase(),
-          incidentType: formData.incidentType!,
-          defaultEndpoints: formData.defaultEndpoints,
+          incident_type: formData.incidentType!,
+          default_endpoints: formData.defaultEndpoints,
           description: formData.description,
-          preflightChecklist: sanitizeChecklist(formData.preflightChecklist),
-          createdAt: new Date().toISOString(),
-          createdBy: "OPERATOR",
-          usageCount: 0,
-        };
-        await apiPost("/templates", toTemplatePayload(newTemplate));
-        setTemplates([...templates, newTemplate]);
+          preflight_checklist: sanitizeChecklist(formData.preflightChecklist),
+        });
+        setTemplates([...templates, mapTemplate(response)]);
       }
     } catch {
       setErrorMessage("Unable to save template.");
@@ -266,17 +261,16 @@ export default function IncidentTemplates() {
 
   const duplicateTemplate = async (template: IncidentTemplate) => {
     if (isViewer) return;
-    const duplicate: IncidentTemplate = {
-      ...template,
-      id: `TPL-${String(templates.length + 1).padStart(3, "0")}`,
-      name: `${template.name} (COPY)`,
-      preflightChecklist: sanitizeChecklist(template.preflightChecklist),
-      createdAt: new Date().toISOString(),
-      usageCount: 0,
-    };
     try {
-      await apiPost("/templates", toTemplatePayload(duplicate));
-      setTemplates([...templates, duplicate]);
+      const response = await apiPost<TemplateResponse>("/templates", {
+        id: `TPL-${String(templates.length + 1).padStart(3, "0")}`,
+        name: `${template.name} (COPY)`.toUpperCase(),
+        incident_type: template.incidentType,
+        default_endpoints: template.defaultEndpoints,
+        description: template.description,
+        preflight_checklist: sanitizeChecklist(template.preflightChecklist),
+      });
+      setTemplates([...templates, mapTemplate(response)]);
     } catch {
       setErrorMessage("Unable to duplicate template.");
     }
@@ -294,7 +288,17 @@ export default function IncidentTemplates() {
 
   const useTemplate = (template: IncidentTemplate) => {
     if (isViewer) return;
-    navigate("/incidents/create", { state: { template } });
+    apiPost<TemplateResponse>(`/templates/${template.id}/use`, {})
+      .then((response) => {
+        const mapped = mapTemplate(response);
+        setTemplates((current) => current.map((t) => (t.id === mapped.id ? mapped : t)));
+      })
+      .catch(() => {
+        setErrorMessage("Unable to update template usage.");
+      })
+      .finally(() => {
+        navigate("/incidents/create", { state: { template } });
+      });
   };
 
   const isFormValid = formData.name.trim() && formData.incidentType;
@@ -350,70 +354,80 @@ export default function IncidentTemplates() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {paginatedTemplates.map((template) => (
-                  <TableRow key={template.id}>
-                    <TableCell className="font-mono text-primary">
-                      {template.id}
-                    </TableCell>
-                    <TableCell className="font-mono font-medium">
-                      <div className="flex items-center gap-2">
-                        <FileText className="w-4 h-4 text-muted-foreground" />
-                        {template.name}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="px-2 py-1 bg-warning/10 border border-warning/30 text-warning font-mono text-xs">
-                        {template.incidentType.replace("_", " ")}
+                {paginatedTemplates.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={7} className="py-6 text-center">
+                      <span className="font-mono text-xs text-muted-foreground">
+                        No templates available.
                       </span>
                     </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {template.defaultEndpoints.length} TARGETS
-                    </TableCell>
-                    <TableCell className="font-mono text-sm text-muted-foreground">
-                      {template.createdBy}
-                    </TableCell>
-                    <TableCell className="font-mono text-sm">
-                      {template.usageCount}x
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => useTemplate(template)}
-                          disabled={isViewer}
-                        >
-                          USE
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => openEditDialog(template)}
-                          disabled={isViewer}
-                        >
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => duplicateTemplate(template)}
-                          disabled={isViewer}
-                        >
-                          <Copy className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => deleteTemplate(template.id)}
-                          disabled={isViewer}
-                          className="text-destructive hover:text-destructive"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </TableCell>
                   </TableRow>
-                ))}
+                ) : (
+                  paginatedTemplates.map((template) => (
+                    <TableRow key={template.id}>
+                      <TableCell className="font-mono text-primary">
+                        {template.id}
+                      </TableCell>
+                      <TableCell className="font-mono font-medium">
+                        <div className="flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-muted-foreground" />
+                          {template.name}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <span className="px-2 py-1 bg-warning/10 border border-warning/30 text-warning font-mono text-xs">
+                          {template.incidentType.replace("_", " ")}
+                        </span>
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">
+                        {template.defaultEndpoints.length} TARGETS
+                      </TableCell>
+                      <TableCell className="font-mono text-sm text-muted-foreground">
+                        {template.createdBy}
+                      </TableCell>
+                      <TableCell className="font-mono text-sm">
+                        {template.usageCount}x
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center justify-end gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => useTemplate(template)}
+                            disabled={isViewer}
+                          >
+                            USE
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => openEditDialog(template)}
+                            disabled={isViewer}
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => duplicateTemplate(template)}
+                            disabled={isViewer}
+                          >
+                            <Copy className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => deleteTemplate(template.id)}
+                            disabled={isViewer}
+                            className="text-destructive hover:text-destructive"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
               </TableBody>
             </Table>
           </div>

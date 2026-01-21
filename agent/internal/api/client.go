@@ -163,6 +163,8 @@ type JobInstruction struct {
 	OS         string         `json:"os,omitempty"`
 	WorkDir    string         `json:"work_dir,omitempty"`
 	Modules    []JobModule     `json:"modules"`
+	CollectionTimeoutMin int  `json:"collection_timeout_min,omitempty"`
+	RetryAttempts        int  `json:"retry_attempts,omitempty"`
 }
 
 type JobStatusResponse struct {

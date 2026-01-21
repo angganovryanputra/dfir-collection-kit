@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -21,6 +22,7 @@ interface IncidentResponse {
   id: string;
   type: Incident["type"];
   status: Incident["status"];
+  template_id?: string | null;
   target_endpoints: string[];
   operator: string;
   created_at: string;
@@ -32,6 +34,18 @@ interface CollectorResponse {
   name: string;
   status: string;
   last_heartbeat: string;
+}
+
+interface EvidenceFolderResponse {
+  id: string;
+  incident_id: string;
+  files_count: number;
+  total_size: string;
+  status: string;
+}
+
+interface DiagnosticsResponse {
+  storage_used_percent: number | null;
 }
 
 const normalizeCollectorStatus = (status: string): Collector["status"] => {
@@ -46,6 +60,7 @@ const mapIncident = (incident: IncidentResponse): Incident => ({
   id: incident.id,
   type: incident.type,
   status: incident.status,
+  templateId: incident.template_id ?? null,
   targetEndpoints: incident.target_endpoints,
   operator: incident.operator,
   createdAt: incident.created_at,
@@ -63,23 +78,55 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [collectors, setCollectors] = useState<Collector[]>([]);
+  const [evidenceFolders, setEvidenceFolders] = useState<EvidenceFolderResponse[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const incidentsQuery = useQuery<IncidentResponse[]>({
+    queryKey: ["incidents"],
+    queryFn: () => apiGet<IncidentResponse[]>("/incidents"),
+  });
+
+  const collectorsQuery = useQuery<CollectorResponse[]>({
+    queryKey: ["collectors"],
+    queryFn: () => apiGet<CollectorResponse[]>("/collectors"),
+  });
+
+  const evidenceQuery = useQuery<EvidenceFolderResponse[]>({
+    queryKey: ["evidence-folders"],
+    queryFn: () => apiGet<EvidenceFolderResponse[]>("/evidence/folders"),
+  });
+
+  const diagnosticsQuery = useQuery<DiagnosticsResponse>({
+    queryKey: ["diagnostics"],
+    queryFn: () => apiGet<DiagnosticsResponse>("/status/diagnostics"),
+  });
+
   useEffect(() => {
-    const load = async () => {
-      try {
-        const [incidentsData, collectorsData] = await Promise.all([
-          apiGet<IncidentResponse[]>("/incidents"),
-          apiGet<CollectorResponse[]>("/collectors"),
-        ]);
-        setIncidents(incidentsData.map(mapIncident));
-        setCollectors(collectorsData.map(mapCollector));
-      } catch {
-        setErrorMessage("Unable to load dashboard data.");
-      }
-    };
-    load();
-  }, []);
+    if (incidentsQuery.error || collectorsQuery.error || evidenceQuery.error) {
+      setErrorMessage("Unable to load dashboard data.");
+    }
+  }, [incidentsQuery.error, collectorsQuery.error, evidenceQuery.error]);
+
+  useEffect(() => {
+    if (incidentsQuery.data) {
+      setIncidents(incidentsQuery.data.map(mapIncident));
+      setErrorMessage(null);
+    }
+  }, [incidentsQuery.data]);
+
+  useEffect(() => {
+    if (collectorsQuery.data) {
+      setCollectors(collectorsQuery.data.map(mapCollector));
+      setErrorMessage(null);
+    }
+  }, [collectorsQuery.data]);
+
+  useEffect(() => {
+    if (evidenceQuery.data) {
+      setEvidenceFolders(evidenceQuery.data);
+      setErrorMessage(null);
+    }
+  }, [evidenceQuery.data]);
 
 
   const {
@@ -95,6 +142,18 @@ export default function Dashboard() {
   const activeIncidents = incidents.filter((i) => i.status !== "CLOSED").length;
   const onlineCollectors = collectors.filter((c) => c.status !== "OFFLINE").length;
   const hasActiveCollection = incidents.some((i) => i.status === "COLLECTION_IN_PROGRESS");
+  const totalEvidenceFiles = evidenceFolders.reduce((total, folder) => total + folder.files_count, 0);
+  const offlineCollectors = collectors.filter((c) => c.status === "OFFLINE").length;
+  const storageUsedPercent = diagnosticsQuery.data?.storage_used_percent ?? null;
+  const hasStorageWarning = storageUsedPercent !== null && storageUsedPercent >= 75;
+  const systemAlerts = offlineCollectors + (hasStorageWarning ? 1 : 0);
+  const offlineCollector = collectors.find((collector) => collector.status === "OFFLINE");
+  const formattedStoragePercent = storageUsedPercent !== null
+    ? `${Math.round(storageUsedPercent)}%`
+    : "--";
+  const offlineCollectorLastSeen = offlineCollector
+    ? new Date(offlineCollector.lastSeen).toLocaleString()
+    : "";
 
   const getIncidentStatusIndicator = (status: Incident["status"]) => {
     switch (status) {
@@ -160,26 +219,26 @@ export default function Dashboard() {
             valueClassName="text-primary"
             label="Collectors Online"
           />
-          <StatCard
-            icon={(
-              <div className="w-5 h-5 flex items-center justify-center font-mono text-xs text-primary">
-                TB
-              </div>
-            )}
-            value="2.4"
-            valueClassName="text-primary"
-            label="Evidence Stored"
-          />
-          <StatCard
+            <StatCard
+              icon={(
+                <div className="w-5 h-5 flex items-center justify-center font-mono text-xs text-primary">
+                  TB
+                </div>
+              )}
+              value={String(totalEvidenceFiles)}
+              valueClassName="text-primary"
+              label="Evidence Files"
+            />
+            <StatCard
             icon={(
               <div className="w-5 h-5 flex items-center justify-center font-mono text-xs text-warning">
                 !
               </div>
             )}
-            value="2"
-            valueClassName="text-warning"
-            label="System Alerts"
-          />
+              value={String(systemAlerts)}
+              valueClassName="text-warning"
+              label="System Alerts"
+            />
         </div>
 
         <div className="grid grid-cols-12 gap-6">
@@ -195,39 +254,45 @@ export default function Dashboard() {
               }
             >
               <div className="space-y-3">
-                {paginatedIncidents.map((incident) => (
-                  <div
-                    key={incident.id}
-                    className="border border-border bg-secondary/30 p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all cursor-pointer group"
-                    onClick={() => handleIncidentClick(incident)}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-2">
-                        <div className="flex items-center gap-3">
-                          <span className="font-mono text-sm font-bold text-foreground">
-                            {incident.id}
-                          </span>
-                          <span className="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary border border-primary/30">
-                            {incident.type.replace("_", " ")}
-                          </span>
+                {paginatedIncidents.length === 0 ? (
+                  <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">
+                    No incidents available.
+                  </div>
+                ) : (
+                  paginatedIncidents.map((incident) => (
+                    <div
+                      key={incident.id}
+                      className="border border-border bg-secondary/30 p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all cursor-pointer group"
+                      onClick={() => handleIncidentClick(incident)}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-3">
+                            <span className="font-mono text-sm font-bold text-foreground">
+                              {incident.id}
+                            </span>
+                            <span className="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary border border-primary/30">
+                              {incident.type.replace("_", " ")}
+                            </span>
+                          </div>
+                          <div className="font-mono text-xs text-muted-foreground space-y-1">
+                            <div>TARGETS: {incident.targetEndpoints.join(", ")}</div>
+                            <div>OPERATOR: {incident.operator}</div>
+                          </div>
                         </div>
-                        <div className="font-mono text-xs text-muted-foreground space-y-1">
-                          <div>TARGETS: {incident.targetEndpoints.join(", ")}</div>
-                          <div>OPERATOR: {incident.operator}</div>
+                        <div className="text-right space-y-2">
+                          {getIncidentStatusIndicator(incident.status)}
+                          <div className="font-mono text-xs text-muted-foreground">
+                            {new Date(incident.updatedAt).toLocaleTimeString()}
+                          </div>
+                          {incident.status === "COLLECTION_IN_PROGRESS" && (
+                            <ArrowUpRight className="w-4 h-4 text-primary opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
+                          )}
                         </div>
-                      </div>
-                      <div className="text-right space-y-2">
-                        {getIncidentStatusIndicator(incident.status)}
-                        <div className="font-mono text-xs text-muted-foreground">
-                          {new Date(incident.updatedAt).toLocaleTimeString()}
-                        </div>
-                        {incident.status === "COLLECTION_IN_PROGRESS" && (
-                          <ArrowUpRight className="w-4 h-4 text-primary opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
-                        )}
                       </div>
                     </div>
-                  </div>
-                ))}
+                  ))
+                )}
               </div>
               <TablePagination
                 currentPage={currentPage}
@@ -264,26 +329,38 @@ export default function Dashboard() {
             </TacticalPanel>
 
             {/* System Alerts */}
-            <TacticalPanel title="SYSTEM ALERTS" status="warning">
+            <TacticalPanel title="SYSTEM ALERTS" status={systemAlerts > 0 ? "warning" : "online"}>
               <div className="space-y-3">
-                <div className="flex items-start gap-3 p-3 bg-warning/5 border border-warning/20">
-                  <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
-                  <div className="font-mono text-xs space-y-1">
-                    <div className="text-warning font-bold">STORAGE WARNING</div>
-                    <div className="text-muted-foreground">
-                      Evidence vault at 78% capacity
-                    </div>
+                {systemAlerts === 0 ? (
+                  <div className="p-3 text-center font-mono text-xs text-muted-foreground">
+                    No active alerts.
                   </div>
-                </div>
-                <div className="flex items-start gap-3 p-3 bg-destructive/5 border border-destructive/20">
-                  <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
-                  <div className="font-mono text-xs space-y-1">
-                    <div className="text-destructive font-bold">COLLECTOR OFFLINE</div>
-                    <div className="text-muted-foreground">
-                      COLLECTOR-DELTA last seen 2h ago
-                    </div>
-                  </div>
-                </div>
+                ) : (
+                  <>
+                    {hasStorageWarning && (
+                      <div className="flex items-start gap-3 p-3 bg-warning/5 border border-warning/20">
+                        <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+                        <div className="font-mono text-xs space-y-1">
+                          <div className="text-warning font-bold">STORAGE WARNING</div>
+                          <div className="text-muted-foreground">
+                            Evidence vault at {formattedStoragePercent} capacity
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {offlineCollector && (
+                      <div className="flex items-start gap-3 p-3 bg-destructive/5 border border-destructive/20">
+                        <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                        <div className="font-mono text-xs space-y-1">
+                          <div className="text-destructive font-bold">COLLECTOR OFFLINE</div>
+                          <div className="text-muted-foreground">
+                            {offlineCollector.name} last seen {offlineCollectorLastSeen}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
             </TacticalPanel>
           </div>

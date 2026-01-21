@@ -53,19 +53,35 @@ def extract_zip(zip_path: Path, output_dir: Path) -> list[Path]:
     return extracted
 
 
-def hash_file(path: Path) -> str:
-    hasher = hashlib.sha256()
+def _normalize_algorithm(value: str | None) -> str:
+    if not value:
+        return "sha256"
+    normalized = value.strip().lower().replace("-", "")
+    if normalized in {"sha256", "sha-256"}:
+        return "sha256"
+    if normalized in {"sha1", "sha-1"}:
+        return "sha1"
+    return "sha256"
+
+
+def hash_file(path: Path, algorithm: str | None = None) -> str:
+    hasher = hashlib.new(_normalize_algorithm(algorithm))
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             hasher.update(chunk)
     return hasher.hexdigest()
 
 
-def write_hash_manifest(files: list[Path], manifest_path: Path, base_dir: Path) -> None:
+def write_hash_manifest(
+    files: list[Path],
+    manifest_path: Path,
+    base_dir: Path,
+    algorithm: str | None = None,
+) -> None:
     ensure_directory(manifest_path.parent)
     with manifest_path.open("w", encoding="utf-8") as handle:
         for file_path in files:
-            digest = hash_file(file_path)
+            digest = hash_file(file_path, algorithm)
             rel = str(file_path.relative_to(base_dir))
             handle.write(f"{digest}  {rel}\n")
 

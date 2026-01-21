@@ -66,7 +66,7 @@ async def record_event(
         target_id=target_id,
         status=status,
         message=message,
-        metadata=metadata,
+        event_metadata=metadata,
         previous_hash=previous_hash,
         entry_hash=entry_hash,
     )

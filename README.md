@@ -129,15 +129,29 @@ This will:
 - **Backend API**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
 
-### Default Credentials
+### Quick Start for Local/Community Use
 
-The system is seeded with a default admin user:
+When you run `docker compose up --build`, the backend seeds the default users automatically.
+For manual/local seeding, run:
 
-- **Username**: `ADMIN`
-- **Password**: set via `DFIR_SEED_PASSWORD` (if not set, the seed prints a generated password once)
-- **Role**: Admin
+```bash
+python scripts/bootstrap/seed-default-users.py
+```
 
-**⚠️ IMPORTANT**: Set `DFIR_SEED_PASSWORD` before seeding for public deployments.
+### Default Users & Roles (Dev/Demo Only)
+
+These accounts are intended for local development, demos, and community evaluation.
+Do NOT use these default passwords in production.
+
+- **Admin**
+  - Username: `admin`
+  - Password: `admin123!` (override with `DFIR_DEFAULT_ADMIN_PASSWORD`)
+- **Operator**
+  - Username: `operator1`
+  - Password: `operator123!` (override with `DFIR_DEFAULT_OPERATOR_PASSWORD`)
+- **Viewer**
+  - Username: `viewer1`
+  - Password: `viewer123!` (override with `DFIR_DEFAULT_VIEWER_PASSWORD`)
 
 ## Security Notes
 
