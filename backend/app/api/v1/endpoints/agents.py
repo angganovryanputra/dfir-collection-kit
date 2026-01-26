@@ -148,7 +148,10 @@ async def create_job_for_agent(
     if not device and not payload.module_ids:
         raise HTTPException(status_code=400, detail="module_ids required when agent is unknown")
     runtime_settings = await get_runtime_settings(db)
-    modules = build_modules(payload.module_ids, device.os if device else None)
+    try:
+        modules = build_modules(payload.module_ids, device.os if device else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     output_path = str(Path(runtime_settings.evidence_storage_path) / payload.incident_id / payload.id)
     job = await create_job(db, payload, modules, output_path)
     await safe_record_event(

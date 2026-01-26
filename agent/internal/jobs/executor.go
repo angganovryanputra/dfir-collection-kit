@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/dfir/agent/internal/api"
@@ -109,6 +110,25 @@ func (e *Executor) Run(
 	// Initialize modules
 	if err := modules.Init(); err != nil {
 		return fmt.Errorf("failed to initialize modules: %w", err)
+	}
+
+	missingModules := []string{}
+	for _, module := range moduleList {
+		if !modules.HasModule(module.ModuleID) {
+			missingModules = append(missingModules, module.ModuleID)
+		}
+	}
+	if len(missingModules) > 0 {
+		message := fmt.Sprintf("Unsupported modules: %s", strings.Join(missingModules, ", "))
+		logJob.Error(message)
+		if e.apiClient != nil {
+			_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+				Status:  "failed",
+				Message: message,
+				LogTail: []string{message},
+			})
+		}
+		return fmt.Errorf(message)
 	}
 
 	// Report job started

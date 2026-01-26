@@ -34,6 +34,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
+import { getStoredRole } from "@/lib/auth";
 
 interface Device {
   id: string;
@@ -65,6 +66,23 @@ interface DeviceResponse {
   registered_at: string;
 }
 
+const normalizeDeviceStatus = (status: string | null | undefined): Device["status"] => {
+  const normalized = (status ?? "").trim().toLowerCase();
+  if (normalized === "online") return "online";
+  if (normalized === "offline") return "offline";
+  if (normalized === "degraded") return "degraded";
+  return "pending";
+};
+
+const normalizeCollectionStatus = (
+  status: string | null | undefined
+): Device["collectionStatus"] => {
+  const normalized = (status ?? "").trim().toLowerCase();
+  if (normalized === "collecting") return "collecting";
+  if (normalized === "queued") return "queued";
+  return "idle";
+};
+
 const mapDevice = (device: DeviceResponse): Device => ({
   id: device.id,
   hostname: device.hostname,
@@ -72,11 +90,11 @@ const mapDevice = (device: DeviceResponse): Device => ({
   type: device.type,
   os: device.os,
   agentVersion: device.agent_version,
-  status: device.status,
+  status: normalizeDeviceStatus(device.status),
   lastSeen: device.last_seen,
   cpuUsage: device.cpu_usage ?? undefined,
   memoryUsage: device.memory_usage ?? undefined,
-  collectionStatus: device.collection_status,
+  collectionStatus: normalizeCollectionStatus(device.collection_status),
   registeredAt: device.registered_at,
 });
 
@@ -101,12 +119,18 @@ export default function Devices() {
     status: "online" as Device["status"],
     collectionStatus: "idle" as Device["collectionStatus"],
   });
+  const isAdmin = getStoredRole() === "admin";
 
-  const devicesQuery = useQuery({
+  const devicesQuery = useQuery<DeviceResponse[]>({
     queryKey: ["devices"],
     queryFn: () => apiGet<DeviceResponse[]>("/devices"),
-    onError: () => setErrorMessage("Unable to load devices."),
   });
+
+  useEffect(() => {
+    if (devicesQuery.error) {
+      setErrorMessage("Unable to load devices.");
+    }
+  }, [devicesQuery.error]);
 
   useEffect(() => {
     if (devicesQuery.data) {
@@ -116,6 +140,10 @@ export default function Devices() {
   }, [devicesQuery.data]);
 
   const handleAddDevice = async () => {
+    if (!isAdmin) {
+      setErrorMessage("Only admin accounts can add devices.");
+      return;
+    }
     if (!newDevice.hostname.trim() || !newDevice.ipAddress.trim()) {
       setErrorMessage("Hostname and IP address are required.");
       return;
@@ -236,6 +264,10 @@ export default function Devices() {
   };
 
   const toggleDeviceStatus = async (device: Device) => {
+    if (!isAdmin) {
+      setErrorMessage("Only admin accounts can update devices.");
+      return;
+    }
     const nextStatus = device.status === "online" ? "offline" : "online";
     try {
       const response = await apiPatch<DeviceResponse>(`/devices/${device.id}`, {
@@ -250,6 +282,10 @@ export default function Devices() {
   };
 
   const removeDevice = async (deviceId: string) => {
+    if (!isAdmin) {
+      setErrorMessage("Only admin accounts can remove devices.");
+      return;
+    }
     try {
       await apiDelete(`/devices/${deviceId}`);
       setDevices((current) => current.filter((device) => device.id !== deviceId));
@@ -345,7 +381,7 @@ export default function Devices() {
               <RefreshCw className={`w-4 h-4 mr-2 ${devicesQuery.isFetching ? "animate-spin" : ""}`} />
               {devicesQuery.isFetching ? "REFRESHING" : "REFRESH"}
             </Button>
-            <Button variant="tactical" onClick={() => setIsAddDialogOpen(true)}>
+            <Button variant="tactical" onClick={() => setIsAddDialogOpen(true)} disabled={!isAdmin}>
               <Plus className="w-4 h-4 mr-2" />
               ADD DEVICE
             </Button>
@@ -427,7 +463,7 @@ export default function Devices() {
                     {getCollectionStatus(device.collectionStatus)}
                   </div>
                   <div className="col-span-1 flex items-center gap-1">
-                    <Button variant="ghost" size="sm" title="Configure">
+                    <Button variant="ghost" size="sm" title="Configure" disabled={!isAdmin}>
                       <Settings className="w-3 h-3" />
                     </Button>
                     <Button
@@ -435,6 +471,7 @@ export default function Devices() {
                       size="sm"
                       title="Toggle Status"
                       onClick={() => toggleDeviceStatus(device)}
+                      disabled={!isAdmin}
                     >
                       <Power
                         className={`w-3 h-3 ${device.status === "online" ? "text-primary" : "text-muted-foreground"}`}
@@ -445,6 +482,7 @@ export default function Devices() {
                       size="sm"
                       title="Remove"
                       onClick={() => removeDevice(device.id)}
+                      disabled={!isAdmin}
                     >
                       <Trash2 className="w-3 h-3 text-destructive" />
                     </Button>

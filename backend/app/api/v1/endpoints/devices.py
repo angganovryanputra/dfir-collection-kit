@@ -21,7 +21,7 @@ async def get_devices(
 @router.post(
     "/",
     response_model=DeviceOut,
-    dependencies=[Depends(require_roles("operator", "admin"))],
+    dependencies=[Depends(require_roles("admin"))],
 )
 async def create_device_endpoint(
     payload: DeviceCreate, db: AsyncSession = Depends(get_db)
@@ -45,7 +45,7 @@ async def get_device_endpoint(
 @router.patch(
     "/{device_id}",
     response_model=DeviceOut,
-    dependencies=[Depends(require_roles("operator", "admin"))],
+    dependencies=[Depends(require_roles("admin"))],
 )
 async def update_device_endpoint(
     device_id: str, payload: DeviceUpdate, db: AsyncSession = Depends(get_db)

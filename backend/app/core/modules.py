@@ -191,6 +191,8 @@ MODULE_REGISTRY = {
     },
 }
 
+SUPPORTED_OS = {"windows", "linux"}
+
 
 def normalize_os_name(os_name: str | None) -> str | None:
     if not os_name:
@@ -198,16 +200,34 @@ def normalize_os_name(os_name: str | None) -> str | None:
     return os_name.split("/")[0].lower()
 
 
+def validate_modules_for_os(module_ids: list[str], os_name: str | None) -> None:
+    normalized_os = normalize_os_name(os_name)
+    if normalized_os and normalized_os not in SUPPORTED_OS:
+        raise ValueError(f"Unsupported OS: {os_name}")
+    if not normalized_os:
+        return
+    for module_id in module_ids:
+        entry = MODULE_REGISTRY.get(module_id)
+        if not entry:
+            raise ValueError(f"Unknown module_id: {module_id}")
+        if entry["os"] != normalized_os:
+            raise ValueError(f"Module {module_id} not supported on {normalized_os}")
+
+
 def build_modules(module_ids: list[str] | None = None, os_name: str | None = None) -> list[dict]:
     normalized_os = normalize_os_name(os_name)
     if not module_ids:
         if not normalized_os:
             raise ValueError("module_ids or os_name is required")
+        if normalized_os not in SUPPORTED_OS:
+            raise ValueError(f"Unsupported OS: {os_name}")
         module_ids = [
             module_id
             for module_id, entry in MODULE_REGISTRY.items()
             if entry["os"] == normalized_os
         ]
+    else:
+        validate_modules_for_os(module_ids, os_name)
     modules: list[dict] = []
     for module_id in module_ids:
         if module_id not in MODULE_REGISTRY:

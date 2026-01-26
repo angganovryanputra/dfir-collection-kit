@@ -1,12 +1,12 @@
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 
 class JobModule(BaseModel):
     module_id: str
     output_relpath: str
-    params: dict = {}
+    params: dict = Field(default_factory=dict)
 
 
 class JobCreate(BaseModel):
@@ -14,6 +14,16 @@ class JobCreate(BaseModel):
     incident_id: str
     agent_id: str | None = None
     module_ids: list[str] | None = None
+
+    @field_validator("module_ids")
+    @classmethod
+    def validate_module_ids(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return value
+        cleaned = [item.strip() for item in value if item and item.strip()]
+        if not cleaned:
+            return None
+        return list(dict.fromkeys(cleaned))
 
 
 class JobOut(BaseModel):
@@ -46,3 +56,11 @@ class JobStatusUpdate(BaseModel):
     message: str | None = None
     progress: int | None = None
     log_tail: list[str] | None = None
+
+    @field_validator("status")
+    @classmethod
+    def normalize_status(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if not normalized:
+            raise ValueError("status is required")
+        return normalized

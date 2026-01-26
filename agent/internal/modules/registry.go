@@ -46,6 +46,21 @@ func GetModule(id string) (CollectorModule, error) {
 	return module, nil
 }
 
+// HasModule reports whether a module ID is registered.
+func HasModule(id string) bool {
+	_, exists := moduleRegistry[id]
+	return exists
+}
+
+// ListModuleIDs returns registered module IDs.
+func ListModuleIDs() []string {
+	ids := make([]string, 0, len(moduleRegistry))
+	for id := range moduleRegistry {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 // Init initializes all modules
 func Init() error {
 	// Register Windows modules
