@@ -3,15 +3,12 @@ package agent
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/signal"
 	"time"
 
 	"github.com/dfir/agent/internal/api"
 	"github.com/dfir/agent/internal/config"
 	"github.com/dfir/agent/internal/jobs"
 	"github.com/dfir/agent/internal/logging"
-	"github.com/dfir/agent/internal/storage"
 )
 
 const (
@@ -66,19 +63,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	jobPollTicker := time.NewTicker(time.Duration(a.config.PollInterval) * time.Second)
 	defer jobPollTicker.Stop()
 
-	// Setup signal handling for graceful shutdown
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, os.Signal(15)) // SIGTERM
-
-	// Main event loop
+	// Main event loop — shutdown is driven by ctx cancellation from main.go
 	for {
 		select {
 		case <-ctx.Done():
 			logging.Info("Context cancelled, shutting down")
-			return nil
-
-		case sig := <-sigChan:
-			logging.Info("Received signal: %v, initiating shutdown", sig)
 			return nil
 
 		case <-heartbeatTicker.C:
@@ -132,6 +121,7 @@ func (a *Agent) pollAndExecuteJob(ctx context.Context) error {
 		job.Modules,
 		job.CollectionTimeoutMin,
 		job.RetryAttempts,
+		job.ConcurrencyLimit,
 	); err != nil {
 		return err
 	}

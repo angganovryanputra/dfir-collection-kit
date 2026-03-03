@@ -10,6 +10,7 @@ from app.api.v1.endpoints import (
     evidence,
     incidents,
     jobs,
+    modules,
     settings,
     status,
     templates,
@@ -31,3 +32,4 @@ api_router.include_router(settings.router, prefix="/settings", tags=["settings"]
 api_router.include_router(status.router, prefix="/status", tags=["status"])
 api_router.include_router(agents.router, prefix="/agents", tags=["agents"])
 api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
+api_router.include_router(modules.router, prefix="/modules", tags=["modules"])

@@ -15,7 +15,7 @@ def _get_existing_columns(table_name: str) -> set[str]:
     return {col["name"] for col in inspector.get_columns(table_name)}
 
 revision = "20260117_collection_state"
-down_revision = None
+down_revision = "initial"
 branch_labels = None
 depends_on = None
 

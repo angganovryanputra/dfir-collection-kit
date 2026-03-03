@@ -1,7 +1,29 @@
+import time
+from collections import defaultdict
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+
+# Simple in-memory per-IP rate limiter (GIL-safe for single-process deployments)
+_IP_WINDOW_SEC = 60        # sliding window length
+_IP_MAX_ATTEMPTS = 20      # max login attempts per IP per window
+_ip_attempt_log: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_ip_rate_limit(client_ip: str) -> None:
+    """Raise 429 if the IP has exceeded the login rate limit."""
+    now = time.monotonic()
+    times = _ip_attempt_log[client_ip]
+    # Evict entries outside the sliding window
+    times[:] = [t for t in times if now - t < _IP_WINDOW_SEC]
+    times.append(now)
+    if len(times) > _IP_MAX_ATTEMPTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many login attempts. Please wait before trying again.",
+            headers={"Retry-After": str(_IP_WINDOW_SEC)},
+        )
 
 from app.core.deps import get_current_user, get_db
 from app.core.security import create_access_token, verify_password
@@ -26,6 +48,7 @@ async def login(
     forwarded = request.headers.get("X-Forwarded-For", "")
     forwarded_ip = forwarded.split(",")[0].strip() if forwarded else ""
     client_ip = forwarded_ip or (request.client.host if request.client else "unknown")
+    _check_ip_rate_limit(client_ip)
     user = await get_user_by_username(db, payload.username)
     normalized_username = payload.username.strip().lower()
     if user and runtime_settings.max_failed_logins > 0:

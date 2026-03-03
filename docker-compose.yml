@@ -30,10 +30,14 @@ services:
     container_name: dfir-backend
     environment:
       DATABASE_URL: postgresql+asyncpg://dfir:dfir@db:5432/dfir
-      SECRET_KEY: ${SECRET_KEY:-local-dev-secret}
+      # REQUIRED: Set SECRET_KEY in your .env file before starting.
+      # Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Copy .env.example to .env and generate a strong key.}
       ACCESS_TOKEN_EXPIRE_MINUTES: 60
       EVIDENCE_STORAGE_PATH: /vault/evidence
-      AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:-local-agent-secret}
+      # REQUIRED: Set AGENT_SHARED_SECRET in your .env file before starting.
+      # Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+      AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:?AGENT_SHARED_SECRET must be set. Copy .env.example to .env and generate a strong secret.}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
       DFIR_SEED_PASSWORD: ${DFIR_SEED_PASSWORD:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}

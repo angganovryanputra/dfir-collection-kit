@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { WarningBanner } from "@/components/WarningBanner";
@@ -110,6 +110,9 @@ const derivePhaseFromStatus = (status: string) => {
 export default function CollectionExecution() {
   const navigate = useNavigate();
   const { id: incidentId } = useParams<{ id: string }>();
+  const location = useLocation();
+  const selectedModuleIds: string[] | null =
+    (location.state as { selectedModuleIds?: string[] } | null)?.selectedModuleIds ?? null;
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [phases, setPhases] = useState<CollectionPhase[]>(
     Object.entries(PHASE_NAME_MAP).map(([id, name]) => ({
@@ -132,6 +135,7 @@ export default function CollectionExecution() {
   const [completionMessage, setCompletionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
+  const [isAborting, setIsAborting] = useState(false);
   const isViewer = isViewerRole(getStoredRole());
   const pollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedRef = useRef(false);
@@ -174,7 +178,10 @@ export default function CollectionExecution() {
       }
       setIsStarting(true);
       try {
-        await apiPost(`/incidents/${incidentId}/collect`, {});
+        const collectBody = selectedModuleIds
+          ? { module_ids: selectedModuleIds }
+          : {};
+        await apiPost(`/incidents/${incidentId}/collect`, collectBody);
         startedRef.current = true;
         startedAtRef.current = Date.now();
         setErrorMessage(null);
@@ -289,6 +296,32 @@ export default function CollectionExecution() {
     fetchExistingEvidence();
   }, [incident, isComplete]);
 
+  const handleAbort = async () => {
+    if (!incidentId || isViewer) return;
+    setIsAborting(true);
+    try {
+      type JobSummary = { id: string; status: string };
+      const jobs = await apiGet<JobSummary[]>(`/jobs/incident/${incidentId}`);
+      const activeJob = jobs.find((j) =>
+        ["pending", "collecting", "in_progress", "running"].includes(j.status.toLowerCase())
+      );
+      if (!activeJob) {
+        setErrorMessage("No active job found to abort.");
+        return;
+      }
+      await apiPost(`/jobs/${activeJob.id}/cancel`, {});
+      setErrorMessage("Collection aborted by operator.");
+      if (pollerRef.current) {
+        clearInterval(pollerRef.current);
+        pollerRef.current = null;
+      }
+    } catch {
+      setErrorMessage("Failed to abort collection. Try again.");
+    } finally {
+      setIsAborting(false);
+    }
+  };
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -312,6 +345,12 @@ export default function CollectionExecution() {
             </div>
           </div>
           <div className="flex items-center gap-6">
+              {selectedModuleIds && (
+                <div className="font-mono text-sm">
+                  <span className="text-muted-foreground">MODULES: </span>
+                  <span className="text-primary font-bold">{selectedModuleIds.length}</span>
+                </div>
+              )}
               <div className="font-mono text-sm">
                 <span className="text-muted-foreground">ELAPSED: </span>
                 <span className="text-primary font-bold">{formatTime(elapsedTime)}</span>
@@ -415,10 +454,11 @@ export default function CollectionExecution() {
                   variant="destructive"
                   size="lg"
                   className="w-full"
-                  disabled={isViewer}
+                  disabled={isViewer || isAborting}
+                  onClick={handleAbort}
                 >
                   <StopCircle className="w-4 h-4" />
-                  EMERGENCY ABORT
+                  {isAborting ? "ABORTING..." : "EMERGENCY ABORT"}
                 </Button>
               )}
             </div>

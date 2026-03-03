@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+import logging
+import re
 from datetime import datetime
+from hmac import compare_digest
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
 
 from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,9 +43,8 @@ router = APIRouter()
 
 def verify_agent_secret(agent_token: str | None) -> None:
     from app.core.config import settings
-    if not settings.AGENT_SHARED_SECRET:
-        raise HTTPException(status_code=503, detail="Agent shared secret not configured")
-    if not agent_token or agent_token != settings.AGENT_SHARED_SECRET:
+    expected = settings.AGENT_SHARED_SECRET or ""
+    if not expected or not agent_token or not compare_digest(agent_token, expected):
         raise HTTPException(status_code=401, detail="Invalid agent token")
 
 
@@ -210,6 +216,7 @@ async def get_next_job(
         modules=modules,
         collection_timeout_min=runtime_settings.collection_timeout_min,
         retry_attempts=runtime_settings.retry_attempts,
+        concurrency_limit=runtime_settings.concurrency_limit,
     )
 
 
@@ -279,11 +286,26 @@ async def update_job_status_endpoint(
         metadata={"status": payload.status, "progress": payload.progress},
     )
 
+    def _infer_level(status: str, message: str) -> str:
+        s = (status or "").upper()
+        m = (message or "").lower()
+        if s in {"FAILED", "ERROR"} or any(w in m for w in ("failed", "error", "all modules failed")):
+            return "error"
+        if "warning" in m or "timeout" in m or "retry" in m:
+            return "warning"
+        if (
+            s in {"COMPLETE", "COMPLETED", "COLLECTION_COMPLETE"}
+            or any(w in m for w in ("completed", "uploaded", "success", "collection complete"))
+        ):
+            return "success"
+        return "info"
+
     log_entries = []
     if payload.message:
-        log_entries.append({"level": "info", "message": payload.message})
+        log_entries.append({"level": _infer_level(payload.status, payload.message), "message": payload.message})
     if payload.log_tail:
-        log_entries.extend({"level": "info", "message": entry} for entry in payload.log_tail)
+        for entry in payload.log_tail:
+            log_entries.append({"level": _infer_level(payload.status, entry), "message": entry})
     if log_entries:
         start_sequence = await get_last_sequence(db, job.incident_id) + 1
         await create_log_entries(db, job.incident_id, start_sequence, log_entries)
@@ -303,9 +325,15 @@ async def upload_job_evidence(
     if not job or job.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # C4: Validate IDs from DB before using in path construction
+    if not _SAFE_ID_RE.match(job.incident_id) or not _SAFE_ID_RE.match(job.id):
+        logger.error("Unsafe characters in job IDs — incident=%s job=%s", job.incident_id, job.id)
+        raise HTTPException(status_code=400, detail="Invalid job or incident identifier")
+
     runtime_settings = await get_runtime_settings(db)
 
-    base_path = Path(runtime_settings.evidence_storage_path) / job.incident_id / job.id
+    # C4: Use safe_join to prevent path traversal
+    base_path = safe_join(Path(runtime_settings.evidence_storage_path), job.incident_id, job.id)
     zip_path = base_path / "collection.zip"
     max_bytes = runtime_settings.max_file_size_gb * 1024 * 1024 * 1024
     size = save_upload(file, zip_path, max_bytes)
@@ -400,8 +428,8 @@ async def upload_job_evidence(
                 target=job.id,
             ),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("CoC entry failed for job %s (EVIDENCE LOCKED): %s", job.id, exc)
     await safe_record_event(
         db,
         event_type="evidence_locked",
@@ -428,7 +456,7 @@ async def upload_job_evidence(
                 target=job.id,
             ),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("CoC entry failed for job %s (COLLECTION COMPLETED): %s", job.id, exc)
 
     return {"status": "uploaded", "bytes": size}

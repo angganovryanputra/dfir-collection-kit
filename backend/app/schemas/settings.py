@@ -7,6 +7,7 @@ class SystemSettingsBase(BaseModel):
     hash_algorithm: str
     collection_timeout_min: int
     max_concurrent_jobs: int
+    concurrency_limit: int
     retry_attempts: int
     session_timeout_min: int
     max_failed_logins: int

@@ -181,9 +181,13 @@ export default function Dashboard() {
 
   const handleIncidentClick = (incident: Incident) => {
     if (incident.status === "COLLECTION_IN_PROGRESS") {
+      // Collection already running — jump straight to the live view
       navigate(`/incidents/${incident.id}/collect`);
-    } else {
+    } else if (incident.status === "COLLECTION_COMPLETE" || incident.status === "CLOSED") {
       navigate(`/evidence/${incident.id}`);
+    } else {
+      // New or pending incident — open the module selector first
+      navigate(`/incidents/${incident.id}/setup`);
     }
   };
 

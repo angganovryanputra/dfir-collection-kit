@@ -90,12 +90,13 @@ export default function CreateIncident() {
       await apiPost("/incidents", {
         id: incidentId,
         type: incidentType,
-        status: "COLLECTION_IN_PROGRESS",
+        status: "PENDING",
         template_id: template?.id ?? null,
         target_endpoints: endpoints,
         operator: operatorName.trim().toUpperCase(),
       });
-      navigate(`/incidents/${incidentId}/collect`);
+      // Go to the artifact selector before starting collection
+      navigate(`/incidents/${incidentId}/setup`);
     } catch {
       setErrorMessage("Failed to create incident. Verify backend connectivity.");
     } finally {

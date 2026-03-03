@@ -335,6 +335,7 @@ async def seed_data(session: AsyncSession) -> None:
         hash_algorithm="SHA-256",
         collection_timeout_min=30,
         max_concurrent_jobs=5,
+        concurrency_limit=4,
         retry_attempts=3,
         session_timeout_min=15,
         max_failed_logins=5,

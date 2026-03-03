@@ -1,12 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
+import logging
 from datetime import datetime
 from uuid import uuid4
+
+from fastapi import APIRouter, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
-from app.core.modules import build_modules
+from app.core.modules import build_modules, get_profile_modules, normalize_os_name
 from app.crud.collection_log import create_log_entries, delete_logs_for_incident, list_logs
 from app.crud.chain_of_custody import create_entry
 from app.crud.evidence import has_evidence_for_incident, lock_evidence_for_incident
@@ -15,7 +19,7 @@ from app.crud.job import count_active_jobs, create_job
 from app.models.device import Device
 from app.models.user import User
 from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
-from app.schemas.collection import CollectionLogEntry, CollectionStartResponse, CollectionStatusResponse
+from app.schemas.collection import CollectionLogEntry, CollectionStartRequest, CollectionStartResponse, CollectionStatusResponse
 from app.schemas.incident import IncidentCreate, IncidentOut, IncidentUpdate
 from app.schemas.job import JobCreate
 from app.services.audit_log_service import safe_record_event
@@ -89,8 +93,8 @@ async def create_incident_endpoint(
                 target=incident.id,
             ),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("CoC entry failed for incident %s (INCIDENT CREATED): %s", incident.id, exc)
     return IncidentOut.model_validate(incident)
 
 
@@ -101,6 +105,7 @@ async def create_incident_endpoint(
 )
 async def start_collection_endpoint(
     incident_id: str,
+    payload: CollectionStartRequest = CollectionStartRequest(),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> CollectionStartResponse:
@@ -142,8 +147,8 @@ async def start_collection_endpoint(
                 target=incident_id,
             ),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("CoC entry failed for incident %s (COLLECTION STARTED): %s", incident_id, exc)
 
     os_name = "windows"
     if incident.target_endpoints:
@@ -152,8 +157,19 @@ async def start_collection_endpoint(
         )
         device = result.scalar_one_or_none()
         if device and device.os:
-            os_name = device.os
-    modules = build_modules(os_name=os_name)
+            os_name = normalize_os_name(device.os) or "windows"
+
+    # Resolve which modules to collect: explicit IDs > profile > all for OS
+    try:
+        if payload.module_ids:
+            modules = build_modules(module_ids=payload.module_ids, os_name=os_name)
+        elif payload.profile:
+            profile_module_ids = get_profile_modules(payload.profile, os_name)
+            modules = build_modules(module_ids=profile_module_ids, os_name=os_name)
+        else:
+            modules = build_modules(os_name=os_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     runtime_settings = await get_runtime_settings(db)
     if runtime_settings.max_concurrent_jobs > 0:
         active_jobs = await count_active_jobs(db)
@@ -177,7 +193,12 @@ async def start_collection_endpoint(
         target_id=incident_id,
         status="success",
         message="Collection started",
-        metadata={"job_id": f"JOB-{incident_id}", "module_count": len(modules)},
+        metadata={
+            "job_id": f"JOB-{incident_id}",
+            "module_count": len(modules),
+            "profile": payload.profile,
+            "custom_module_ids": bool(payload.module_ids),
+        },
     )
 
     return CollectionStartResponse(

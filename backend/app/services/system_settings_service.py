@@ -14,6 +14,7 @@ class RuntimeSettings:
     hash_algorithm: str
     collection_timeout_min: int
     max_concurrent_jobs: int
+    concurrency_limit: int
     retry_attempts: int
     session_timeout_min: int
     max_failed_logins: int
@@ -28,6 +29,7 @@ DEFAULT_SETTINGS = RuntimeSettings(
     hash_algorithm="SHA-256",
     collection_timeout_min=30,
     max_concurrent_jobs=5,
+    concurrency_limit=4,
     retry_attempts=3,
     session_timeout_min=15,
     max_failed_logins=5,

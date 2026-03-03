@@ -13,6 +13,7 @@ class SystemSettings(Base):
     hash_algorithm: Mapped[str] = mapped_column(String)
     collection_timeout_min: Mapped[int] = mapped_column()
     max_concurrent_jobs: Mapped[int] = mapped_column()
+    concurrency_limit: Mapped[int] = mapped_column(server_default="4")
     retry_attempts: Mapped[int] = mapped_column()
     session_timeout_min: Mapped[int] = mapped_column()
     max_failed_logins: Mapped[int] = mapped_column()

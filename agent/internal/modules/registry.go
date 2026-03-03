@@ -105,6 +105,23 @@ func Init() error {
 	Register(NewLinuxPackages())
 	Register(NewLinuxKernelVersion())
 
+	// Register Windows KAPE-like artifact modules
+	Register(NewWindowsRegistryHives())
+	Register(NewWindowsNtuserDat())
+	Register(NewWindowsPrefetch())
+	Register(NewWindowsAmcache())
+	Register(NewWindowsShimCache())
+	Register(NewWindowsLnkFiles())
+	Register(NewWindowsJumpLists())
+	Register(NewWindowsBrowserChrome())
+	Register(NewWindowsBrowserEdge())
+	Register(NewWindowsBitsJobs())
+	Register(NewWindowsRecycleBin())
+	Register(NewWindowsThumbcache())
+	Register(NewWindowsShellbags())
+	Register(NewWindowsMRU())
+	Register(NewWindowsUSBHistory())
+
 	logging.Info("Initialized %d modules", len(moduleRegistry))
 	return nil
 }
@@ -139,10 +156,11 @@ type BaseWindowsModule struct {
 // executePowerShell runs a PowerShell command and returns output
 func (b *BaseWindowsModule) executePowerShell(ctx context.Context, command string) (string, error) {
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", command)
-	if output, err := cmd.CombinedOutput(); err != nil {
+	output, err := cmd.CombinedOutput()
+	if err != nil {
 		return "", fmt.Errorf("PowerShell command failed: %w", err)
 	}
-	return output, nil
+	return string(output), nil
 }
 
 // getPowerShellCommand escapes and wraps a command string
@@ -167,6 +185,11 @@ func IsWarning(err error) bool {
 }
 
 func EnsureOutputDir(outputPath string) error {
+	dir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory %s: %w", dir, err)
+	}
+	return nil
 }
 
 func WriteOutput(outputPath string, content []byte) error {

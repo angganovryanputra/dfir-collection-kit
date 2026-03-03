@@ -61,6 +61,12 @@ func main() {
 		return
 	}
 
+	if err := modules.Init(); err != nil {
+		logging.Error("Failed to initialize modules: %v", err)
+		fmt.Fprintf(os.Stderr, "Failed to initialize modules: %v\n", err)
+		os.Exit(1)
+	}
+
 	agent, err := agent.New(cfg)
 	if err != nil {
 		logging.Error("Failed to create agent: %v", err)
@@ -124,5 +130,5 @@ func runDryRun(cfg *config.Config, moduleIDs string, workDir string) error {
 	}
 
 	executor := jobs.NewExecutor(cfg, nil)
-	return executor.Run(context.Background(), "DRYRUN", "DRYRUN", workDir, jobModules)
+	return executor.Run(context.Background(), "DRYRUN", "DRYRUN", workDir, jobModules, 0, 0, 0)
 }

@@ -3,11 +3,13 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import React, { Component } from "react";
+import { getStoredAuth } from "@/lib/auth";
 import AdminSettings from "./pages/AdminSettings";
 import ChainOfCustody from "./pages/ChainOfCustody";
 import CollectionExecution from "./pages/CollectionExecution";
+import CollectionSetup from "./pages/CollectionSetup";
 import CreateIncident from "./pages/CreateIncident";
 import Dashboard from "./pages/Dashboard";
 import Devices from "./pages/Devices";
@@ -18,6 +20,15 @@ import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
+
+/** Redirects unauthenticated users to /login before rendering the page. */
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const auth = getStoredAuth();
+  if (!auth?.token) {
+    return <Navigate to="/login" replace />;
+  }
+  return <>{children}</>;
+}
 
 type ErrorBoundaryProps = { children: React.ReactNode };
 
@@ -65,17 +76,22 @@ const App = () => {
             <Sonner />
             <BrowserRouter>
               <Routes>
+                {/* Public routes */}
                 <Route path="/" element={<Index />} />
                 <Route path="/login" element={<Login />} />
-                <Route path="/dashboard" element={<Dashboard />} />
-                <Route path="/incidents/create" element={<CreateIncident />} />
-                <Route path="/incidents/:id/collect" element={<CollectionExecution />} />
-                <Route path="/evidence" element={<EvidenceVault />} />
-                <Route path="/evidence/:id" element={<EvidenceVault />} />
-                <Route path="/chain-of-custody" element={<ChainOfCustody />} />
-                <Route path="/devices" element={<Devices />} />
-                <Route path="/incident-templates" element={<IncidentTemplates />} />
-                <Route path="/admin/settings" element={<AdminSettings />} />
+
+                {/* Protected routes — redirect to /login if not authenticated */}
+                <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+                <Route path="/incidents/create" element={<ProtectedRoute><CreateIncident /></ProtectedRoute>} />
+                <Route path="/incidents/:id/setup" element={<ProtectedRoute><CollectionSetup /></ProtectedRoute>} />
+                <Route path="/incidents/:id/collect" element={<ProtectedRoute><CollectionExecution /></ProtectedRoute>} />
+                <Route path="/evidence" element={<ProtectedRoute><EvidenceVault /></ProtectedRoute>} />
+                <Route path="/evidence/:id" element={<ProtectedRoute><EvidenceVault /></ProtectedRoute>} />
+                <Route path="/chain-of-custody" element={<ProtectedRoute><ChainOfCustody /></ProtectedRoute>} />
+                <Route path="/devices" element={<ProtectedRoute><Devices /></ProtectedRoute>} />
+                <Route path="/incident-templates" element={<ProtectedRoute><IncidentTemplates /></ProtectedRoute>} />
+                <Route path="/admin/settings" element={<ProtectedRoute><AdminSettings /></ProtectedRoute>} />
+
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </BrowserRouter>

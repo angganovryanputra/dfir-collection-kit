@@ -1,5 +1,3 @@
-//go:build ignore
-
 package modules
 
 import (
@@ -102,7 +100,7 @@ func (m *WindowsStartupFolders) Run(ctx context.Context, mctx ModuleContext, par
 		"else { $p = Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs\\Startup' }" +
 		"Write-Output ('[' + $_ + '] ' + $p);" +
 		"if (Test-Path $p) { Get-ChildItem -Path $p -Force | Select-Object Name,FullName,Length,LastWriteTime | ConvertTo-Csv -NoTypeInformation } else { Write-Output 'Not Found' }" +
-		"}" 
+		"}"
 
 	return runPowerShellToFile(ctx, command, outputPath, params)
 }

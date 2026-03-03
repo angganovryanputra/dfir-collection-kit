@@ -1,5 +1,3 @@
-//go:build ignore
-
 package modules
 
 import (
@@ -120,10 +118,7 @@ func (m *LinuxSystemdTimers) Run(ctx context.Context, mctx ModuleContext, params
 }
 
 func (m *LinuxRcLocal) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
-	if err := copyIfExists(outputPath, "/etc/rc.local"); err != nil {
-		return err
-	}
-	return nil
+	return copyIfExists(outputPath, "/etc/rc.local")
 }
 
 func (m *LinuxAuthorizedKeys) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {

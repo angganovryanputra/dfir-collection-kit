@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/dfir/agent/internal/config"
@@ -158,13 +159,14 @@ func (c *Client) Heartbeat(ctx context.Context) error {
 
 // JobInstruction represents the job instruction from backend
 type JobInstruction struct {
-	JobID      string         `json:"job_id"`
-	IncidentID string         `json:"incident_id"`
-	OS         string         `json:"os,omitempty"`
-	WorkDir    string         `json:"work_dir,omitempty"`
-	Modules    []JobModule     `json:"modules"`
-	CollectionTimeoutMin int  `json:"collection_timeout_min,omitempty"`
-	RetryAttempts        int  `json:"retry_attempts,omitempty"`
+	JobID                string      `json:"job_id"`
+	IncidentID           string      `json:"incident_id"`
+	OS                   string      `json:"os,omitempty"`
+	WorkDir              string      `json:"work_dir,omitempty"`
+	Modules              []JobModule `json:"modules"`
+	CollectionTimeoutMin int         `json:"collection_timeout_min,omitempty"`
+	RetryAttempts        int         `json:"retry_attempts,omitempty"`
+	ConcurrencyLimit     int         `json:"concurrency_limit,omitempty"`
 }
 
 type JobStatusResponse struct {
@@ -268,7 +270,7 @@ func (c *Client) UploadEvidence(ctx context.Context, jobID string, zipPath strin
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 
-	part, err := writer.CreateFormFile("file", zipPath, 0)
+	part, err := writer.CreateFormFile("file", filepath.Base(zipPath))
 	if err != nil {
 		return fmt.Errorf("failed to create form file: %w", err)
 	}

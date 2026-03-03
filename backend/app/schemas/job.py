@@ -49,6 +49,7 @@ class JobInstruction(BaseModel):
     modules: list[JobModule]
     collection_timeout_min: int | None = None
     retry_attempts: int | None = None
+    concurrency_limit: int = 4
 
 
 class JobStatusUpdate(BaseModel):
