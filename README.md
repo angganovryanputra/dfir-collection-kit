@@ -12,10 +12,12 @@ DFIR Rapid Collection Kit is a secure, web-based platform for managing incident 
 - **Evidence Collection**: Automated evidence collection via Go-based agents
 - **Chain of Custody**: Tamper-evident audit trail with hash chaining
 - **Evidence Vault**: Secure storage with SHA256 hashing and export capabilities
-- **Agent Management**: Register and monitor collection agents
+- **Scalable Forensics Pipeline**: Automated parsing (EZTools), threat hunting (Hayabusa + Chainsaw), and super timeline generation
+- **Timeline Explorer**: Interactive browser-based hunting interface with DuckDB-powered search
+- **Agent Management**: Register and monitor collection agents with OPSEC jitter
 - **Template System**: Reusable incident templates with preset checklists
 - **Role-Based Access**: Admin, Operator, and Viewer roles with fine-grained permissions
-- **Docker Ready**: Single-command deployment with Docker Compose
+- **Docker Ready**: Single-command deployment with Docker Compose (includes EZTools, Hayabusa, Chainsaw)
 
 ## Architecture
 
@@ -30,26 +32,27 @@ DFIR Rapid Collection Kit is a secure, web-based platform for managing incident 
                              ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │                    Frontend (Vite)                        │
-│                   Port: 5173                                │
+│          Port: 5173  |  Timeline Explorer UI             │
 └────────────────────────────────┬────────────────────────────────┘
                              │
                              ▼ (REST API)
 ┌─────────────────────────────────────────────────────────────────┐
 │                  Backend (FastAPI)                         │
-│                   Port: 8000                                │
-└────────────┬───────────────────────────────┬────────────────┘
-             │                               │
-             ▼                               │
-┌────────────────────────┐            ┌──────────────────┐
-│  PostgreSQL Database │            │ Evidence Storage│
-│      (Port: 5432)   │            │   /vault/evidence│
-└────────────────────────┘            └──────────────────┘
-                                             ▲
-                                             │ (Upload)
-                                  ┌──────────────────────────────┐
-                                  │    Go Agents (Future)      │
-                                  │   Poll jobs, Upload ZIPs    │
-                                  └──────────────────────────────┘
+│          Port: 8000  |  Forensics Pipeline               │
+└────────────┬──────────────┬──────────────┬────────────────┘
+             │              │              │
+             ▼              ▼              ▼
+┌──────────────────┐ ┌───────────────┐ ┌────────────────────┐
+│ PostgreSQL DB  │ │ Evidence    │ │ Forensics Tools  │
+│  (Port: 5432)  │ │ /vault/     │ │ EZTools/Hayabusa │
+└──────────────────┘ └───────────────┘ │ Chainsaw/DuckDB  │
+                            ▲          └────────────────────┘
+                            │ (Upload)
+                 ┌──────────────────────────────┐
+                 │    Go Agents (OPSEC)        │
+                 │  Poll jobs with jitter,     │
+                 │  Upload evidence ZIPs       │
+                 └──────────────────────────────┘
 ```
 
 ### Tech Stack
@@ -69,7 +72,58 @@ DFIR Rapid Collection Kit is a secure, web-based platform for managing incident 
 **Infrastructure**:
 - Docker & Docker Compose
 - PostgreSQL 16
+- Eric Zimmerman Tools (EZTools) for artifact parsing
+- Hayabusa + Chainsaw for Sigma-based threat hunting
+- DuckDB for high-performance timeline queries
 - Nginx (future reverse proxy)
+
+## Scalable Forensics Pipeline
+
+The built-in forensics pipeline automates the full chain from raw artifact collection to interactive threat hunting.
+
+### How It Works
+
+```
+Agent Upload → Background Pipeline → Super Timeline → Browser-Based Hunting
+```
+
+1. **Evidence Upload**: Go agent collects artifacts and uploads a ZIP file
+2. **Automated Parsing**: Backend triggers background tasks that run 8 EZTools parsers in parallel:
+   - `EvtxECmd` — Windows Event Logs (.evtx)
+   - `MFTECmd` — MFT / $UsnJrnl / $LogFile
+   - `RECmd` — Registry Hives (SYSTEM, SAM, SOFTWARE, etc.)
+   - `PECmd` — Prefetch files (.pf)
+   - `LECmd` — LNK shortcut files
+   - `JLECmd` — Jump Lists
+   - `AppCompatCacheParser` — ShimCache
+   - `AmcacheParser` — Amcache.hve
+3. **Sigma Hunting**: Hayabusa and Chainsaw scan EVTX files against Sigma detection rules
+4. **Timeline Merge**: All parsed CSVs are normalised to a standard schema and merged into a single `super_timeline.csv`, sorted by UTC datetime
+5. **Timeline Explorer**: Analysts open the browser-based Timeline Explorer to search and hunt through events using DuckDB-powered full-text queries
+
+### Super Timeline Schema
+
+| Column | Description |
+|---|---|
+| `datetime` | UTC timestamp |
+| `source` | Log channel / hive path |
+| `computer` | Hostname |
+| `event_id` | Windows Event ID |
+| `description` | Primary message / path |
+| `details` | Extended payload |
+| `rule_title` | Sigma rule name (alerts only) |
+| `sigma_level` | Alert severity (alerts only) |
+| `user` | Associated user |
+| `original_file` | Source CSV for traceability |
+
+### Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `EZTOOLS_DIR` | `/opt/eztools` | Path to EZTools binaries |
+| `HAYABUSA_PATH` | `/opt/hayabusa/hayabusa` | Path to Hayabusa binary |
+| `CHAINSAW_PATH` | `/opt/chainsaw/chainsaw` | Path to Chainsaw binary |
+| `SIGMA_RULES_DIR` | `/opt/chainsaw/rules/` | Path to Sigma rules directory |
 
 ## Quick Start with Docker
 
@@ -248,6 +302,10 @@ Authorization: Bearer <your-jwt-token>
 #### Chain of Custody
 - `GET /api/v1/chain-of-custody` - List all entries
 - `GET /api/v1/chain-of-custody/incident/{id}` - List entries for incident
+
+#### Forensics / Timeline
+- `GET /api/v1/evidence/timeline/{evidence_id}` - Query super timeline (DuckDB powered, pagination + search)
+- `GET /api/v1/evidence/processing-status/{incident_id}` - Check forensics pipeline status
 
 For complete API documentation, visit `/docs` when the backend is running.
 

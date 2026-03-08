@@ -121,6 +121,8 @@ func Init() error {
 	Register(NewWindowsShellbags())
 	Register(NewWindowsMRU())
 	Register(NewWindowsUSBHistory())
+	Register(NewWindowsMFTVSS())
+	Register(NewWindowsUSNJrnlVSS())
 
 	logging.Info("Initialized %d modules", len(moduleRegistry))
 	return nil

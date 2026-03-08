@@ -11,6 +11,7 @@ from app.api.v1.endpoints import (
     incidents,
     jobs,
     modules,
+    processing,
     settings,
     status,
     templates,
@@ -33,3 +34,4 @@ api_router.include_router(status.router, prefix="/status", tags=["status"])
 api_router.include_router(agents.router, prefix="/agents", tags=["agents"])
 api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 api_router.include_router(modules.router, prefix="/modules", tags=["modules"])
+api_router.include_router(processing.router, prefix="/processing", tags=["processing"])

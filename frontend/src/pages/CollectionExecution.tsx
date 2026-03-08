@@ -12,6 +12,7 @@ import {
   StopCircle,
   Download,
   AlertTriangle,
+  Search,
 } from "lucide-react";
 import type { CollectionPhase } from "@/types/dfir";
 import { apiGet, apiPost } from "@/lib/api";
@@ -435,17 +436,26 @@ export default function CollectionExecution() {
                     variant="tactical"
                     size="lg"
                     className="w-full"
-                      onClick={() => navigate(`/evidence/${incident?.id ?? incidentId ?? ""}`)}
-                    >
-                      <Download className="w-4 h-4" />
-                      VIEW EVIDENCE
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="lg"
-                      className="w-full"
-                      onClick={() => navigate("/dashboard")}
-                    >
+                    onClick={() => navigate(`/incidents/${incident?.id ?? incidentId ?? ""}/processing`)}
+                  >
+                    <Search className="w-4 h-4" />
+                    ANALYZE FORENSICS
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    className="w-full"
+                    onClick={() => navigate(`/evidence/${incident?.id ?? incidentId ?? ""}`)}
+                  >
+                    <Download className="w-4 h-4" />
+                    VIEW EVIDENCE
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    size="lg"
+                    className="w-full"
+                    onClick={() => navigate("/dashboard")}
+                  >
                     RETURN TO DASHBOARD
                   </Button>
                 </>

@@ -23,6 +23,15 @@ services:
     networks:
       - dfir-network
 
+  redis:
+    image: redis:7-alpine
+    container_name: dfir-redis
+    ports:
+      - "127.0.0.1:6379:6379"
+    restart: unless-stopped
+    networks:
+      - dfir-network
+
   backend:
     build:
       context: ./backend
@@ -41,6 +50,13 @@ services:
       REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
       DFIR_SEED_PASSWORD: ${DFIR_SEED_PASSWORD:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      # Forensics pipeline tool paths (set in Dockerfile, override here if needed)
+      EZTOOLS_DIR: ${EZTOOLS_DIR:-/opt/eztools}
+      HAYABUSA_PATH: ${HAYABUSA_PATH:-/opt/hayabusa/hayabusa}
+      CHAINSAW_PATH: ${CHAINSAW_PATH:-/opt/chainsaw/chainsaw}
+      SIGMA_RULES_DIR: ${SIGMA_RULES_DIR:-/opt/chainsaw/rules/}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -54,6 +70,34 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    restart: unless-stopped
+    networks:
+      - dfir-network
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: dfir-celery-worker
+    command: celery -A app.worker.celery_app worker --loglevel=info --pool=solo
+    environment:
+      DATABASE_URL: postgresql+asyncpg://dfir:dfir@db:5432/dfir
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Copy .env.example to .env and generate a strong key.}
+      AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:?AGENT_SHARED_SECRET must be set.}
+      EVIDENCE_STORAGE_PATH: /vault/evidence
+      EZTOOLS_DIR: ${EZTOOLS_DIR:-/opt/eztools}
+      HAYABUSA_PATH: ${HAYABUSA_PATH:-/opt/hayabusa/hayabusa}
+      CHAINSAW_PATH: ${CHAINSAW_PATH:-/opt/chainsaw/chainsaw}
+      SIGMA_RULES_DIR: ${SIGMA_RULES_DIR:-/opt/chainsaw/rules/}
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - dfir_evidence:/vault/evidence
     restart: unless-stopped
     networks:
       - dfir-network

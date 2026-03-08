@@ -157,14 +157,20 @@ export default function Dashboard() {
 
   const getIncidentStatusIndicator = (status: Incident["status"]) => {
     switch (status) {
+      case "PENDING":
+        return <StatusIndicator status="pending" label="PENDING" />;
+      case "ACTIVE":
+        return <StatusIndicator status="online" label="ACTIVE" />;
       case "COLLECTION_IN_PROGRESS":
         return <StatusIndicator status="active" label="COLLECTING" pulse />;
       case "COLLECTION_COMPLETE":
         return <StatusIndicator status="verified" label="COMPLETE" />;
-      case "ACTIVE":
-        return <StatusIndicator status="pending" label="PENDING" />;
-      default:
+      case "COLLECTION_FAILED":
+        return <StatusIndicator status="offline" label="FAILED" />;
+      case "CLOSED":
         return <StatusIndicator status="offline" label="CLOSED" />;
+      default:
+        return <StatusIndicator status="pending" label={status} />;
     }
   };
 
@@ -181,12 +187,14 @@ export default function Dashboard() {
 
   const handleIncidentClick = (incident: Incident) => {
     if (incident.status === "COLLECTION_IN_PROGRESS") {
-      // Collection already running — jump straight to the live view
       navigate(`/incidents/${incident.id}/collect`);
     } else if (incident.status === "COLLECTION_COMPLETE" || incident.status === "CLOSED") {
       navigate(`/evidence/${incident.id}`);
+    } else if (incident.status === "COLLECTION_FAILED") {
+      // Failed — go to evidence vault so user can inspect logs and retry
+      navigate(`/evidence/${incident.id}`);
     } else {
-      // New or pending incident — open the module selector first
+      // PENDING or ACTIVE — open the module selector
       navigate(`/incidents/${incident.id}/setup`);
     }
   };

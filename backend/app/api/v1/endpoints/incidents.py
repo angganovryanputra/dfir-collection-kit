@@ -2,7 +2,7 @@ import logging
 from datetime import datetime
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,18 @@ from app.services.audit_log_service import safe_record_event
 from app.services.system_settings_service import get_runtime_settings
 
 router = APIRouter()
+
+# ── Incident status state machine ─────────────────────────────────────────────
+# Maps current status → set of valid next statuses.
+# CLOSED is a terminal state — no transitions allowed from it.
+_VALID_TRANSITIONS: dict[str, set[str]] = {
+    "PENDING": {"ACTIVE", "COLLECTION_IN_PROGRESS", "CLOSED"},
+    "ACTIVE": {"COLLECTION_IN_PROGRESS", "CLOSED", "PENDING"},
+    "COLLECTION_IN_PROGRESS": {"COLLECTION_COMPLETE", "COLLECTION_FAILED", "ACTIVE", "CLOSED"},
+    "COLLECTION_COMPLETE": {"CLOSED", "ACTIVE"},
+    "COLLECTION_FAILED": {"ACTIVE", "CLOSED"},
+    "CLOSED": set(),
+}
 
 PHASE_STEPS = [
     ("volatile", "Volatile Data"),
@@ -280,6 +292,17 @@ async def update_incident_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> IncidentOut:
+    # Validate status transition before writing
+    if payload.status is not None:
+        current = await get_incident(db, incident_id)
+        if not current:
+            raise HTTPException(status_code=404, detail="Incident not found")
+        allowed = _VALID_TRANSITIONS.get(current.status, set())
+        if payload.status != current.status and payload.status not in allowed:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Invalid status transition: {current.status} → {payload.status}",
+            )
     if payload.status == "CLOSED":
         await lock_evidence_for_incident(db, incident_id)
     incident = await update_incident(db, incident_id, payload)
@@ -299,6 +322,20 @@ async def update_incident_endpoint(
         metadata=payload.model_dump(exclude_unset=True),
     )
     return IncidentOut.model_validate(incident)
+
+
+@router.get("/{incident_id}/report")
+async def get_incident_report(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Response:
+    from app.services.report_service import generate_incident_report
+    try:
+        html_content = await generate_incident_report(incident_id, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return Response(content=html_content, media_type="text/html")
 
 
 @router.delete(

@@ -421,3 +421,260 @@ async def list_incident_evidence(
     safe_incident_id = _validate_identifier(incident_id, "incident_id")
     items = await list_items(db, safe_incident_id)
     return [EvidenceItemOut.model_validate(item) for item in items]
+
+from pydantic import BaseModel
+
+def _has_duckdb() -> bool:
+    try:
+        import duckdb  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+_HAS_DUCKDB = _has_duckdb()
+
+class TimelineResponse(BaseModel):
+    data: list[dict]
+    total: int
+    page: int
+    limit: int
+
+@router.get("/timeline/{evidence_id}", response_model=TimelineResponse)
+async def get_timeline_data(
+    evidence_id: str,
+    q: str = Query(default=""),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=100, ge=10, le=1000),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> TimelineResponse:
+    """
+    Returns paginated and filtered contents of a timeline file (JSONL or CSV).
+    Auto-detects format by file extension.
+    Uses DuckDB for production-scale queries when available.
+    """
+    safe_evidence_id = _validate_identifier(evidence_id, "evidence_id")
+    item = await get_item(db, safe_evidence_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+
+    if item.type != "PROCESSED_TIMELINE":
+        raise HTTPException(status_code=400, detail="Evidence is not a timeline")
+
+    runtime_settings = await get_runtime_settings(db)
+    base_path = Path(runtime_settings.evidence_storage_path) / item.incident_id
+
+    # Search for matching file; also check pipeline output path timeline/timeline.jsonl
+    timeline_path: Path | None = None
+    search_candidates = list(base_path.rglob(item.name)) + [
+        base_path / "timeline" / "timeline.jsonl",
+    ]
+    for p in search_candidates:
+        if p.is_file():
+            timeline_path = p
+            break
+
+    if not timeline_path or not timeline_path.exists():
+        raise HTTPException(status_code=404, detail="Timeline file not found on disk")
+
+    is_jsonl = timeline_path.suffix.lower() in (".jsonl", ".ndjson", ".json")
+
+    # Prefer persistent DuckDB store when available (built by pipeline after export)
+    duckdb_store = timeline_path.parent / "duckdb.db"
+    if _HAS_DUCKDB and duckdb_store.exists():
+        return _query_duckdb_store(duckdb_store, q, page, limit)
+    elif _HAS_DUCKDB:
+        return _query_duckdb(timeline_path, q, page, limit, is_jsonl=is_jsonl)
+    else:
+        if is_jsonl:
+            return _query_jsonl_fallback(timeline_path, q, page, limit)
+        return _query_csv_fallback(timeline_path, q, page, limit)
+
+
+def _query_duckdb(
+    file_path: Path, q: str, page: int, limit: int, *, is_jsonl: bool = False
+) -> TimelineResponse:
+    """High-performance query using DuckDB's in-process engine.
+    Supports both CSV and JSONL (newline-delimited JSON) formats."""
+    import duckdb  # optional dependency — caller checks _HAS_DUCKDB first
+
+    offset = (page - 1) * limit
+    path_str = str(file_path).replace("'", "''")
+
+    try:
+        con = duckdb.connect(":memory:")
+
+        if is_jsonl:
+            reader = f"read_json_auto('{path_str}', ignore_errors=true)"
+        else:
+            reader = f"read_csv_auto('{path_str}', ignore_errors=true)"
+
+        # Build WHERE clause using schema-discovered columns
+        if q.strip():
+            safe_q = q.replace("'", "''").lower()
+            schema = con.execute(
+                f"SELECT column_name FROM (DESCRIBE SELECT * FROM {reader})"
+            ).fetchall()
+            col_names = [row[0] for row in schema]
+            conditions = " OR ".join(
+                f"LOWER(CAST(\"{col}\" AS VARCHAR)) LIKE '%{safe_q}%'"
+                for col in col_names
+            )
+            where_clause = f"WHERE ({conditions})" if conditions else ""
+        else:
+            where_clause = ""
+
+        total = con.execute(
+            f"SELECT COUNT(*) FROM {reader} {where_clause}"
+        ).fetchone()[0]
+
+        result = con.execute(
+            f"SELECT * FROM {reader} {where_clause} LIMIT {limit} OFFSET {offset}"
+        )
+        columns = [desc[0] for desc in result.description]
+        rows = [
+            {col: (str(val) if val is not None else None) for col, val in zip(columns, row)}
+            for row in result.fetchall()
+        ]
+        con.close()
+
+        return TimelineResponse(data=rows, total=total, page=page, limit=limit)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"DuckDB query failed: {str(e)}")
+
+
+def _query_duckdb_store(db_path: Path, q: str, page: int, limit: int) -> TimelineResponse:
+    """Query the persistent DuckDB store built by the pipeline (much faster than re-reading JSONL)."""
+    import duckdb  # noqa: F401
+
+    offset = (page - 1) * limit
+    safe_q = q.replace("'", "''").lower() if q.strip() else ""
+
+    try:
+        con = duckdb.connect(str(db_path), read_only=True)
+        try:
+            if safe_q:
+                schema = con.execute("DESCRIBE timeline_events").fetchall()
+                col_names = [row[0] for row in schema]
+                conditions = " OR ".join(
+                    f"LOWER(CAST(\"{col}\" AS VARCHAR)) LIKE '%{safe_q}%'"
+                    for col in col_names
+                )
+                where_clause = f"WHERE ({conditions})" if conditions else ""
+            else:
+                where_clause = ""
+
+            total = con.execute(
+                f"SELECT COUNT(*) FROM timeline_events {where_clause}"
+            ).fetchone()[0]
+            result = con.execute(
+                f"SELECT * FROM timeline_events {where_clause} "
+                f"ORDER BY datetime LIMIT {limit} OFFSET {offset}"
+            )
+            columns = [d[0] for d in result.description]
+            rows = [
+                {col: (str(val) if val is not None else None) for col, val in zip(columns, row)}
+                for row in result.fetchall()
+            ]
+            return TimelineResponse(data=rows, total=total, page=page, limit=limit)
+        finally:
+            con.close()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"DuckDB store query failed: {exc}")
+
+
+def _query_csv_fallback(csv_path: Path, q: str, page: int, limit: int) -> TimelineResponse:
+    """Fallback CSV reader for environments without DuckDB."""
+    import csv as _csv
+    results = []
+    total_matched = 0
+    start_idx = (page - 1) * limit
+    end_idx = start_idx + limit
+    query = q.lower()
+
+    try:
+        with open(csv_path, "r", encoding="utf-8", errors="replace") as csvfile:
+            reader = _csv.DictReader(csvfile)
+            for row in reader:
+                if query:
+                    if not any(query in str(v).lower() for v in row.values() if v):
+                        continue
+                if start_idx <= total_matched < end_idx:
+                    results.append(dict(row))
+                total_matched += 1
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read timeline: {exc}")
+
+    return TimelineResponse(data=results, total=total_matched, page=page, limit=limit)
+
+
+def _query_jsonl_fallback(jsonl_path: Path, q: str, page: int, limit: int) -> TimelineResponse:
+    """Fallback JSONL reader for environments without DuckDB. Streams line-by-line."""
+    import json as _json
+    results = []
+    total_matched = 0
+    start_idx = (page - 1) * limit
+    end_idx = start_idx + limit
+    query = q.lower()
+
+    try:
+        with open(jsonl_path, "r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = _json.loads(line)
+                except _json.JSONDecodeError:
+                    continue
+                if query:
+                    if not any(query in str(v).lower() for v in entry.values() if v is not None):
+                        continue
+                if start_idx <= total_matched < end_idx:
+                    results.append({k: (str(v) if v is not None else None) for k, v in entry.items()})
+                total_matched += 1
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read timeline: {exc}")
+
+    return TimelineResponse(data=results, total=total_matched, page=page, limit=limit)
+
+
+class ProcessingStatusResponse(BaseModel):
+    incident_id: str
+    status: str  # NOT_STARTED | PROCESSING | COMPLETE
+    timeline_evidence_id: str | None = None
+
+
+@router.get("/processing-status/{incident_id}", response_model=ProcessingStatusResponse)
+async def get_processing_status(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> ProcessingStatusResponse:
+    """
+    Check whether the forensics pipeline has completed for a given incident.
+    Returns NOT_STARTED, PROCESSING, or COMPLETE.
+    """
+    safe_incident_id = _validate_identifier(incident_id, "incident_id")
+    items = await list_items(db, safe_incident_id)
+
+    timeline_item = next(
+        (i for i in items if i.type == "PROCESSED_TIMELINE"),
+        None,
+    )
+
+    if timeline_item:
+        return ProcessingStatusResponse(
+            incident_id=safe_incident_id,
+            status="COMPLETE",
+            timeline_evidence_id=timeline_item.id,
+        )
+
+    # If there are other evidence items but no timeline, pipeline is in progress
+    has_raw = any(i.type != "PROCESSED_TIMELINE" for i in items)
+    return ProcessingStatusResponse(
+        incident_id=safe_incident_id,
+        status="PROCESSING" if has_raw else "NOT_STARTED",
+        timeline_evidence_id=None,
+    )

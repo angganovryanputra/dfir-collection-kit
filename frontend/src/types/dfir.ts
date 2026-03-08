@@ -6,10 +6,12 @@ export type IncidentType =
   | "UNAUTHORIZED_ACCESS"
   | "INSIDER_THREAT";
 
-export type IncidentStatus = 
+export type IncidentStatus =
+  | "PENDING"
   | "ACTIVE"
   | "COLLECTION_IN_PROGRESS"
   | "COLLECTION_COMPLETE"
+  | "COLLECTION_FAILED"
   | "CLOSED";
 
 export type EvidenceStatus = 

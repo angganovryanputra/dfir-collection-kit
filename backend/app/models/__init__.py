@@ -9,6 +9,8 @@ from app.models.collector import Collector
 from app.models.settings import SystemSettings
 from app.models.job import Job
 from app.models.audit_log import AuditLog
+from app.models.processing import ProcessingJob, SigmaHit
+from app.models.analytics import AttackChain, IOCIndicator, IOCMatch, YaraMatch
 
 __all__ = [
     "Incident",
@@ -23,4 +25,10 @@ __all__ = [
     "SystemSettings",
     "Job",
     "AuditLog",
+    "ProcessingJob",
+    "SigmaHit",
+    "AttackChain",
+    "IOCIndicator",
+    "IOCMatch",
+    "YaraMatch",
 ]

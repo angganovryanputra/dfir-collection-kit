@@ -18,6 +18,7 @@ from app.core.evidence_files import (
     append_chain_log,
     extract_zip,
     hash_file,
+    safe_join,
     save_upload,
     write_hash_manifest,
     write_lock_marker,
@@ -37,6 +38,7 @@ from app.schemas.incident import IncidentUpdate
 from app.schemas.job import JobCreate, JobInstruction, JobModule, JobOut, JobStatusUpdate
 from app.services.audit_log_service import safe_record_event
 from app.services.system_settings_service import get_runtime_settings
+
 
 router = APIRouter()
 
@@ -416,6 +418,14 @@ async def upload_job_evidence(
     )
 
     write_lock_marker(base_path / "LOCKED")
+
+    # Auto-trigger parsing pipeline if enabled in settings
+    if runtime_settings.auto_process:
+        import asyncio as _asyncio
+        from app.services.artifact_parser_service import run_pipeline_background
+        _asyncio.create_task(run_pipeline_background(job.incident_id, job.id, base_path))
+        logger.info("Processing pipeline triggered for job %s", job.id)
+
     try:
         await create_entry(
             db,

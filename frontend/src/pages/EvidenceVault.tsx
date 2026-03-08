@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -15,9 +15,16 @@ import {
   CheckCircle2,
   ChevronRight,
   HardDrive,
+  Activity,
+  GitBranch,
+  ShieldAlert,
+  Search,
+  Bug,
 } from "lucide-react";
 import type { Evidence } from "@/types/dfir";
 import { apiGet, apiPost } from "@/lib/api";
+import { TimelineExplorer } from "@/components/TimelineExplorer";
+import { Target } from "lucide-react";
 
 interface EvidenceFolder {
   id: string;
@@ -54,6 +61,18 @@ interface DiagnosticsResponse {
   storage_used_percent: number | null;
 }
 
+interface ProcessingJobOut {
+  id: string;
+  incident_id: string;
+  job_id: string;
+  status: "PENDING" | "RUNNING" | "DONE" | "FAILED";
+  phase: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+  created_at: string;
+}
+
 const mapFolder = (folder: EvidenceFolderResponse): EvidenceFolder => ({
   id: folder.id,
   incidentId: folder.incident_id,
@@ -78,12 +97,14 @@ const mapEvidence = (item: EvidenceItemResponse): Evidence => ({
 
 export default function EvidenceVault() {
   const { id: incidentId } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [folders, setFolders] = useState<EvidenceFolder[]>([]);
   const [evidenceItems, setEvidenceItems] = useState<Evidence[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [selectedTimelineId, setSelectedTimelineId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!incidentId) return;
@@ -121,6 +142,21 @@ export default function EvidenceVault() {
     enabled: Boolean(selectedFolderData),
   });
 
+  // Forensics pipeline processing status — uses new ProcessingJob endpoint
+  const processingQuery = useQuery<ProcessingJobOut>({
+    queryKey: ["processing-job-status", selectedFolderData?.incidentId],
+    queryFn: () =>
+      apiGet<ProcessingJobOut>(
+        `/processing/incident/${selectedFolderData?.incidentId}/status`
+      ),
+    enabled: Boolean(selectedFolderData),
+    retry: false,
+    refetchInterval: (query) => {
+      const s = query.state.data?.status;
+      return s === "RUNNING" || s === "PENDING" ? 5000 : false;
+    },
+  });
+
   useEffect(() => {
     if (foldersQuery.error || itemsQuery.error) {
       setErrorMessage("Unable to load evidence data.");
@@ -153,8 +189,8 @@ export default function EvidenceVault() {
       const response = await apiPost<{ download_url: string; signature?: string | null }>(
         "/evidence/exports",
         {
-        incident_id: selectedFolderData.incidentId,
-      }
+          incident_id: selectedFolderData.incidentId,
+        }
       );
       const baseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
       const url = baseUrl ? `${baseUrl.replace(/\/$/, "")}${response.download_url}` : response.download_url;
@@ -175,8 +211,8 @@ export default function EvidenceVault() {
       const response = await apiPost<{ download_url: string; signature?: string | null }>(
         "/evidence/exports",
         {
-        evidence_id: evidenceId,
-      }
+          evidence_id: evidenceId,
+        }
       );
       const baseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
       const url = baseUrl ? `${baseUrl.replace(/\/$/, "")}${response.download_url}` : response.download_url;
@@ -189,6 +225,16 @@ export default function EvidenceVault() {
       setIsExporting(false);
     }
   };
+
+  if (selectedTimelineId && selectedFolderData) {
+    return (
+      <TimelineExplorer
+        evidenceId={selectedTimelineId}
+        incidentId={selectedFolderData.incidentId}
+        onBack={() => setSelectedTimelineId(null)}
+      />
+    );
+  }
 
   return (
     <AppLayout
@@ -224,19 +270,17 @@ export default function EvidenceVault() {
                     <button
                       key={folder.id}
                       onClick={() => setSelectedFolder(folder.id)}
-                      className={`w-full text-left p-4 border transition-all ${
-                        selectedFolder === folder.id
-                          ? "border-primary bg-primary/10"
-                          : "border-border bg-secondary/50 hover:border-muted-foreground"
-                      }`}
+                      className={`w-full text-left p-4 border transition-all ${selectedFolder === folder.id
+                        ? "border-primary bg-primary/10"
+                        : "border-border bg-secondary/50 hover:border-muted-foreground"
+                        }`}
                     >
                       <div className="flex items-start gap-3">
                         <Folder
-                          className={`w-5 h-5 mt-0.5 ${
-                            selectedFolder === folder.id
-                              ? "text-primary"
-                              : "text-muted-foreground"
-                          }`}
+                          className={`w-5 h-5 mt-0.5 ${selectedFolder === folder.id
+                            ? "text-primary"
+                            : "text-muted-foreground"
+                            }`}
                         />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2">
@@ -255,11 +299,10 @@ export default function EvidenceVault() {
                           </div>
                         </div>
                         <ChevronRight
-                          className={`w-4 h-4 shrink-0 ${
-                            selectedFolder === folder.id
-                              ? "text-primary"
-                              : "text-muted-foreground"
-                          }`}
+                          className={`w-4 h-4 shrink-0 ${selectedFolder === folder.id
+                            ? "text-primary"
+                            : "text-muted-foreground"
+                            }`}
                         />
                       </div>
                     </button>
@@ -300,6 +343,87 @@ export default function EvidenceVault() {
                     />
                   </div>
                 </TacticalPanel>
+
+                {/* Forensics Pipeline Status */}
+                {processingQuery.data && (
+                  <div className={`flex flex-wrap items-center gap-3 px-4 py-3 border font-mono text-xs ${processingQuery.data.status === "DONE"
+                    ? "border-primary/40 bg-primary/10 text-primary"
+                    : processingQuery.data.status === "FAILED"
+                    ? "border-destructive/40 bg-destructive/10 text-destructive"
+                    : "border-warning/40 bg-warning/10 text-warning"
+                    }`}>
+                    {processingQuery.data.status === "RUNNING" || processingQuery.data.status === "PENDING" ? (
+                      <>
+                        <Activity className="w-4 h-4 animate-pulse" />
+                        <span>FORENSICS PIPELINE: {processingQuery.data.phase?.toUpperCase() ?? "PROCESSING"}...</span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/processing`)}
+                          className="ml-auto h-6 px-3 text-warning border border-warning/50 hover:bg-warning/20"
+                        >
+                          VIEW PIPELINE
+                        </Button>
+                      </>
+                    ) : processingQuery.data.status === "DONE" ? (
+                      <>
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>FORENSICS PIPELINE: ANALYSIS READY</span>
+                        <div className="ml-auto flex items-center gap-2">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/processing`)}
+                            className="h-6 px-3 text-primary border border-primary/50 hover:bg-primary/20"
+                          >
+                            <Search className="w-3 h-3 mr-1.5" />
+                            SIGMA
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/attack-chains`)}
+                            className="h-6 px-3 text-primary border border-primary/50 hover:bg-primary/20"
+                          >
+                            <GitBranch className="w-3 h-3 mr-1.5" />
+                            ATT&CK
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/ioc-matches`)}
+                            className="h-6 px-3 text-primary border border-primary/50 hover:bg-primary/20"
+                          >
+                            <ShieldAlert className="w-3 h-3 mr-1.5" />
+                            IOC
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/yara-matches`)}
+                            className="h-6 px-3 text-primary border border-primary/50 hover:bg-primary/20"
+                          >
+                            <Bug className="w-3 h-3 mr-1.5" />
+                            YARA
+                          </Button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <Activity className="w-4 h-4" />
+                        <span>FORENSICS PIPELINE: {processingQuery.data.error_message ?? "FAILED"}</span>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/processing`)}
+                          className="ml-auto h-6 px-3 text-destructive border border-destructive/50 hover:bg-destructive/20"
+                        >
+                          VIEW DETAILS
+                        </Button>
+                      </>
+                    )}
+                  </div>
+                )}
 
                 {/* Search & Actions */}
                 <div className="flex items-center gap-4">
@@ -368,15 +492,28 @@ export default function EvidenceVault() {
                               )}
                             </div>
                           </div>
-                          <div className="col-span-2">
+                          <div className="col-span-2 flex items-center gap-1">
                             <Button
                               variant="ghost"
                               size="sm"
                               onClick={() => handleExportItem(evidence.id)}
                               disabled={isExporting}
+                              title="Download Raw File"
                             >
-                              <Download className="w-3 h-3" />
+                              <Download className="w-4 h-4" />
                             </Button>
+
+                            {(evidence.type === 'PROCESSED_TIMELINE' || evidence.name.includes("super_timeline")) && (
+                              <Button
+                                variant="tactical"
+                                size="sm"
+                                onClick={() => setSelectedTimelineId(evidence.id)}
+                                className="ml-2 h-7 px-3 bg-primary/20 hover:bg-primary/40 text-primary border-primary/50"
+                              >
+                                <Target className="w-3 h-3 mr-1.5" />
+                                HUNT
+                              </Button>
+                            )}
                           </div>
                         </div>
                       ))

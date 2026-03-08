@@ -336,6 +336,20 @@ MODULE_REGISTRY = {
         "output_relpath": "artifacts/windows/usb_history.txt",
         "params": {},
     },
+    "windows_mft_vss": {
+        "os": "windows",
+        "category": "artifacts",
+        "priority": 1,
+        "output_relpath": "artifacts/windows/ntfs/MFT",
+        "params": {},
+    },
+    "windows_usnjrnl_vss": {
+        "os": "windows",
+        "category": "artifacts",
+        "priority": 1,
+        "output_relpath": "artifacts/windows/ntfs/UsnJrnl_$J",
+        "params": {},
+    },
     # ── Linux · System ──────────────────────────────────────────────────────
     "linux_ip_config": {
         "os": "linux",
@@ -588,6 +602,9 @@ COLLECTION_PROFILES: dict[str, dict] = {
                 "windows_recycle_bin",
                 "windows_bits_jobs",
                 "windows_usb_history",
+                # NTFS metadata — critical for file deletion/encryption timeline
+                "windows_mft_vss",
+                "windows_usnjrnl_vss",
                 # System
                 "windows_local_users",
                 "windows_system_info",
@@ -642,6 +659,9 @@ COLLECTION_PROFILES: dict[str, dict] = {
                 # Execution history
                 "windows_prefetch",
                 "windows_shimcache",
+                # NTFS metadata — full file access timeline
+                "windows_mft_vss",
+                "windows_usnjrnl_vss",
                 # Logs for user activity
                 "windows_eventlog_security",
                 "windows_eventlog_powershell_operational",

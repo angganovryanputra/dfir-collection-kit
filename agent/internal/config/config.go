@@ -1,11 +1,13 @@
 package config
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 const (
@@ -13,6 +15,8 @@ const (
 	DefaultHeartbeatInterval = 30
 	// Poll interval in seconds
 	DefaultPollInterval = 15
+	// Default jitter percentage for OPSEC (±%)
+	DefaultJitterPercent = 30
 	// Filename for storing agent ID
 	AgentIDFile = "agent_id.json"
 	// Default backend API URL
@@ -32,6 +36,7 @@ type Config struct {
 	AgentVersion        string
 	HeartbeatInterval int
 	PollInterval       int
+	JitterPercent      int // ±% randomisation on intervals for OPSEC
 }
 
 // Load reads configuration from environment variables and generates/loads agent ID
@@ -65,6 +70,7 @@ func Load() (*Config, error) {
 		AgentVersion:        "1.0.0",
 		HeartbeatInterval: DefaultHeartbeatInterval,
 		PollInterval:       DefaultPollInterval,
+		JitterPercent:      DefaultJitterPercent,
 	}
 
 	return cfg, nil
@@ -89,6 +95,7 @@ func LoadDryRun() (*Config, error) {
 		AgentVersion:       "1.0.0",
 		HeartbeatInterval: DefaultHeartbeatInterval,
 		PollInterval:       DefaultPollInterval,
+		JitterPercent:      DefaultJitterPercent,
 	}, nil
 }
 
@@ -112,18 +119,21 @@ func loadOrGenerateAgentID() (string, error) {
 		return string(data), nil
 	}
 
-	// Generate new agent ID (UUIDv4)
-	// In production, this should use crypto/rand or a UUID library
-	timestamp := os.Getenv("DFIR_AGENT_ID")
-	if timestamp != "" {
-		return timestamp, nil
+	// Allow explicit override via environment variable
+	if envID := os.Getenv("DFIR_AGENT_ID"); envID != "" {
+		if err := os.WriteFile(agentIDPath, []byte(envID), 0600); err != nil {
+			return "", fmt.Errorf("failed to save agent ID: %w", err)
+		}
+		return envID, nil
 	}
 
-	// Generate a deterministic ID based on hostname if possible
-	hostname, _ := os.Hostname()
-	agentID := fmt.Sprintf("AGENT-%s-%d", hostname, os.Getpid())
+	// Generate a cryptographically random UUID v4
+	agentID, err := generateUUID()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate agent ID: %w", err)
+	}
 
-	if err := os.WriteFile(agentIDPath, []byte(agentID), 0644); err != nil {
+	if err := os.WriteFile(agentIDPath, []byte(agentID), 0600); err != nil {
 		return "", fmt.Errorf("failed to save agent ID: %w", err)
 	}
 
@@ -147,6 +157,19 @@ func detectOSName() string {
 	return fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH)
 }
 
+// generateUUID returns a random UUID v4 string using crypto/rand.
+func generateUUID() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	// Set version (4) and variant bits
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
+		b[0:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
+}
+
 // getWindowsVersion attempts to get Windows version
 // This is a simplified version - in production use proper Windows API calls
 func getWindowsVersion() string {
@@ -155,11 +178,20 @@ func getWindowsVersion() string {
 	return "10/11"
 }
 
-// getLinuxDistro attempts to get Linux distribution
+// getLinuxDistro reads /etc/os-release to return the distribution name.
 func getLinuxDistro() string {
-	// Check for common distro files
-	if _, err := os.Stat("/etc/os-release"); err == nil {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
 		return "Generic Linux"
 	}
-	return "Unknown"
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "PRETTY_NAME=") {
+			name := strings.TrimPrefix(line, "PRETTY_NAME=")
+			name = strings.Trim(name, "\"")
+			if name != "" {
+				return name
+			}
+		}
+	}
+	return "Generic Linux"
 }

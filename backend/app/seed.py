@@ -341,6 +341,14 @@ async def seed_data(session: AsyncSession) -> None:
         max_failed_logins=5,
         log_retention_days=365,
         export_format="ZIP",
+        ez_tools_path="/opt/eztools",
+        chainsaw_path="/usr/local/bin/chainsaw",
+        hayabusa_path="/usr/local/bin/hayabusa",
+        sigma_rules_path="/opt/sigma-rules",
+        yara_rules_path="/opt/yara-rules",
+        timesketch_url=None,
+        timesketch_token=None,
+        auto_process=True,
     )
 
     session.add_all(users)

@@ -32,6 +32,7 @@ import {
   RefreshCw,
   Shield,
   FileText,
+  ShieldAlert,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 
@@ -81,6 +82,13 @@ interface SystemSettingsResponse {
   max_failed_logins: number;
   log_retention_days: number;
   export_format: string;
+  ez_tools_path: string | null;
+  chainsaw_path: string | null;
+  hayabusa_path: string | null;
+  sigma_rules_path: string | null;
+  yara_rules_path: string | null;
+  timesketch_url: string | null;
+  auto_process: boolean;
 }
 
 interface AuditLogEntry {
@@ -121,7 +129,18 @@ const mapCollector = (collector: CollectorResponse): CollectorConfig => ({
 });
 
 
-type TabType = "users" | "collectors" | "system" | "audit";
+interface IOCIndicator {
+  id: string;
+  ioc_type: string;
+  value: string;
+  description: string | null;
+  source: string | null;
+  severity: string;
+  created_by: string;
+  created_at: string;
+}
+
+type TabType = "users" | "collectors" | "system" | "audit" | "threatintel";
 
 export default function AdminSettings() {
   const navigate = useNavigate();
@@ -150,6 +169,11 @@ export default function AdminSettings() {
   const [auditTotal, setAuditTotal] = useState(0);
   const [auditPage, setAuditPage] = useState(1);
   const [auditItemsPerPage, setAuditItemsPerPage] = useState(25);
+  const [iocIndicators, setIocIndicators] = useState<IOCIndicator[]>([]);
+  const [iocTypeFilter, setIocTypeFilter] = useState("all");
+  const [iocTotal, setIocTotal] = useState(0);
+  const [newIoc, setNewIoc] = useState({ ioc_type: "ip", value: "", description: "", severity: "high" });
+  const [isAddingIoc, setIsAddingIoc] = useState(false);
 
   const usersQuery = useQuery({
     queryKey: ["users"],
@@ -220,6 +244,59 @@ export default function AdminSettings() {
     if (activeTab !== "audit") return;
     loadAuditLogs();
   }, [activeTab, auditPage, auditItemsPerPage, auditEventType, auditActorId, auditTargetId]);
+
+  const loadIOCIndicators = async () => {
+    setErrorMessage(null);
+    try {
+      const params = new URLSearchParams({ limit: "200", offset: "0" });
+      if (iocTypeFilter !== "all") params.set("ioc_type", iocTypeFilter);
+      const data = await apiGet<IOCIndicator[]>(`/processing/ioc/indicators?${params}`);
+      setIocIndicators(data);
+      setIocTotal(data.length);
+    } catch {
+      setErrorMessage("Unable to load IOC indicators.");
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== "threatintel") return;
+    loadIOCIndicators();
+  }, [activeTab, iocTypeFilter]);
+
+  const handleAddIOC = async () => {
+    if (!newIoc.value.trim()) {
+      setErrorMessage("IOC value is required.");
+      return;
+    }
+    setIsAddingIoc(true);
+    setErrorMessage(null);
+    try {
+      await apiPost<IOCIndicator>("/processing/ioc/indicators", {
+        ioc_type: newIoc.ioc_type,
+        value: newIoc.value.trim(),
+        description: newIoc.description.trim() || null,
+        source: null,
+        severity: newIoc.severity,
+      });
+      setNewIoc({ ioc_type: "ip", value: "", description: "", severity: "high" });
+      await loadIOCIndicators();
+    } catch {
+      setErrorMessage("Unable to add IOC indicator.");
+    } finally {
+      setIsAddingIoc(false);
+    }
+  };
+
+  const handleDeleteIOC = async (id: string) => {
+    setErrorMessage(null);
+    try {
+      await apiDelete(`/processing/ioc/indicators/${id}`);
+      setIocIndicators((current) => current.filter((i) => i.id !== id));
+      setIocTotal((t) => t - 1);
+    } catch {
+      setErrorMessage("Unable to delete IOC indicator.");
+    }
+  };
 
   useEffect(() => {
     const raw = localStorage.getItem("dfir_auth");
@@ -370,6 +447,7 @@ export default function AdminSettings() {
     { id: "collectors", label: "COLLECTORS", icon: <Server className="w-4 h-4" /> },
     { id: "system", label: "SYSTEM CONFIG", icon: <Settings className="w-4 h-4" /> },
     { id: "audit", label: "AUDIT LOGS", icon: <FileText className="w-4 h-4" /> },
+    { id: "threatintel", label: "THREAT INTEL", icon: <ShieldAlert className="w-4 h-4" /> },
   ];
 
   const refreshCollectors = async () => {
@@ -815,6 +893,112 @@ export default function AdminSettings() {
                       </div>
                     </div>
                   </TacticalPanel>
+
+                  {/* Forensics Pipeline Settings */}
+                  <TacticalPanel title="FORENSICS PIPELINE" className="col-span-2">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <FormLabel className="text-muted-foreground uppercase">
+                          EZ Tools Path
+                        </FormLabel>
+                        <Input
+                          value={systemSettings?.ez_tools_path ?? ""}
+                          placeholder="/opt/eztools"
+                          onChange={(event) =>
+                            setSystemSettings((current) =>
+                              current ? { ...current, ez_tools_path: event.target.value || null } : current
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <FormLabel className="text-muted-foreground uppercase">
+                          Chainsaw Path
+                        </FormLabel>
+                        <Input
+                          value={systemSettings?.chainsaw_path ?? ""}
+                          placeholder="/usr/local/bin/chainsaw"
+                          onChange={(event) =>
+                            setSystemSettings((current) =>
+                              current ? { ...current, chainsaw_path: event.target.value || null } : current
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <FormLabel className="text-muted-foreground uppercase">
+                          Hayabusa Path
+                        </FormLabel>
+                        <Input
+                          value={systemSettings?.hayabusa_path ?? ""}
+                          placeholder="/usr/local/bin/hayabusa"
+                          onChange={(event) =>
+                            setSystemSettings((current) =>
+                              current ? { ...current, hayabusa_path: event.target.value || null } : current
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <FormLabel className="text-muted-foreground uppercase">
+                          Sigma Rules Path
+                        </FormLabel>
+                        <Input
+                          value={systemSettings?.sigma_rules_path ?? ""}
+                          placeholder="/opt/sigma-rules"
+                          onChange={(event) =>
+                            setSystemSettings((current) =>
+                              current ? { ...current, sigma_rules_path: event.target.value || null } : current
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <FormLabel className="text-muted-foreground uppercase">
+                          YARA Rules Path
+                        </FormLabel>
+                        <Input
+                          value={systemSettings?.yara_rules_path ?? ""}
+                          placeholder="/opt/yara-rules"
+                          onChange={(event) =>
+                            setSystemSettings((current) =>
+                              current ? { ...current, yara_rules_path: event.target.value || null } : current
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <FormLabel className="text-muted-foreground uppercase">
+                          Timesketch URL
+                        </FormLabel>
+                        <Input
+                          value={systemSettings?.timesketch_url ?? ""}
+                          placeholder="http://timesketch:5000"
+                          onChange={(event) =>
+                            setSystemSettings((current) =>
+                              current ? { ...current, timesketch_url: event.target.value || null } : current
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="flex items-center gap-3 col-span-2 pt-2">
+                        <input
+                          type="checkbox"
+                          id="auto_process"
+                          checked={systemSettings?.auto_process ?? true}
+                          onChange={(event) =>
+                            setSystemSettings((current) =>
+                              current ? { ...current, auto_process: event.target.checked } : current
+                            )
+                          }
+                          className="w-4 h-4 accent-primary"
+                        />
+                        <label htmlFor="auto_process" className="font-mono text-xs text-muted-foreground uppercase cursor-pointer">
+                          Auto-trigger pipeline after evidence upload completes
+                        </label>
+                      </div>
+                    </div>
+                  </TacticalPanel>
                 </div>
 
                  <div className="flex justify-end gap-4 mt-6">
@@ -954,6 +1138,155 @@ export default function AdminSettings() {
                       setAuditPage(1);
                     }}
                   />
+                </TacticalPanel>
+              </>
+            )}
+
+            {/* Threat Intel Tab */}
+            {activeTab === "threatintel" && (
+              <>
+                <div className="flex items-center justify-between">
+                  <h2 className="font-mono text-sm font-bold uppercase tracking-wider text-foreground">
+                    IOC Indicators ({iocTotal})
+                  </h2>
+                  <Button variant="secondary" onClick={loadIOCIndicators}>
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                    REFRESH
+                  </Button>
+                </div>
+
+                {/* Add IOC Form */}
+                <TacticalPanel title="ADD INDICATOR">
+                  <div className="grid grid-cols-12 gap-3 items-end">
+                    <div className="col-span-2 space-y-1">
+                      <FormLabel className="text-muted-foreground uppercase text-[10px]">TYPE</FormLabel>
+                      <select
+                        value={newIoc.ioc_type}
+                        onChange={(e) => setNewIoc({ ...newIoc, ioc_type: e.target.value })}
+                        className="w-full h-9 bg-background border border-border rounded-sm px-2 font-mono text-xs text-foreground"
+                      >
+                        {["ip", "domain", "sha256", "md5", "sha1"].map((t) => (
+                          <option key={t} value={t}>{t.toUpperCase()}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="col-span-4 space-y-1">
+                      <FormLabel className="text-muted-foreground uppercase text-[10px]">VALUE</FormLabel>
+                      <Input
+                        value={newIoc.value}
+                        onChange={(e) => setNewIoc({ ...newIoc, value: e.target.value })}
+                        placeholder="e.g. 192.168.1.1 or domain.com"
+                        className="font-mono text-xs"
+                        onKeyDown={(e) => { if (e.key === "Enter") handleAddIOC(); }}
+                      />
+                    </div>
+                    <div className="col-span-3 space-y-1">
+                      <FormLabel className="text-muted-foreground uppercase text-[10px]">DESCRIPTION</FormLabel>
+                      <Input
+                        value={newIoc.description}
+                        onChange={(e) => setNewIoc({ ...newIoc, description: e.target.value })}
+                        placeholder="Optional description"
+                        className="font-mono text-xs"
+                      />
+                    </div>
+                    <div className="col-span-2 space-y-1">
+                      <FormLabel className="text-muted-foreground uppercase text-[10px]">SEVERITY</FormLabel>
+                      <select
+                        value={newIoc.severity}
+                        onChange={(e) => setNewIoc({ ...newIoc, severity: e.target.value })}
+                        className="w-full h-9 bg-background border border-border rounded-sm px-2 font-mono text-xs text-foreground"
+                      >
+                        {["critical", "high", "medium", "low"].map((s) => (
+                          <option key={s} value={s}>{s.toUpperCase()}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="col-span-1">
+                      <Button
+                        variant="tactical"
+                        className="w-full"
+                        onClick={handleAddIOC}
+                        disabled={isAddingIoc}
+                      >
+                        <Plus className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                </TacticalPanel>
+
+                {/* IOC Type Filter */}
+                <div className="flex flex-wrap gap-2 font-mono text-xs">
+                  {["all", "ip", "domain", "sha256", "md5", "sha1"].map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setIocTypeFilter(t)}
+                      className={`px-3 py-1.5 border rounded-sm uppercase transition-colors ${
+                        iocTypeFilter === t
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border text-muted-foreground hover:border-primary/40"
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+
+                {/* IOC Table */}
+                <TacticalPanel title="INDICATOR DATABASE">
+                  {iocIndicators.length === 0 ? (
+                    <div className="py-8 text-center font-mono text-xs text-muted-foreground">
+                      No IOC indicators configured. Add threat intelligence above.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full font-mono text-xs">
+                        <thead>
+                          <tr className="border-b border-border text-muted-foreground">
+                            <th className="px-3 py-2 text-left font-normal uppercase">TYPE</th>
+                            <th className="px-3 py-2 text-left font-normal uppercase">VALUE</th>
+                            <th className="px-3 py-2 text-left font-normal uppercase">DESCRIPTION</th>
+                            <th className="px-3 py-2 text-left font-normal uppercase">SEVERITY</th>
+                            <th className="px-3 py-2 text-left font-normal uppercase">ADDED BY</th>
+                            <th className="px-3 py-2"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {iocIndicators.map((ind) => (
+                            <tr key={ind.id} className="border-b border-border/40 hover:bg-secondary/30">
+                              <td className="px-3 py-2 text-primary uppercase">{ind.ioc_type}</td>
+                              <td className="px-3 py-2 font-bold text-foreground max-w-[200px] truncate">
+                                {ind.value}
+                              </td>
+                              <td className="px-3 py-2 text-muted-foreground max-w-[200px] truncate">
+                                {ind.description ?? "—"}
+                              </td>
+                              <td className="px-3 py-2">
+                                <span className={`px-1.5 py-0.5 border rounded-sm uppercase text-[10px] ${
+                                  ind.severity === "critical" ? "text-red-400 border-red-400/30 bg-red-400/10"
+                                  : ind.severity === "high" ? "text-orange-400 border-orange-400/30 bg-orange-400/10"
+                                  : ind.severity === "medium" ? "text-yellow-400 border-yellow-400/30 bg-yellow-400/10"
+                                  : "text-blue-400 border-blue-400/30 bg-blue-400/10"
+                                }`}>
+                                  {ind.severity}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-muted-foreground">{ind.created_by}</td>
+                              <td className="px-3 py-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteIOC(ind.id)}
+                                  title="Remove indicator"
+                                >
+                                  <Trash2 className="w-3 h-3 text-destructive" />
+                                </Button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </TacticalPanel>
               </>
             )}

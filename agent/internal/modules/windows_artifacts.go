@@ -30,19 +30,18 @@ func (m *WindowsRegistryHives) Run(ctx context.Context, mctx ModuleContext, para
 	if err := os.MkdirAll(outputPath, 0755); err != nil {
 		return fmt.Errorf("failed to create output dir: %w", err)
 	}
-	hives := []struct{ name, key string }{
-		{"SYSTEM", `HKLM\SYSTEM`},
-		{"SOFTWARE", `HKLM\SOFTWARE`},
-		{"SAM", `HKLM\SAM`},
-		{"SECURITY", `HKLM\SECURITY`},
+	hives := []struct{ name, path string }{
+		{"SYSTEM", `C:\Windows\System32\config\SYSTEM`},
+		{"SOFTWARE", `C:\Windows\System32\config\SOFTWARE`},
+		{"SAM", `C:\Windows\System32\config\SAM`},
+		{"SECURITY", `C:\Windows\System32\config\SECURITY`},
 	}
 	var errs []string
 	for _, hive := range hives {
 		dst := filepath.Join(outputPath, hive.name)
-		// /y overwrites if the destination already exists
-		cmd := exec.CommandContext(ctx, "reg", "save", hive.key, dst, "/y")
-		if out, err := cmd.CombinedOutput(); err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v (%s)", hive.name, err, strings.TrimSpace(string(out))))
+		err := CopyFileNativeBackup(ctx, hive.path, dst)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", hive.name, err))
 		}
 	}
 	if len(errs) == len(hives) {
@@ -80,11 +79,11 @@ func (m *WindowsNtuserDat) Run(ctx context.Context, mctx ModuleContext, params m
 	for _, profileDir := range profiles {
 		uname := profileName(profileDir)
 		dstDir := filepath.Join(outputPath, uname)
-		if copyErr := copyWithRobocopy(ctx, profileDir, "NTUSER.DAT", dstDir); copyErr != nil {
+		if copyErr := copyNative(ctx, profileDir, "NTUSER.DAT", dstDir); copyErr != nil {
 			errs = append(errs, fmt.Sprintf("%s NTUSER.DAT: %v", uname, copyErr))
 		}
 		usrClassDir := filepath.Join(profileDir, `AppData\Local\Microsoft\Windows`)
-		_ = copyWithRobocopy(ctx, usrClassDir, "UsrClass.dat", dstDir)
+		_ = copyNative(ctx, usrClassDir, "UsrClass.dat", dstDir)
 	}
 	writeErrors(outputPath, errs)
 	return nil
@@ -105,7 +104,7 @@ func NewWindowsPrefetch() *WindowsPrefetch {
 
 func (m *WindowsPrefetch) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
 	prefetchDir := `C:\Windows\Prefetch`
-	if err := copyWithRobocopy(ctx, prefetchDir, "*.pf", outputPath); err != nil {
+	if err := copyNative(ctx, prefetchDir, "*.pf", outputPath); err != nil {
 		note := fmt.Sprintf("prefetch collection failed (requires admin): %v", err)
 		_ = WriteNotFound(filepath.Join(outputPath, "error.txt"), note)
 		return NewWarningError(note)
@@ -128,13 +127,13 @@ func NewWindowsAmcache() *WindowsAmcache {
 
 func (m *WindowsAmcache) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
 	amcacheDir := `C:\Windows\AppCompat\Programs`
-	if err := copyWithRobocopy(ctx, amcacheDir, "Amcache.hve", outputPath); err != nil {
+	if err := copyNative(ctx, amcacheDir, "Amcache.hve", outputPath); err != nil {
 		note := fmt.Sprintf("amcache collection failed: %v", err)
 		_ = WriteNotFound(filepath.Join(outputPath, "error.txt"), note)
 		return NewWarningError(note)
 	}
 	// Also copy transaction logs for hive integrity
-	_ = copyWithRobocopy(ctx, amcacheDir, "Amcache.hve.LOG*", outputPath)
+	_ = copyNative(ctx, amcacheDir, "Amcache.hve.LOG*", outputPath)
 	return nil
 }
 
@@ -186,7 +185,7 @@ func (m *WindowsLnkFiles) Run(ctx context.Context, mctx ModuleContext, params ma
 		uname := profileName(profileDir)
 		recentDir := filepath.Join(profileDir, `AppData\Roaming\Microsoft\Windows\Recent`)
 		dstDir := filepath.Join(outputPath, uname)
-		_ = copyWithRobocopy(ctx, recentDir, "*.lnk", dstDir)
+		_ = copyNative(ctx, recentDir, "*.lnk", dstDir)
 	}
 	return nil
 }
@@ -215,8 +214,8 @@ func (m *WindowsJumpLists) Run(ctx context.Context, mctx ModuleContext, params m
 		base := filepath.Join(profileDir, `AppData\Roaming\Microsoft\Windows\Recent`)
 		autoDst := filepath.Join(outputPath, uname, "AutomaticDestinations")
 		customDst := filepath.Join(outputPath, uname, "CustomDestinations")
-		_ = copyWithRobocopyRecursive(ctx, filepath.Join(base, "AutomaticDestinations"), autoDst)
-		_ = copyWithRobocopyRecursive(ctx, filepath.Join(base, "CustomDestinations"), customDst)
+		_ = copyNativeRecursive(ctx, filepath.Join(base, "AutomaticDestinations"), autoDst)
+		_ = copyNativeRecursive(ctx, filepath.Join(base, "CustomDestinations"), customDst)
 	}
 	return nil
 }
@@ -284,7 +283,7 @@ func collectBrowserArtifacts(ctx context.Context, outputPath, relDataDir string)
 			srcDir := filepath.Join(dataDir, name)
 			dstDir := filepath.Join(outputPath, uname, name)
 			for _, f := range browserFiles {
-				_ = copyWithRobocopy(ctx, srcDir, f, dstDir)
+				_ = copyNative(ctx, srcDir, f, dstDir)
 			}
 		}
 	}
@@ -325,15 +324,32 @@ func NewWindowsRecycleBin() *WindowsRecycleBin {
 }
 
 func (m *WindowsRecycleBin) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
-	command := `$drives = Get-PSDrive -PSProvider FileSystem | Select-Object -ExpandProperty Root;` +
-		`foreach ($drive in $drives) {` +
-		`  $rb = Join-Path $drive '$Recycle.Bin';` +
-		`  if (Test-Path $rb) {` +
-		`    Get-ChildItem -Path $rb -Recurse -Force -ErrorAction SilentlyContinue |` +
-		`    Select-Object FullName,Length,LastWriteTime,CreationTime` +
-		`  }` +
-		`}`
-	return runPowerShellToFile(ctx, command, outputPath, params)
+	var outputLines []string
+	// Standard Windows drive letters to check
+	drives := []string{"C:\\", "D:\\", "E:\\", "F:\\", "G:\\", "H:\\"}
+	
+	for _, drive := range drives {
+		rbPath := filepath.Join(drive, "$Recycle.Bin")
+		if _, err := os.Stat(rbPath); err == nil {
+			_ = filepath.Walk(rbPath, func(path string, info os.FileInfo, err error) error {
+				if err != nil {
+					return nil // Ignore access denied
+				}
+				if !info.IsDir() {
+					outputLines = append(outputLines, fmt.Sprintf("Path: %s | Size: %d | ModTime: %s", 
+						path, info.Size(), info.ModTime().Format("2006-01-02 15:04:05")))
+				}
+				return nil
+			})
+		}
+	}
+	
+	if len(outputLines) > 0 {
+		if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err == nil {
+			return os.WriteFile(outputPath, []byte(strings.Join(outputLines, "\n")), 0644)
+		}
+	}
+	return WriteNotFound(outputPath, "No recycle bin files found or access denied")
 }
 
 // ── Thumbcache ────────────────────────────────────────────────────────────────
@@ -359,8 +375,8 @@ func (m *WindowsThumbcache) Run(ctx context.Context, mctx ModuleContext, params 
 		uname := profileName(profileDir)
 		thumbDir := filepath.Join(profileDir, `AppData\Local\Microsoft\Windows\Explorer`)
 		dstDir := filepath.Join(outputPath, uname)
-		_ = copyWithRobocopy(ctx, thumbDir, "thumbcache_*.db", dstDir)
-		_ = copyWithRobocopy(ctx, thumbDir, "iconcache_*.db", dstDir)
+		_ = copyNative(ctx, thumbDir, "thumbcache_*.db", dstDir)
+		_ = copyNative(ctx, thumbDir, "iconcache_*.db", dstDir)
 	}
 	return nil
 }
@@ -461,4 +477,109 @@ func (m *WindowsUSBHistory) Run(ctx context.Context, mctx ModuleContext, params 
 		`  Select-Object -ExpandProperty Name` +
 		`}`
 	return runPowerShellToFile(ctx, command, outputPath, params)
+}
+
+// ── VSS helpers ───────────────────────────────────────────────────────────────
+
+// vssCreate creates a VSS shadow copy of C:\ and returns (shadowID, devicePath, cleanup func, error).
+// The caller MUST call cleanup() regardless of error to ensure the snapshot is deleted.
+func vssCreate(ctx context.Context, b *BaseWindowsModule) (shadowID, devicePath string, cleanup func(), err error) {
+	cleanup = func() {} // no-op default
+
+	script := `$vss = (Get-WmiObject -List Win32_ShadowCopy).Create("C:\", "ClientAccessible"); ` +
+		`if ($vss.ReturnValue -ne 0) { throw "VSS create failed: " + $vss.ReturnValue }; ` +
+		`$sc = Get-WmiObject Win32_ShadowCopy | Where-Object { $_.ID -eq $vss.ShadowID }; ` +
+		`Write-Output ($sc.ID + "|" + $sc.DeviceObject)`
+
+	out, execErr := b.executePowerShell(ctx, script)
+	if execErr != nil {
+		err = NewWarningError(fmt.Sprintf("VSS creation failed (requires admin): %v", execErr))
+		return
+	}
+
+	parts := strings.SplitN(strings.TrimSpace(out), "|", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		err = NewWarningError(fmt.Sprintf("unexpected VSS output: %q", out))
+		return
+	}
+
+	shadowID = parts[0]
+	devicePath = parts[1]
+	safeID := strings.ReplaceAll(shadowID, "'", "''")
+	cleanup = func() {
+		del := fmt.Sprintf(
+			`$sc = Get-WmiObject Win32_ShadowCopy | Where-Object { $_.ID -eq '%s' }; if ($sc) { $sc.Delete() | Out-Null }`,
+			safeID,
+		)
+		_, _ = b.executePowerShell(context.Background(), del)
+	}
+	return
+}
+
+// ── $MFT via VSS ──────────────────────────────────────────────────────────────
+// $MFT is the NTFS Master File Table — locked by the OS at all times.
+// It must be collected via a VSS shadow copy; direct access (even with SeBackupPrivilege) fails.
+// MFTECmd (EZ Tools) can parse the resulting binary file.
+
+type WindowsMFTVSS struct{ BaseWindowsModule }
+
+func NewWindowsMFTVSS() *WindowsMFTVSS {
+	return &WindowsMFTVSS{BaseWindowsModule{Module: NewModule(
+		"windows_mft_vss",
+		"artifacts/windows/ntfs/MFT",
+	)}}
+}
+
+func (m *WindowsMFTVSS) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	if err := EnsureOutputDir(outputPath); err != nil {
+		return err
+	}
+	_, devicePath, cleanup, err := vssCreate(ctx, &m.BaseWindowsModule)
+	defer cleanup()
+	if err != nil {
+		_ = WriteNotFound(outputPath+".error.txt", err.Error())
+		return err
+	}
+	srcPath := devicePath + `\$MFT`
+	if copyErr := CopyFileNativeBackup(ctx, srcPath, outputPath); copyErr != nil {
+		msg := fmt.Sprintf("VSS $MFT copy failed: %v", copyErr)
+		_ = WriteNotFound(outputPath+".error.txt", msg)
+		return NewWarningError(msg)
+	}
+	return nil
+}
+
+// ── $UsnJrnl:$J via VSS ───────────────────────────────────────────────────────
+// The NTFS USN Change Journal records every file-system operation.
+// $UsnJrnl:$J is an alternate data stream that is always locked.
+// VSS provides a consistent snapshot for binary collection.
+// MFTECmd can parse the resulting binary file.
+
+type WindowsUSNJrnlVSS struct{ BaseWindowsModule }
+
+func NewWindowsUSNJrnlVSS() *WindowsUSNJrnlVSS {
+	return &WindowsUSNJrnlVSS{BaseWindowsModule{Module: NewModule(
+		"windows_usnjrnl_vss",
+		"artifacts/windows/ntfs/UsnJrnl_$J",
+	)}}
+}
+
+func (m *WindowsUSNJrnlVSS) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	if err := EnsureOutputDir(outputPath); err != nil {
+		return err
+	}
+	_, devicePath, cleanup, err := vssCreate(ctx, &m.BaseWindowsModule)
+	defer cleanup()
+	if err != nil {
+		_ = WriteNotFound(outputPath+".error.txt", err.Error())
+		return err
+	}
+	// ADS path: devicePath\$Extend\$UsnJrnl:$J
+	srcPath := devicePath + `\$Extend\$UsnJrnl:$J`
+	if copyErr := CopyFileNativeBackup(ctx, srcPath, outputPath); copyErr != nil {
+		msg := fmt.Sprintf("VSS $UsnJrnl:$J copy failed: %v", copyErr)
+		_ = WriteNotFound(outputPath+".error.txt", msg)
+		return NewWarningError(msg)
+	}
+	return nil
 }
