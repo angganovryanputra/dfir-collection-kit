@@ -27,18 +27,10 @@ def _existing_columns(table_name: str) -> set[str]:
     return {col["name"] for col in inspector.get_columns(table_name)}
 
 
-def _existing_indexes(table_name: str) -> set[str]:
-    bind = op.get_bind()
-    inspector = sa.inspect(bind)
-    try:
-        return {idx["name"] for idx in inspector.get_indexes(table_name)}
-    except Exception:
-        return set()
-
-
 def _create_index_if_missing(name: str, table: str, columns: list[str]) -> None:
-    if name not in _existing_indexes(table):
-        op.create_index(name, table, columns)
+    """Create index using PostgreSQL IF NOT EXISTS — safe to call even if index already exists."""
+    col_str = ", ".join(columns)
+    op.execute(sa.text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({col_str})"))
 
 
 def upgrade() -> None:

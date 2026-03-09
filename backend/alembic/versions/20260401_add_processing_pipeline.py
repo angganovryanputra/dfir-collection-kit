@@ -7,6 +7,7 @@ Create Date: 2026-04-01 00:00:00.000000
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
 
 revision = "20260401_processing_pipeline"
@@ -19,6 +20,11 @@ def _existing_tables() -> set[str]:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     return set(inspector.get_table_names())
+
+
+def _safe_idx(name: str, table: str, columns: str) -> None:
+    """Create index using PostgreSQL IF NOT EXISTS — idempotent regardless of prior state."""
+    op.execute(text(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})"))
 
 
 def upgrade() -> None:
@@ -45,9 +51,9 @@ def upgrade() -> None:
             sa.ForeignKeyConstraint(["job_id"], ["jobs.id"]),
             sa.PrimaryKeyConstraint("id"),
         )
-        op.create_index("ix_processing_jobs_incident_id", "processing_jobs", ["incident_id"])
-        op.create_index("ix_processing_jobs_job_id", "processing_jobs", ["job_id"])
-        op.create_index("ix_processing_jobs_status", "processing_jobs", ["status"])
+        _safe_idx("ix_processing_jobs_incident_id", "processing_jobs", "incident_id")
+        _safe_idx("ix_processing_jobs_job_id", "processing_jobs", "job_id")
+        _safe_idx("ix_processing_jobs_status", "processing_jobs", "status")
 
     if "sigma_hits" not in tables:
         op.create_table(
@@ -74,21 +80,11 @@ def upgrade() -> None:
             sa.ForeignKeyConstraint(["processing_job_id"], ["processing_jobs.id"]),
             sa.PrimaryKeyConstraint("id"),
         )
-        op.create_index("ix_sigma_hits_incident_id", "sigma_hits", ["incident_id"])
-        op.create_index("ix_sigma_hits_severity", "sigma_hits", ["severity"])
-        op.create_index("ix_sigma_hits_rule_id", "sigma_hits", ["rule_id"])
-        # Composite index for the most common query pattern: filter by incident + severity
-        op.create_index(
-            "ix_sigma_hits_incident_severity",
-            "sigma_hits",
-            ["incident_id", "severity"],
-        )
-        # Index for time-ordering within an incident
-        op.create_index(
-            "ix_sigma_hits_incident_event_ts",
-            "sigma_hits",
-            ["incident_id", "event_timestamp"],
-        )
+        _safe_idx("ix_sigma_hits_incident_id", "sigma_hits", "incident_id")
+        _safe_idx("ix_sigma_hits_severity", "sigma_hits", "severity")
+        _safe_idx("ix_sigma_hits_rule_id", "sigma_hits", "rule_id")
+        _safe_idx("ix_sigma_hits_incident_severity", "sigma_hits", "incident_id, severity")
+        _safe_idx("ix_sigma_hits_incident_event_ts", "sigma_hits", "incident_id, event_timestamp")
 
 
 def downgrade() -> None:
