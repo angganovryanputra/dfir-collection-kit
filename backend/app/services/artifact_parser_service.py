@@ -617,3 +617,18 @@ async def run_pipeline_background(
             logger.error(
                 "Background pipeline error for job %s: %s", job_id, exc, exc_info=True
             )
+
+
+def dispatch_pipeline(incident_id: str, job_id: str, base_path: Path) -> None:
+    """
+    Dispatch the forensics pipeline. Tries Celery first; falls back to
+    asyncio.create_task() if Celery is unavailable (e.g. local dev without Redis).
+    """
+    try:
+        from app.worker import run_pipeline_task
+        run_pipeline_task.delay(incident_id, job_id, str(base_path))
+        logger.info("Pipeline dispatched via Celery for job %s", job_id)
+    except Exception as exc:
+        logger.warning("Celery unavailable (%s) — falling back to asyncio.create_task", exc)
+        import asyncio
+        asyncio.create_task(run_pipeline_background(incident_id, job_id, base_path))

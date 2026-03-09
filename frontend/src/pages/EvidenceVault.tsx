@@ -153,7 +153,9 @@ export default function EvidenceVault() {
     retry: false,
     refetchInterval: (query) => {
       const s = query.state.data?.status;
-      return s === "RUNNING" || s === "PENDING" ? 5000 : false;
+      if (s === "RUNNING" || s === "PENDING") return 5000;
+      if (!query.state.data) return 30000; // slow-poll: catch pipeline starting after page load
+      return false;
     },
   });
 

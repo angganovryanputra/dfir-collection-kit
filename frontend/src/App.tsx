@@ -70,8 +70,6 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
 }
 
 const App = () => {
-  console.log("[App] App mounted");
-
   return (
     <ErrorBoundary>
       <QueryClientProvider client={queryClient}>

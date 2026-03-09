@@ -49,24 +49,11 @@ async def create_job_endpoint(
 async def get_job_endpoint(
     job_id: str,
     db: AsyncSession = Depends(get_db),
-    current_user=Depends(get_current_user),
+    _: object = Depends(get_current_user),
 ) -> JobOut:
     job = await get_job(db, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    await safe_record_event(
-        db,
-        event_type="job.read",
-        actor_type="user",
-        actor_id=current_user.id,
-        source="backend",
-        action="read job",
-        target_type="job",
-        target_id=job.id,
-        status="success",
-        message="Job fetched",
-        metadata={"incident_id": job.incident_id},
-    )
     return JobOut.model_validate(job)
 
 

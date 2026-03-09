@@ -7,7 +7,8 @@ ENV TZ=UTC
 WORKDIR /app
 
 # ---------------------------------------------------------------------------
-# System dependencies + .NET 8 runtime (for EZTools)
+# System dependencies + .NET 8 runtime
+# .NET is required to execute EZTools DLLs when manually installed.
 # ---------------------------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
@@ -16,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     unzip \
     libicu-dev \
+    libyara-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Install .NET 8 runtime for EZTools
@@ -26,43 +28,14 @@ RUN wget -q https://dot.net/v1/dotnet-install.sh -O /tmp/dotnet-install.sh \
     && rm /tmp/dotnet-install.sh
 
 ENV DOTNET_ROOT=/usr/share/dotnet
+# Allow .NET 8 runtime to execute net6.0 DLLs (EZTools target net6)
+ENV DOTNET_ROLL_FORWARD=Major
 
 # ---------------------------------------------------------------------------
-# Eric Zimmerman Tools (EZTools)
+# Forensics tools (EZTools, Hayabusa, Chainsaw, Sigma/YARA rules) are NOT
+# bundled in this image. Install them on the host and mount via Docker volumes,
+# then configure their paths in Settings → Forensics Pipeline.
 # ---------------------------------------------------------------------------
-ENV EZTOOLS_DIR=/opt/eztools
-
-RUN mkdir -p ${EZTOOLS_DIR} \
-    && wget -q https://f001.backblazeb2.com/file/EricZimmermanTools/net6/All_6.zip -O /tmp/eztools.zip \
-    && unzip -q /tmp/eztools.zip -d ${EZTOOLS_DIR} \
-    && rm /tmp/eztools.zip \
-    && chmod -R +x ${EZTOOLS_DIR}
-
-# ---------------------------------------------------------------------------
-# Hayabusa — Windows Event Log Fast Forensics Analyzer
-# ---------------------------------------------------------------------------
-ENV HAYABUSA_PATH=/opt/hayabusa/hayabusa
-
-RUN mkdir -p /opt/hayabusa \
-    && HAYABUSA_VERSION=$(curl -s https://api.github.com/repos/Yamato-Security/hayabusa/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+') \
-    && wget -q "https://github.com/Yamato-Security/hayabusa/releases/download/${HAYABUSA_VERSION}/hayabusa-${HAYABUSA_VERSION#v}-linux-x64.zip" -O /tmp/hayabusa.zip \
-    && unzip -q /tmp/hayabusa.zip -d /opt/hayabusa \
-    && chmod +x /opt/hayabusa/hayabusa* \
-    && rm /tmp/hayabusa.zip
-
-# ---------------------------------------------------------------------------
-# Chainsaw — Rapid Windows Forensic Triage Tool
-# ---------------------------------------------------------------------------
-ENV CHAINSAW_PATH=/opt/chainsaw/chainsaw
-
-RUN mkdir -p /opt/chainsaw \
-    && CHAINSAW_VERSION=$(curl -s https://api.github.com/repos/WithSecureLabs/chainsaw/releases/latest | grep -oP '"tag_name":\s*"\K[^"]+') \
-    && wget -q "https://github.com/WithSecureLabs/chainsaw/releases/download/${CHAINSAW_VERSION}/chainsaw_x86_64-unknown-linux-gnu.tar.gz" -O /tmp/chainsaw.tar.gz \
-    && tar -xzf /tmp/chainsaw.tar.gz -C /opt/chainsaw --strip-components=1 \
-    && chmod +x /opt/chainsaw/chainsaw \
-    && rm /tmp/chainsaw.tar.gz
-
-ENV SIGMA_RULES_DIR=/opt/chainsaw/rules/
 
 # ---------------------------------------------------------------------------
 # Python dependencies

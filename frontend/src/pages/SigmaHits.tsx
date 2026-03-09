@@ -124,7 +124,7 @@ export default function SigmaHits() {
                         </button>
                         {SEVERITY_ORDER.map((sev) => {
                             const count = data?.severity_counts?.[sev] ?? 0;
-                            if (count === 0 && !data) return null;
+                            if (count === 0) return null;
                             return (
                                 <button
                                     key={sev}

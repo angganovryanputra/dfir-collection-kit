@@ -21,7 +21,7 @@ interface IOCMatch {
 }
 
 interface IOCMatchList {
-    total: int;
+    total: number;
     items: IOCMatch[];
 }
 
@@ -41,9 +41,6 @@ const SEVERITY_COLOR: Record<string, string> = {
     medium: "text-yellow-400 border-yellow-400/30 bg-yellow-400/10",
     low: "text-blue-400 border-blue-400/30 bg-blue-400/10",
 };
-
-// fix: use number not int in TS
-type int = number;
 
 export default function IOCMatches() {
     const navigate = useNavigate();

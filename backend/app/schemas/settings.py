@@ -13,12 +13,12 @@ class SystemSettingsBase(BaseModel):
     max_failed_logins: int
     log_retention_days: int
     export_format: str
-    # Processing pipeline settings
-    ez_tools_path: str | None = "/opt/eztools"
-    chainsaw_path: str | None = "/usr/local/bin/chainsaw"
-    hayabusa_path: str | None = "/usr/local/bin/hayabusa"
-    sigma_rules_path: str | None = "/opt/sigma-rules"
-    yara_rules_path: str | None = "/opt/yara-rules"
+    # Processing pipeline settings (paths set manually via Settings UI)
+    ez_tools_path: str | None = None
+    chainsaw_path: str | None = None
+    hayabusa_path: str | None = None
+    sigma_rules_path: str | None = None
+    yara_rules_path: str | None = None
     timesketch_url: str | None = None
     timesketch_token: str | None = None
     auto_process: bool = True

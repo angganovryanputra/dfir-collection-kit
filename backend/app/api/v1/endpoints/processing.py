@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 from pathlib import Path
 
@@ -79,9 +78,9 @@ async def trigger_processing(
     runtime = await get_runtime_settings(db)
     base_path = Path(runtime.evidence_storage_path) / job.incident_id / job_id
 
-    from app.services.artifact_parser_service import run_pipeline_background
+    from app.services.artifact_parser_service import dispatch_pipeline
 
-    asyncio.create_task(run_pipeline_background(job.incident_id, job_id, base_path))
+    dispatch_pipeline(job.incident_id, job_id, base_path)
 
     return ProcessingTriggerResponse(
         processing_job_id=f"proc-{job_id}",

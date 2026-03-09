@@ -1,4 +1,10 @@
+import logging
+import os
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
@@ -53,8 +59,8 @@ async def put_system_settings(
     set_runtime_settings(settings_out)
     try:
         await prune_old_entries(db, settings_out.log_retention_days)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Failed to prune old audit log entries: %s", exc)
     changed_keys = []
     if current:
         for key, value in payload.model_dump().items():
@@ -76,3 +82,37 @@ async def put_system_settings(
         metadata={"changed": changed_keys},
     )
     return settings_out
+
+
+@router.post("/verify-tools", dependencies=[Depends(require_roles("admin"))])
+async def verify_tools_endpoint(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Check whether each configured forensics tool path exists on the server."""
+    settings = await get_runtime_settings(db)
+
+    def _check_exe(path: str | None) -> dict:
+        if not path:
+            return {"ok": False, "status": "not_configured", "path": None}
+        p = Path(path)
+        if not p.exists():
+            return {"ok": False, "status": "not_found", "path": path}
+        if not os.access(p, os.X_OK):
+            return {"ok": False, "status": "not_executable", "path": path}
+        return {"ok": True, "status": "ok", "path": path}
+
+    def _check_dir(path: str | None) -> dict:
+        if not path:
+            return {"ok": False, "status": "not_configured", "path": None}
+        p = Path(path)
+        if not p.is_dir():
+            return {"ok": False, "status": "not_found", "path": path}
+        return {"ok": True, "status": "ok", "path": path}
+
+    return {
+        "ez_tools": _check_dir(settings.ez_tools_path),
+        "chainsaw": _check_exe(settings.chainsaw_path),
+        "hayabusa": _check_exe(settings.hayabusa_path),
+        "sigma_rules": _check_dir(settings.sigma_rules_path),
+        "yara_rules": _check_dir(settings.yara_rules_path),
+    }

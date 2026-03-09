@@ -187,12 +187,16 @@ async def start_collection_endpoint(
         active_jobs = await count_active_jobs(db)
         if active_jobs >= runtime_settings.max_concurrent_jobs:
             raise HTTPException(status_code=409, detail="Job concurrency limit reached")
-    await create_job(
-        db,
-        JobCreate(id=f"JOB-{incident_id}", incident_id=incident_id),
-        modules,
-        f"{incident_id}/JOB-{incident_id}",
-    )
+    # Idempotent: only create the job if it doesn't already exist.
+    # Re-triggering collection (e.g. navigate back) must not cause a PK conflict.
+    from app.crud.job import get_job
+    if not await get_job(db, f"JOB-{incident_id}"):
+        await create_job(
+            db,
+            JobCreate(id=f"JOB-{incident_id}", incident_id=incident_id),
+            modules,
+            f"{incident_id}/JOB-{incident_id}",
+        )
 
     await safe_record_event(
         db,

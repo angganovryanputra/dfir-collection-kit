@@ -20,12 +20,12 @@ class RuntimeSettings:
     max_failed_logins: int
     log_retention_days: int
     export_format: str
-    # Processing pipeline settings
-    ez_tools_path: str | None = "/opt/eztools"
-    chainsaw_path: str | None = "/usr/local/bin/chainsaw"
-    hayabusa_path: str | None = "/usr/local/bin/hayabusa"
-    sigma_rules_path: str | None = "/opt/sigma-rules"
-    yara_rules_path: str | None = "/opt/yara-rules"
+    # Processing pipeline settings (paths set manually via Settings UI)
+    ez_tools_path: str | None = None
+    chainsaw_path: str | None = None
+    hayabusa_path: str | None = None
+    sigma_rules_path: str | None = None
+    yara_rules_path: str | None = None
     timesketch_url: str | None = None
     timesketch_token: str | None = None
     auto_process: bool = True
@@ -44,11 +44,11 @@ DEFAULT_SETTINGS = RuntimeSettings(
     max_failed_logins=5,
     log_retention_days=365,
     export_format="ZIP",
-    ez_tools_path="/opt/eztools",
-    chainsaw_path="/usr/local/bin/chainsaw",
-    hayabusa_path="/usr/local/bin/hayabusa",
-    sigma_rules_path="/opt/sigma-rules",
-    yara_rules_path="/opt/yara-rules",
+    ez_tools_path=None,
+    chainsaw_path=None,
+    hayabusa_path=None,
+    sigma_rules_path=None,
+    yara_rules_path=None,
     timesketch_url=None,
     timesketch_token=None,
     auto_process=True,

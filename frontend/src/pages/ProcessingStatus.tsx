@@ -225,7 +225,7 @@ export default function ProcessingStatus() {
                                 className="col-span-2"
                                 onClick={() =>
                                     window.open(
-                                        `/api/v1/processing/${job?.job_id}/timeline/download`,
+                                        `${import.meta.env.VITE_API_BASE_URL ?? "/api/v1"}/processing/${job?.job_id}/timeline/download`,
                                         "_blank"
                                     )
                                 }

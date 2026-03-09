@@ -421,9 +421,8 @@ async def upload_job_evidence(
 
     # Auto-trigger parsing pipeline if enabled in settings
     if runtime_settings.auto_process:
-        import asyncio as _asyncio
-        from app.services.artifact_parser_service import run_pipeline_background
-        _asyncio.create_task(run_pipeline_background(job.incident_id, job.id, base_path))
+        from app.services.artifact_parser_service import dispatch_pipeline
+        dispatch_pipeline(job.incident_id, job.id, base_path)
         logger.info("Processing pipeline triggered for job %s", job.id)
 
     try:

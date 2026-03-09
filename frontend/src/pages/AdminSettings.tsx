@@ -33,6 +33,9 @@ import {
   Shield,
   FileText,
   ShieldAlert,
+  CheckCircle2,
+  XCircle,
+  CircleDashed,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 
@@ -174,24 +177,29 @@ export default function AdminSettings() {
   const [iocTotal, setIocTotal] = useState(0);
   const [newIoc, setNewIoc] = useState({ ioc_type: "ip", value: "", description: "", severity: "high" });
   const [isAddingIoc, setIsAddingIoc] = useState(false);
+  const [toolStatus, setToolStatus] = useState<Record<string, { ok: boolean; status: string; path: string | null }> | null>(null);
+  const [isVerifyingTools, setIsVerifyingTools] = useState(false);
 
   const usersQuery = useQuery({
     queryKey: ["users"],
     queryFn: () => apiGet<UserResponse[]>("/users"),
-    onError: () => setErrorMessage("Unable to load admin configuration."),
   });
 
   const collectorsQuery = useQuery({
     queryKey: ["collectors"],
     queryFn: () => apiGet<CollectorResponse[]>("/collectors"),
-    onError: () => setErrorMessage("Unable to load admin configuration."),
   });
 
   const settingsQuery = useQuery({
     queryKey: ["system-settings"],
     queryFn: () => apiGet<SystemSettingsResponse | null>("/settings"),
-    onError: () => setErrorMessage("Unable to load admin configuration."),
   });
+
+  useEffect(() => {
+    if (usersQuery.error || collectorsQuery.error || settingsQuery.error) {
+      setErrorMessage("Unable to load admin configuration.");
+    }
+  }, [usersQuery.error, collectorsQuery.error, settingsQuery.error]);
 
   useEffect(() => {
     if (usersQuery.data) {
@@ -896,96 +904,74 @@ export default function AdminSettings() {
 
                   {/* Forensics Pipeline Settings */}
                   <TacticalPanel title="FORENSICS PIPELINE" className="col-span-2">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <FormLabel className="text-muted-foreground uppercase">
-                          EZ Tools Path
-                        </FormLabel>
-                        <Input
-                          value={systemSettings?.ez_tools_path ?? ""}
-                          placeholder="/opt/eztools"
-                          onChange={(event) =>
-                            setSystemSettings((current) =>
-                              current ? { ...current, ez_tools_path: event.target.value || null } : current
-                            )
-                          }
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <FormLabel className="text-muted-foreground uppercase">
-                          Chainsaw Path
-                        </FormLabel>
-                        <Input
-                          value={systemSettings?.chainsaw_path ?? ""}
-                          placeholder="/usr/local/bin/chainsaw"
-                          onChange={(event) =>
-                            setSystemSettings((current) =>
-                              current ? { ...current, chainsaw_path: event.target.value || null } : current
-                            )
-                          }
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <FormLabel className="text-muted-foreground uppercase">
-                          Hayabusa Path
-                        </FormLabel>
-                        <Input
-                          value={systemSettings?.hayabusa_path ?? ""}
-                          placeholder="/usr/local/bin/hayabusa"
-                          onChange={(event) =>
-                            setSystemSettings((current) =>
-                              current ? { ...current, hayabusa_path: event.target.value || null } : current
-                            )
-                          }
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <FormLabel className="text-muted-foreground uppercase">
-                          Sigma Rules Path
-                        </FormLabel>
-                        <Input
-                          value={systemSettings?.sigma_rules_path ?? ""}
-                          placeholder="/opt/sigma-rules"
-                          onChange={(event) =>
-                            setSystemSettings((current) =>
-                              current ? { ...current, sigma_rules_path: event.target.value || null } : current
-                            )
-                          }
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <FormLabel className="text-muted-foreground uppercase">
-                          YARA Rules Path
-                        </FormLabel>
-                        <Input
-                          value={systemSettings?.yara_rules_path ?? ""}
-                          placeholder="/opt/yara-rules"
-                          onChange={(event) =>
-                            setSystemSettings((current) =>
-                              current ? { ...current, yara_rules_path: event.target.value || null } : current
-                            )
-                          }
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <FormLabel className="text-muted-foreground uppercase">
-                          Timesketch URL
-                        </FormLabel>
-                        <Input
-                          value={systemSettings?.timesketch_url ?? ""}
-                          placeholder="http://timesketch:5000"
-                          onChange={(event) =>
-                            setSystemSettings((current) =>
-                              current ? { ...current, timesketch_url: event.target.value || null } : current
-                            )
-                          }
-                        />
-                      </div>
-                      <div className="flex items-center gap-3 col-span-2 pt-2">
+                    {/* Info banner */}
+                    <div className="mb-4 p-3 rounded border border-yellow-500/30 bg-yellow-500/5 font-mono text-xs text-yellow-400">
+                      Tools are NOT bundled in the Docker image. Install each tool on the server (or mount via Docker volume),
+                      then enter the path below and click VERIFY to confirm accessibility.
+                    </div>
+
+                    {/* Tool path rows */}
+                    {([
+                      { key: "ez_tools", label: "EZ Tools Directory", field: "ez_tools_path" as const, placeholder: "/opt/eztools", isDir: true },
+                      { key: "chainsaw", label: "Chainsaw Binary", field: "chainsaw_path" as const, placeholder: "/opt/chainsaw/chainsaw", isDir: false },
+                      { key: "hayabusa", label: "Hayabusa Binary", field: "hayabusa_path" as const, placeholder: "/opt/hayabusa/hayabusa", isDir: false },
+                      { key: "sigma_rules", label: "Sigma Rules Directory", field: "sigma_rules_path" as const, placeholder: "/opt/sigma-rules", isDir: true },
+                      { key: "yara_rules", label: "YARA Rules Directory", field: "yara_rules_path" as const, placeholder: "/opt/yara-rules", isDir: true },
+                    ] as const).map(({ key, label, field, placeholder }) => {
+                      const ts = toolStatus?.[key];
+                      return (
+                        <div key={key} className="grid grid-cols-[1fr_auto] gap-2 items-end mb-3">
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <FormLabel className="text-muted-foreground uppercase">{label}</FormLabel>
+                              {ts && (
+                                <span className={`flex items-center gap-1 font-mono text-xs ${ts.ok ? "text-green-400" : "text-red-400"}`}>
+                                  {ts.ok
+                                    ? <><CheckCircle2 className="w-3 h-3" /> FOUND</>
+                                    : ts.status === "not_configured"
+                                      ? <><CircleDashed className="w-3 h-3 text-muted-foreground" /><span className="text-muted-foreground">NOT CONFIGURED</span></>
+                                      : ts.status === "not_executable"
+                                        ? <><XCircle className="w-3 h-3" /> NOT EXECUTABLE</>
+                                        : <><XCircle className="w-3 h-3" /> NOT FOUND</>
+                                  }
+                                </span>
+                              )}
+                            </div>
+                            <Input
+                              value={systemSettings?.[field] ?? ""}
+                              placeholder={placeholder}
+                              onChange={(event) =>
+                                setSystemSettings((current) =>
+                                  current ? { ...current, [field]: event.target.value || null } : current
+                                )
+                              }
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Timesketch */}
+                    <div className="space-y-1 mb-3">
+                      <FormLabel className="text-muted-foreground uppercase">Timesketch URL</FormLabel>
+                      <Input
+                        value={systemSettings?.timesketch_url ?? ""}
+                        placeholder="http://timesketch:5000"
+                        onChange={(event) =>
+                          setSystemSettings((current) =>
+                            current ? { ...current, timesketch_url: event.target.value || null } : current
+                          )
+                        }
+                      />
+                    </div>
+
+                    {/* Auto-process + Verify row */}
+                    <div className="flex items-center justify-between pt-3 border-t border-border">
+                      <div className="flex items-center gap-3">
                         <input
                           type="checkbox"
                           id="auto_process"
-                          checked={systemSettings?.auto_process ?? true}
+                          checked={systemSettings?.auto_process ?? false}
                           onChange={(event) =>
                             setSystemSettings((current) =>
                               current ? { ...current, auto_process: event.target.checked } : current
@@ -997,6 +983,27 @@ export default function AdminSettings() {
                           Auto-trigger pipeline after evidence upload completes
                         </label>
                       </div>
+                      <Button
+                        variant="secondary"
+                        disabled={isVerifyingTools}
+                        onClick={async () => {
+                          setIsVerifyingTools(true);
+                          try {
+                            const result = await apiPost<Record<string, { ok: boolean; status: string; path: string | null }>>(
+                              "/settings/verify-tools",
+                              {}
+                            );
+                            setToolStatus(result);
+                          } catch {
+                            setErrorMessage("Failed to verify tools.");
+                          } finally {
+                            setIsVerifyingTools(false);
+                          }
+                        }}
+                      >
+                        <RefreshCw className={`w-4 h-4 mr-2 ${isVerifyingTools ? "animate-spin" : ""}`} />
+                        {isVerifyingTools ? "VERIFYING..." : "VERIFY TOOLS"}
+                      </Button>
                     </div>
                   </TacticalPanel>
                 </div>
