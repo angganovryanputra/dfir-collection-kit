@@ -27,18 +27,27 @@ def _existing_columns(table_name: str) -> set[str]:
     return {col["name"] for col in inspector.get_columns(table_name)}
 
 
+def _existing_indexes(table_name: str) -> set[str]:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    try:
+        return {idx["name"] for idx in inspector.get_indexes(table_name)}
+    except Exception:
+        return set()
+
+
+def _create_index_if_missing(name: str, table: str, columns: list[str]) -> None:
+    if name not in _existing_indexes(table):
+        op.create_index(name, table, columns)
+
+
 def upgrade() -> None:
     # Add yara_rules_path to system_settings if missing
     settings_cols = _existing_columns("system_settings")
     if "yara_rules_path" not in settings_cols:
         op.add_column(
             "system_settings",
-            sa.Column(
-                "yara_rules_path",
-                sa.String(),
-                nullable=True,
-                server_default="/opt/yara-rules",
-            ),
+            sa.Column("yara_rules_path", sa.String(), nullable=True),
         )
 
     existing = _existing_tables()
@@ -91,7 +100,7 @@ def upgrade() -> None:
                 "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
             ),
         )
-        op.create_index("ix_attack_chains_incident_id", "attack_chains", ["incident_id"])
+        _create_index_if_missing("ix_attack_chains_incident_id", "attack_chains", ["incident_id"])
 
     if "ioc_indicators" not in existing:
         op.create_table(
@@ -107,7 +116,7 @@ def upgrade() -> None:
             ),
             sa.Column("created_by", sa.String(), nullable=True),
         )
-        op.create_index("ix_ioc_type_value", "ioc_indicators", ["ioc_type", "value"])
+        _create_index_if_missing("ix_ioc_type_value", "ioc_indicators", ["ioc_type", "value"])
 
     if "ioc_matches" not in existing:
         op.create_table(
@@ -138,10 +147,8 @@ def upgrade() -> None:
                 "detected_at", sa.DateTime(timezone=True), server_default=sa.func.now()
             ),
         )
-        op.create_index("ix_ioc_matches_incident_id", "ioc_matches", ["incident_id"])
-        op.create_index(
-            "ix_ioc_matches_incident_type", "ioc_matches", ["incident_id", "ioc_type"]
-        )
+        _create_index_if_missing("ix_ioc_matches_incident_id", "ioc_matches", ["incident_id"])
+        _create_index_if_missing("ix_ioc_matches_incident_type", "ioc_matches", ["incident_id", "ioc_type"])
 
     if "yara_matches" not in existing:
         op.create_table(
@@ -165,7 +172,7 @@ def upgrade() -> None:
                 "detected_at", sa.DateTime(timezone=True), server_default=sa.func.now()
             ),
         )
-        op.create_index("ix_yara_matches_incident_id", "yara_matches", ["incident_id"])
+        _create_index_if_missing("ix_yara_matches_incident_id", "yara_matches", ["incident_id"])
 
 
 def downgrade() -> None:

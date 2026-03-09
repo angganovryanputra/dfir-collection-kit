@@ -24,10 +24,10 @@ def upgrade() -> None:
     cols = _existing_columns("system_settings")
 
     new_cols = [
-        ("ez_tools_path", sa.String(), "/opt/eztools"),
-        ("chainsaw_path", sa.String(), "/usr/local/bin/chainsaw"),
-        ("hayabusa_path", sa.String(), "/usr/local/bin/hayabusa"),
-        ("sigma_rules_path", sa.String(), "/opt/sigma-rules"),
+        ("ez_tools_path", sa.String(), None),
+        ("chainsaw_path", sa.String(), None),
+        ("hayabusa_path", sa.String(), None),
+        ("sigma_rules_path", sa.String(), None),
         ("timesketch_url", sa.String(), None),
         ("timesketch_token", sa.String(), None),
         ("auto_process", sa.Boolean(), None),
