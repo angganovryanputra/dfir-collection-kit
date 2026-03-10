@@ -15,7 +15,7 @@ class AttackChain(Base):
     __table_args__ = (Index("ix_attack_chains_incident_id", "incident_id"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    incident_id: Mapped[str] = mapped_column(String, ForeignKey("incidents.id"), index=True)
+    incident_id: Mapped[str] = mapped_column(String, ForeignKey("incidents.id"))
     processing_job_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("processing_jobs.id"), nullable=True
     )
@@ -61,7 +61,7 @@ class IOCMatch(Base):
     )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    incident_id: Mapped[str] = mapped_column(String, ForeignKey("incidents.id"), index=True)
+    incident_id: Mapped[str] = mapped_column(String, ForeignKey("incidents.id"))
     processing_job_id: Mapped[str | None] = mapped_column(
         String, ForeignKey("processing_jobs.id"), nullable=True
     )
