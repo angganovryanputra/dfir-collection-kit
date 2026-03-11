@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"sync"
 	"time"
 
 	"github.com/dfir/agent/internal/api"
@@ -22,10 +23,23 @@ const (
 
 // Agent manages the main agent lifecycle
 type Agent struct {
-	config   *config.Config
+	config    *config.Config
 	apiClient *api.Client
-	executor *jobs.Executor
-	state    string
+	executor  *jobs.Executor
+	mu        sync.Mutex
+	state     string
+}
+
+func (a *Agent) getState() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.state
+}
+
+func (a *Agent) setState(s string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.state = s
 }
 
 // New creates a new agent instance
@@ -34,11 +48,11 @@ func New(cfg *config.Config) (*Agent, error) {
 	executor := jobs.NewExecutor(cfg, apiClient)
 
 	return &Agent{
-		config:   cfg,
+		config:    cfg,
 		apiClient: apiClient,
-		executor: executor,
-		state:    StateIdle,
-	}
+		executor:  executor,
+		state:     StateIdle,
+	}, nil
 }
 
 // Run starts the agent and runs until shutdown
@@ -104,7 +118,7 @@ func (a *Agent) Run(ctx context.Context) error {
 // Heartbeats are sent regardless of current state so that the backend
 // can accurately track ONLINE vs OFFLINE for all agents, including idle ones.
 func (a *Agent) heartbeat(ctx context.Context) error {
-	logging.Debug("Sending heartbeat (state=%s)", a.state)
+	logging.Debug("Sending heartbeat (state=%s)", a.getState())
 	return a.apiClient.Heartbeat(ctx)
 }
 
@@ -126,7 +140,7 @@ func (a *Agent) pollAndExecuteJob(ctx context.Context) error {
 	logging.Info("Incident ID: %s", job.IncidentID)
 	logging.Info("Work directory: %s", job.WorkDir)
 
-	a.state = StateRunning
+	a.setState(StateRunning)
 
 	if err := a.executor.Run(
 		ctx,
@@ -141,7 +155,7 @@ func (a *Agent) pollAndExecuteJob(ctx context.Context) error {
 		return err
 	}
 
-	a.state = StateIdle
+	a.setState(StateIdle)
 	logging.WithJob(job.JobID).Info("Job completed")
 	return nil
 }

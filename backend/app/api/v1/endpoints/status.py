@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import shutil
 
 from fastapi import APIRouter, Depends, Request
@@ -56,7 +56,7 @@ async def get_diagnostics(request: Request, db: AsyncSession = Depends(get_db)) 
 
     return DiagnosticsResponse(
         db_status=db_status,
-        server_time=datetime.utcnow(),
+        server_time=datetime.now(timezone.utc),
         backend_version=settings.BACKEND_VERSION,
         client_ip=client_ip,
         collectors_online=collectors_online,

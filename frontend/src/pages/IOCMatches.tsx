@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ShieldAlert, Globe, Hash, Wifi } from "lucide-react";
+import { ChevronLeft, ShieldAlert, Globe, Hash, Wifi, HelpCircle } from "lucide-react";
 import { apiGet } from "@/lib/api";
 
 interface IOCMatch {
@@ -161,7 +161,7 @@ export default function IOCMatches() {
                                                 >
                                                     <td className="py-2 pr-4">
                                                         <span className="flex items-center gap-1 text-primary uppercase">
-                                                            {TYPE_ICONS[m.ioc_type]}
+                                                            {TYPE_ICONS[m.ioc_type] ?? <HelpCircle className="w-3 h-3" />}
                                                             {m.ioc_type}
                                                         </span>
                                                     </td>

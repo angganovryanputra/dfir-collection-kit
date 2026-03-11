@@ -10,11 +10,22 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"github.com/dfir/agent/internal/config"
 	"github.com/dfir/agent/internal/logging"
 )
+
+// safeIDRe matches only alphanumeric, underscore, and hyphen — same as backend _SAFE_ID_RE.
+var safeIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+
+func validateID(id string) error {
+	if !safeIDRe.MatchString(id) {
+		return fmt.Errorf("unsafe ID value: %q", id)
+	}
+	return nil
+}
 
 const (
 	// API timeout for all HTTP requests
@@ -137,6 +148,9 @@ func (c *Client) buildRegistrationPayload() DeviceRegistration {
 
 // Heartbeat sends a periodic status update to the backend
 func (c *Client) Heartbeat(ctx context.Context) error {
+	if err := validateID(c.config.AgentID); err != nil {
+		return fmt.Errorf("heartbeat: %w", err)
+	}
 	payload := DeviceUpdate{
 		Status:   "ONLINE",
 		LastSeen: time.Now().UTC().Format(time.RFC3339),
@@ -182,6 +196,9 @@ type JobModule struct {
 
 // GetNextJob polls the backend for the next job to execute
 func (c *Client) GetNextJob(ctx context.Context) (*JobInstruction, error) {
+	if err := validateID(c.config.AgentID); err != nil {
+		return nil, fmt.Errorf("GetNextJob: %w", err)
+	}
 	url := "/agents/" + c.config.AgentID + "/jobs/next"
 
 	resp, err := c.makeRequest(ctx, "GET", url, nil, "")
@@ -211,6 +228,12 @@ func (c *Client) GetNextJob(ctx context.Context) (*JobInstruction, error) {
 
 // GetJobStatus retrieves the current status for a job
 func (c *Client) GetJobStatus(ctx context.Context, jobID string) (string, error) {
+	if err := validateID(c.config.AgentID); err != nil {
+		return "", fmt.Errorf("GetJobStatus: %w", err)
+	}
+	if err := validateID(jobID); err != nil {
+		return "", fmt.Errorf("GetJobStatus: %w", err)
+	}
 	url := "/agents/" + c.config.AgentID + "/jobs/" + jobID
 
 	resp, err := c.makeRequest(ctx, "GET", url, nil, "")
@@ -242,6 +265,12 @@ type JobStatusUpdate struct {
 
 // UpdateJobStatus sends a status update for a running job
 func (c *Client) UpdateJobStatus(ctx context.Context, jobID string, update JobStatusUpdate) error {
+	if err := validateID(c.config.AgentID); err != nil {
+		return fmt.Errorf("UpdateJobStatus: %w", err)
+	}
+	if err := validateID(jobID); err != nil {
+		return fmt.Errorf("UpdateJobStatus: %w", err)
+	}
 	url := "/agents/" + c.config.AgentID + "/jobs/" + jobID + "/status"
 
 	resp, err := c.makeRequest(ctx, "POST", url, update, "")
@@ -261,6 +290,12 @@ func (c *Client) UpdateJobStatus(ctx context.Context, jobID string, update JobSt
 
 // UploadEvidence uploads the evidence ZIP file to the backend
 func (c *Client) UploadEvidence(ctx context.Context, jobID string, zipPath string) error {
+	if err := validateID(c.config.AgentID); err != nil {
+		return fmt.Errorf("UploadEvidence: %w", err)
+	}
+	if err := validateID(jobID); err != nil {
+		return fmt.Errorf("UploadEvidence: %w", err)
+	}
 	file, err := os.Open(zipPath)
 	if err != nil {
 		return fmt.Errorf("failed to open zip file: %w", err)

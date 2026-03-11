@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from sqlalchemy import func, select
@@ -24,7 +24,7 @@ async def create_user(db: AsyncSession, payload: UserCreate) -> User:
         role=data.get("role"),
         status=data.get("status"),
         last_login="-",
-        created_at=datetime.utcnow().isoformat() + "Z",
+        created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         password_hash=get_password_hash(password),
     )
     db.add(user)
@@ -65,7 +65,7 @@ async def update_last_login(db: AsyncSession, user_id: str) -> None:
     user = result.scalar_one_or_none()
     if not user:
         return
-    user.last_login = datetime.utcnow().isoformat() + "Z"
+    user.last_login = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     await db.flush()
 
 

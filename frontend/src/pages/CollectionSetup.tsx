@@ -205,8 +205,8 @@ export default function CollectionSetup() {
 
   const applyProfile = async (profileId: string) => {
     if (isViewer) return;
-    setActiveProfile(profileId);
     if (profileId === "full") {
+      setActiveProfile(profileId);
       setSelected(new Set(allModuleIds()));
       return;
     }
@@ -215,6 +215,8 @@ export default function CollectionSetup() {
         `/modules/profiles/${profileId}?os=${activeOS}`
       );
       const profileIds = new Set(resp.modules.map((m) => m.id));
+      // Only commit state changes after successful fetch
+      setActiveProfile(profileId);
       setSelected(profileIds);
     } catch {
       setErrorMessage("Unable to load profile modules.");

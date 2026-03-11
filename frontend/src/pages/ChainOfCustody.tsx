@@ -36,10 +36,6 @@ export default function ChainOfCustody() {
         actor: string;
         target: string;
       }[]>("/chain-of-custody"),
-    onError: (error) => {
-      const message = error instanceof Error ? error.message : "Unable to load custody log.";
-      setErrorMessage(message.includes("integrity") ? message : "Unable to load custody log.");
-    },
   });
 
   useEffect(() => {
@@ -47,6 +43,7 @@ export default function ChainOfCustody() {
       setCustodyLog(
         custodyQuery.data.map((entry) => ({
           id: entry.id,
+          incident_id: entry.incident_id,
           incidentId: entry.incident_id,
           timestamp: entry.timestamp,
           action: entry.action,
@@ -58,12 +55,20 @@ export default function ChainOfCustody() {
     }
   }, [custodyQuery.data]);
 
+  useEffect(() => {
+    if (custodyQuery.error) {
+      const error = custodyQuery.error;
+      const message = error instanceof Error ? error.message : "Unable to load custody log.";
+      setErrorMessage(message.includes("integrity") ? message : "Unable to load custody log.");
+    }
+  }, [custodyQuery.error]);
+
   const handleExport = async () => {
     setIsExporting(true);
     setErrorMessage(null);
     try {
       const baseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
-      const base = baseUrl?.trim() || "http://localhost:8000/api/v1";
+      const base = (baseUrl?.trim() || "http://localhost:8000/api/v1").replace(/\/$/, "");
       const params = selectedIncident ? `?incident_id=${encodeURIComponent(selectedIncident)}` : "";
       const url = `${base}/chain-of-custody/export${params}`;
       const raw = localStorage.getItem("dfir_auth");

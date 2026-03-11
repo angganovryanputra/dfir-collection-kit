@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from hmac import compare_digest
 from pathlib import Path
 
@@ -85,7 +85,6 @@ async def register_agent(
         updated = await update_device(db, payload.id, DeviceUpdate(**payload.model_dump()))
         if not updated:
             raise HTTPException(status_code=404, detail="Agent not found")
-        assert updated is not None
         await safe_record_event(
             db,
             event_type="agent_registered",
@@ -373,7 +372,7 @@ async def upload_job_evidence(
         metadata={"files": len(extracted_files)},
     )
 
-    timestamp = datetime.utcnow().isoformat() + "Z"
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     chain_log_path = base_path / "chain-of-custody.log"
     append_chain_log(chain_log_path, f"{timestamp} | UPLOAD | AGENT {agent_id} | {zip_path.name}")
     chain_log_hash = hash_file(chain_log_path, runtime_settings.hash_algorithm)
@@ -384,7 +383,7 @@ async def upload_job_evidence(
         id=job.id,
         incident_id=job.incident_id,
         type="COLLECTION",
-        date=datetime.utcnow().date().isoformat(),
+        date=datetime.now(timezone.utc).date().isoformat(),
         files_count=len(extracted_files),
         total_size=str(total_size),
         status="LOCKED",
@@ -431,7 +430,7 @@ async def upload_job_evidence(
             ChainOfCustodyEntryCreate(
                 id=f"coc-lock-{job.id}",
                 incident_id=job.incident_id,
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 action="EVIDENCE LOCKED",
                 actor="SYSTEM",
                 target=job.id,
@@ -459,7 +458,7 @@ async def upload_job_evidence(
             ChainOfCustodyEntryCreate(
                 id=f"coc-complete-{job.id}",
                 incident_id=job.incident_id,
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 action="COLLECTION COMPLETED",
                 actor="SYSTEM",
                 target=job.id,

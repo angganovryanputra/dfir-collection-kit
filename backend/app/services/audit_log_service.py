@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import logging
 from typing import Any
 from uuid import uuid4
 
@@ -9,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.crud.audit_log import create_entry, get_latest_entry
 from app.models.audit_log import AuditLog
+
+logger = logging.getLogger(__name__)
 
 
 def _hash_payload(payload: str) -> str:
@@ -101,5 +104,6 @@ async def safe_record_event(
             message=message,
             metadata=metadata,
         )
-    except Exception:
+    except Exception as exc:
+        logger.warning("Audit log write failed (non-critical): %s", exc)
         return

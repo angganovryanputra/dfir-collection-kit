@@ -112,8 +112,11 @@ export default function CollectionExecution() {
   const navigate = useNavigate();
   const { id: incidentId } = useParams<{ id: string }>();
   const location = useLocation();
+  const _rawModuleIds = (location.state as { selectedModuleIds?: unknown } | null)?.selectedModuleIds;
   const selectedModuleIds: string[] | null =
-    (location.state as { selectedModuleIds?: string[] } | null)?.selectedModuleIds ?? null;
+    Array.isArray(_rawModuleIds) && _rawModuleIds.every((x) => typeof x === "string")
+      ? (_rawModuleIds as string[])
+      : null;
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [phases, setPhases] = useState<CollectionPhase[]>(
     Object.entries(PHASE_NAME_MAP).map(([id, name]) => ({

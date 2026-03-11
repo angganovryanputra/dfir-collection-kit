@@ -156,7 +156,7 @@ async def login(
         user_id=user.id,
         username=user.username,
         role=RoleEnum(user.role),
-        expires_at=expires_at.isoformat() + "Z",
+        expires_at=expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
     )
 
 

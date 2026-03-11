@@ -183,6 +183,18 @@ export default function EvidenceVault() {
     ? `${Math.round(capacityPercent)}%`
     : "--";
 
+  const buildExportUrl = (downloadUrl: string, signature?: string | null): string => {
+    // Reject anything that is not a server-relative path — prevents open redirect
+    // if the backend were ever to return an attacker-controlled absolute URL.
+    if (!downloadUrl.startsWith("/")) {
+      throw new Error("Unexpected download_url format");
+    }
+    const baseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
+    const url = baseUrl ? `${baseUrl.replace(/\/$/, "")}${downloadUrl}` : downloadUrl;
+    const sig = signature ? `?signature=${encodeURIComponent(signature)}` : "";
+    return `${url}${sig}`;
+  };
+
   const handleExportAll = async () => {
     if (!selectedFolderData) return;
     setIsExporting(true);
@@ -194,11 +206,7 @@ export default function EvidenceVault() {
           incident_id: selectedFolderData.incidentId,
         }
       );
-      const baseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
-      const url = baseUrl ? `${baseUrl.replace(/\/$/, "")}${response.download_url}` : response.download_url;
-      const signature = response.signature ? `?signature=${response.signature}` : "";
-      const target = `${url}${signature}`;
-      window.location.assign(target);
+      window.location.assign(buildExportUrl(response.download_url, response.signature));
     } catch {
       setErrorMessage("Unable to export evidence package.");
     } finally {
@@ -216,11 +224,7 @@ export default function EvidenceVault() {
           evidence_id: evidenceId,
         }
       );
-      const baseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
-      const url = baseUrl ? `${baseUrl.replace(/\/$/, "")}${response.download_url}` : response.download_url;
-      const signature = response.signature ? `?signature=${response.signature}` : "";
-      const target = `${url}${signature}`;
-      window.location.assign(target);
+      window.location.assign(buildExportUrl(response.download_url, response.signature));
     } catch {
       setErrorMessage("Unable to export evidence file.");
     } finally {

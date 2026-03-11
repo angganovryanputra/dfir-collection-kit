@@ -154,6 +154,9 @@ func (e *Executor) Run(
 
 	// Execute modules concurrently with a bounded semaphore worker pool
 	totalModules := len(moduleList)
+	if timeoutMinutes < 0 {
+		timeoutMinutes = 0
+	}
 	moduleTimeout := time.Duration(timeoutMinutes) * time.Minute
 
 	type moduleResult struct {
@@ -429,10 +432,8 @@ func (e *Executor) createEvidenceZip(ctx context.Context, job *Job) error {
 	if err != nil {
 		return fmt.Errorf("failed to create ZIP file: %w", err)
 	}
-	defer zipFile.Close()
 
 	w := zip.NewWriter(zipFile)
-	defer w.Close()
 
 	err = filepath.Walk(job.WorkDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
@@ -466,7 +467,16 @@ func (e *Executor) createEvidenceZip(ctx context.Context, job *Job) error {
 		}
 		return nil
 	})
+
+	// Close the writer and file before checking walk error so we can clean up.
+	w.Close()
+	zipFile.Close()
+
 	if err != nil {
+		// Remove the incomplete/corrupt ZIP so a future retry starts clean.
+		if removeErr := os.Remove(zipPath); removeErr != nil && !os.IsNotExist(removeErr) {
+			log.Warning("Failed to remove incomplete ZIP %s: %v", zipPath, removeErr)
+		}
 		return fmt.Errorf("failed to create evidence ZIP: %w", err)
 	}
 

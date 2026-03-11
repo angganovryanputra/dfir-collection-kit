@@ -1,6 +1,6 @@
 import os
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -44,7 +44,7 @@ async def seed_data(session: AsyncSession) -> None:
             role="admin",
             status="active",
             last_login="-",
-            created_at=datetime.utcnow().isoformat() + "Z",
+            created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             password_hash=admin_password_hash,
         ),
         User(
@@ -53,7 +53,7 @@ async def seed_data(session: AsyncSession) -> None:
             role="operator",
             status="active",
             last_login="-",
-            created_at=datetime.utcnow().isoformat() + "Z",
+            created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             password_hash=operator_password_hash,
         ),
         User(
@@ -62,7 +62,7 @@ async def seed_data(session: AsyncSession) -> None:
             role="viewer",
             status="active",
             last_login="-",
-            created_at=datetime.utcnow().isoformat() + "Z",
+            created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             password_hash=viewer_password_hash,
         ),
         User(

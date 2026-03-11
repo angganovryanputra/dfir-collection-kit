@@ -8,10 +8,14 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 )
+
+// vssGUIDRe validates that a VSS shadow ID is a safe GUID before embedding in PowerShell.
+var vssGUIDRe = regexp.MustCompile(`^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$`)
 
 // ── Registry Hives ────────────────────────────────────────────────────────────
 // Exports SYSTEM, SOFTWARE, SAM, and SECURITY hives using `reg save`.
@@ -324,10 +328,12 @@ func NewWindowsRecycleBin() *WindowsRecycleBin {
 }
 
 func (m *WindowsRecycleBin) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	maxLines, _ := GetMaxLines(params)
+	maxSizeMB, _ := GetMaxSizeMB(params)
 	var outputLines []string
 	// Standard Windows drive letters to check
 	drives := []string{"C:\\", "D:\\", "E:\\", "F:\\", "G:\\", "H:\\"}
-	
+
 	for _, drive := range drives {
 		rbPath := filepath.Join(drive, "$Recycle.Bin")
 		if _, err := os.Stat(rbPath); err == nil {
@@ -335,19 +341,25 @@ func (m *WindowsRecycleBin) Run(ctx context.Context, mctx ModuleContext, params 
 				if err != nil {
 					return nil // Ignore access denied
 				}
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				if !info.IsDir() {
-					outputLines = append(outputLines, fmt.Sprintf("Path: %s | Size: %d | ModTime: %s", 
+					outputLines = append(outputLines, fmt.Sprintf("Path: %s | Size: %d | ModTime: %s",
 						path, info.Size(), info.ModTime().Format("2006-01-02 15:04:05")))
 				}
 				return nil
 			})
 		}
 	}
-	
+
 	if len(outputLines) > 0 {
-		if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err == nil {
-			return os.WriteFile(outputPath, []byte(strings.Join(outputLines, "\n")), 0644)
+		raw := []byte(strings.Join(outputLines, "\n"))
+		raw = LimitOutput(raw, maxLines, maxSizeMB)
+		if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+			return err
 		}
+		return os.WriteFile(outputPath, raw, 0644)
 	}
 	return WriteNotFound(outputPath, "No recycle bin files found or access denied")
 }
@@ -505,13 +517,23 @@ func vssCreate(ctx context.Context, b *BaseWindowsModule) (shadowID, devicePath 
 
 	shadowID = parts[0]
 	devicePath = parts[1]
-	safeID := strings.ReplaceAll(shadowID, "'", "''")
+	if !vssGUIDRe.MatchString(shadowID) {
+		err = fmt.Errorf("unexpected VSS shadow ID format: %q", shadowID)
+		return
+	}
 	cleanup = func() {
+		// shadowID is already validated as a safe GUID format above.
 		del := fmt.Sprintf(
 			`$sc = Get-WmiObject Win32_ShadowCopy | Where-Object { $_.ID -eq '%s' }; if ($sc) { $sc.Delete() | Out-Null }`,
-			safeID,
+			shadowID,
 		)
-		_, _ = b.executePowerShell(context.Background(), del)
+		// Use a 30-second timeout; the original job context may already be cancelled.
+		cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := b.executePowerShell(cleanCtx, del); err != nil {
+			// Non-fatal: VSS snapshot may be orphaned but deletion can be done manually
+			_ = err
+		}
 	}
 	return
 }

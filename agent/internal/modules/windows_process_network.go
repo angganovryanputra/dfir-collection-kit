@@ -81,6 +81,6 @@ func runPowerShellToFile(ctx context.Context, command string, outputPath string,
 	}
 	maxLines, _ := GetMaxLines(params)
 	maxSize, _ := GetMaxSizeMB(params)
-	output = LimitOutput(output, maxLines, maxSize)
-	return WriteOutput(outputPath, output)
+	outBytes := LimitOutput([]byte(output), maxLines, maxSize)
+	return WriteOutput(outputPath, outBytes)
 }

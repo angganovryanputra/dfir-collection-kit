@@ -13,7 +13,7 @@ interface ProcessingJobOut {
     incident_id: string;
     job_id: string;
     status: "PENDING" | "RUNNING" | "DONE" | "FAILED";
-    phase: "parsing" | "sigma" | "timeline" | "analytics" | null;
+    phase: string | null;
     started_at: string | null;
     completed_at: string | null;
     error_message: string | null;
@@ -223,12 +223,12 @@ export default function ProcessingStatus() {
                             <Button
                                 variant="ghost"
                                 className="col-span-2"
-                                onClick={() =>
-                                    window.open(
-                                        `${import.meta.env.VITE_API_BASE_URL ?? "/api/v1"}/processing/${job?.job_id}/timeline/download`,
-                                        "_blank"
-                                    )
-                                }
+                                disabled={!job?.job_id}
+                                onClick={() => {
+                                    if (!job?.job_id) return;
+                                    const base = (import.meta.env.VITE_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
+                                    window.open(`${base}/processing/${encodeURIComponent(job.job_id)}/timeline/download`, "_blank");
+                                }}
                             >
                                 <Download className="w-4 h-4 mr-2" />
                                 DOWNLOAD TIMELINE.JSONL
@@ -236,12 +236,12 @@ export default function ProcessingStatus() {
                             <Button
                                 variant="ghost"
                                 className="col-span-2"
-                                onClick={() =>
-                                    window.open(
-                                        `${import.meta.env.VITE_API_BASE_URL ?? "/api/v1"}/incidents/${incidentId}/report`,
-                                        "_blank"
-                                    )
-                                }
+                                disabled={!incidentId}
+                                onClick={() => {
+                                    if (!incidentId) return;
+                                    const base = (import.meta.env.VITE_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
+                                    window.open(`${base}/incidents/${encodeURIComponent(incidentId)}/report`, "_blank");
+                                }}
                             >
                                 <FileText className="w-4 h-4 mr-2" />
                                 GENERATE HTML REPORT

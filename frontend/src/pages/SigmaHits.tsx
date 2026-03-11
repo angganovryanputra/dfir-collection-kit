@@ -23,11 +23,11 @@ interface SigmaHitOut {
     rule_name: string;
     rule_tags: string[];
     severity: string;
-    description: string | null;
-    artifact_file: string | null;
+    description: string;
+    artifact_file: string;
     event_timestamp: string | null;
     event_record_id: string | null;
-    event_data: Record<string, unknown> | null;
+    event_data: Record<string, unknown>;
     detected_at: string;
 }
 
@@ -86,7 +86,7 @@ export default function SigmaHits() {
     const filteredItems = search
         ? (data?.items ?? []).filter(
               (h) =>
-                  h.rule_name.toLowerCase().includes(search.toLowerCase()) ||
+                  h.rule_name?.toLowerCase().includes(search.toLowerCase()) ||
                   h.artifact_file?.toLowerCase().includes(search.toLowerCase()) ||
                   h.rule_tags.some((t) => t.toLowerCase().includes(search.toLowerCase()))
           )

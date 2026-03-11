@@ -1,7 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timezone
+import logging
 from pathlib import Path
 import re
 import zipfile
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -62,7 +65,7 @@ def _build_export_zip(incident_id: str, storage_path: str, max_bytes: int) -> Pa
         raise HTTPException(status_code=404, detail="Incident export not found")
     export_dir = base_path / "exports"
     _ensure_directory(export_dir)
-    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     zip_path = export_dir / f"{incident_id}-{timestamp}.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
         for file_path in base_path.rglob("*"):
@@ -75,8 +78,9 @@ def _build_export_zip(incident_id: str, storage_path: str, max_bytes: int) -> Pa
     if zip_path.stat().st_size > max_bytes:
         try:
             zip_path.unlink()
-        finally:
-            raise HTTPException(status_code=413, detail="Export exceeds size limit")
+        except OSError as exc:
+            logger.warning("Failed to delete oversized export %s: %s", zip_path, exc)
+        raise HTTPException(status_code=413, detail="Export exceeds size limit")
     _enforce_export_retention(export_dir, 5)
     return zip_path
 
@@ -93,7 +97,7 @@ def _build_evidence_export_zip(
         raise HTTPException(status_code=404, detail="Evidence not found")
     export_dir = base_path / "exports"
     _ensure_directory(export_dir)
-    timestamp = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     zip_path = export_dir / f"{incident_id}-{evidence_id}-{timestamp}.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
         for file_path in base_path.rglob(evidence_name):
@@ -109,8 +113,9 @@ def _build_evidence_export_zip(
     if zip_path.stat().st_size > max_bytes:
         try:
             zip_path.unlink()
-        finally:
-            raise HTTPException(status_code=413, detail="Export exceeds size limit")
+        except OSError as exc:
+            logger.warning("Failed to delete oversized export %s: %s", zip_path, exc)
+        raise HTTPException(status_code=413, detail="Export exceeds size limit")
     _enforce_export_retention(export_dir, 5)
     return zip_path
 
@@ -299,16 +304,16 @@ async def create_export_endpoint(
         await create_entry(
             db,
             ChainOfCustodyEntryCreate(
-                id=f"coc-export-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{current_user.id}",
+                id=f"coc-export-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{current_user.id}",
                 incident_id=str(incident_id or "unknown"),
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 action="EVIDENCE EXPORT PREPARED",
                 actor=current_user.username,
                 target=str(target_id or "unknown"),
             ),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("CoC entry failed: %s", exc)
     return EvidenceExportResponse(
         download_url=response.download_url,
         signature=signature,
@@ -348,16 +353,16 @@ async def download_incident_export(
         await create_entry(
             db,
             ChainOfCustodyEntryCreate(
-                id=f"coc-download-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{current_user.id}",
+                id=f"coc-download-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{current_user.id}",
                 incident_id=safe_incident_id,
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 action="EVIDENCE EXPORT DOWNLOADED",
                 actor=current_user.username,
                 target=export_path.name,
             ),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("CoC entry failed: %s", exc)
     return FileResponse(export_path)
 
 
@@ -399,16 +404,16 @@ async def download_evidence_export(
         await create_entry(
             db,
             ChainOfCustodyEntryCreate(
-                id=f"coc-download-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{current_user.id}",
+                id=f"coc-download-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}-{current_user.id}",
                 incident_id=item.incident_id,
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 action="EVIDENCE EXPORT DOWNLOADED",
                 actor=current_user.username,
                 target=export_path.name,
             ),
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("CoC entry failed: %s", exc)
     return FileResponse(export_path)
 
 
@@ -510,26 +515,31 @@ def _query_duckdb(
             reader = f"read_csv_auto('{path_str}', ignore_errors=true)"
 
         # Build WHERE clause using schema-discovered columns
+        params: list = []
         if q.strip():
-            safe_q = q.replace("'", "''").lower()
             schema = con.execute(
                 f"SELECT column_name FROM (DESCRIBE SELECT * FROM {reader})"
             ).fetchall()
             col_names = [row[0] for row in schema]
+            like_val = f"%{q.strip().lower()}%"
             conditions = " OR ".join(
-                f"LOWER(CAST(\"{col}\" AS VARCHAR)) LIKE '%{safe_q}%'"
+                f"LOWER(CAST(\"{col}\" AS VARCHAR)) LIKE ?"
                 for col in col_names
             )
-            where_clause = f"WHERE ({conditions})" if conditions else ""
+            if conditions:
+                where_clause = f"WHERE ({conditions})"
+                params = [like_val] * len(col_names)
+            else:
+                where_clause = ""
         else:
             where_clause = ""
 
         total = con.execute(
-            f"SELECT COUNT(*) FROM {reader} {where_clause}"
+            f"SELECT COUNT(*) FROM {reader} {where_clause}", params
         ).fetchone()[0]
 
         result = con.execute(
-            f"SELECT * FROM {reader} {where_clause} LIMIT {limit} OFFSET {offset}"
+            f"SELECT * FROM {reader} {where_clause} LIMIT {limit} OFFSET {offset}", params
         )
         columns = [desc[0] for desc in result.description]
         rows = [
@@ -549,28 +559,34 @@ def _query_duckdb_store(db_path: Path, q: str, page: int, limit: int) -> Timelin
     import duckdb  # noqa: F401
 
     offset = (page - 1) * limit
-    safe_q = q.replace("'", "''").lower() if q.strip() else ""
 
     try:
         con = duckdb.connect(str(db_path), read_only=True)
         try:
-            if safe_q:
+            params: list = []
+            if q.strip():
                 schema = con.execute("DESCRIBE timeline_events").fetchall()
                 col_names = [row[0] for row in schema]
+                like_val = f"%{q.strip().lower()}%"
                 conditions = " OR ".join(
-                    f"LOWER(CAST(\"{col}\" AS VARCHAR)) LIKE '%{safe_q}%'"
+                    f"LOWER(CAST(\"{col}\" AS VARCHAR)) LIKE ?"
                     for col in col_names
                 )
-                where_clause = f"WHERE ({conditions})" if conditions else ""
+                if conditions:
+                    where_clause = f"WHERE ({conditions})"
+                    params = [like_val] * len(col_names)
+                else:
+                    where_clause = ""
             else:
                 where_clause = ""
 
             total = con.execute(
-                f"SELECT COUNT(*) FROM timeline_events {where_clause}"
+                f"SELECT COUNT(*) FROM timeline_events {where_clause}", params
             ).fetchone()[0]
             result = con.execute(
                 f"SELECT * FROM timeline_events {where_clause} "
-                f"ORDER BY datetime LIMIT {limit} OFFSET {offset}"
+                f"ORDER BY datetime LIMIT {limit} OFFSET {offset}",
+                params,
             )
             columns = [d[0] for d in result.description]
             rows = [

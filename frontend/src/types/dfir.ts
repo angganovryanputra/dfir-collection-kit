@@ -45,10 +45,15 @@ export interface Evidence {
 }
 
 export interface ChainOfCustodyEntry {
+  id: string;
+  incident_id: string;
   timestamp: string;
   action: string;
   actor: string;
   target: string;
+  sequence?: number;
+  previous_hash?: string | null;
+  entry_hash?: string;
 }
 
 export interface CollectionPhase {

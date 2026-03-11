@@ -80,14 +80,11 @@ func CopyFileNativeBackup(ctx context.Context, srcPath, dstPath string) error {
 	if err != nil {
 		return fmt.Errorf("CreateFile failed for %s: %w", srcPath, err)
 	}
-	defer windows.CloseHandle(handle)
-
-	// Since Go's os.NewFile works on uintptrs, we can wrap the handle into an os.File
-	// Note: os.NewFile does not support BackupRead stream iteration out of the box,
-	// but it allows standard Read() which is usually sufficient for simple file scraping
-	// if the handle was opened via CreateFile.
+	// os.NewFile takes ownership of the handle; srcFile.Close() will call CloseHandle.
+	// Do NOT also defer windows.CloseHandle(handle) — that would double-close.
 	srcFile := os.NewFile(uintptr(handle), srcPath)
 	if srcFile == nil {
+		windows.CloseHandle(handle) // only explicit close in the nil (error) path
 		return fmt.Errorf("os.NewFile failed for handle")
 	}
 	defer srcFile.Close()

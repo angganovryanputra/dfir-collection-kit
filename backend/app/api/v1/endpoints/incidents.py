@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -99,7 +99,7 @@ async def create_incident_endpoint(
             ChainOfCustodyEntryCreate(
                 id=f"coc-{incident.id}-{uuid4().hex[:8]}",
                 incident_id=incident.id,
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 action="INCIDENT CREATED",
                 actor=current_user.username,
                 target=incident.id,
@@ -153,7 +153,7 @@ async def start_collection_endpoint(
             ChainOfCustodyEntryCreate(
                 id=f"coc-{incident_id}-{uuid4().hex[:8]}",
                 incident_id=incident_id,
-                timestamp=datetime.utcnow().isoformat() + "Z",
+                timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
                 action="COLLECTION STARTED",
                 actor=current_user.username,
                 target=incident_id,
@@ -169,7 +169,9 @@ async def start_collection_endpoint(
         )
         device = result.scalar_one_or_none()
         if device and device.os:
-            os_name = normalize_os_name(device.os) or "windows"
+            normalized = normalize_os_name(device.os)
+            if normalized in {"windows", "linux", "macos"}:
+                os_name = normalized
 
     # Resolve which modules to collect: explicit IDs > profile > all for OS
     try:

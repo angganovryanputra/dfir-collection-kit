@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -85,7 +85,7 @@ async def list_entries_with_total(
 
 
 async def count_recent_login_failures(db: AsyncSession, username: str, window_days: int) -> int:
-    since = datetime.utcnow() - timedelta(days=window_days)
+    since = datetime.now(timezone.utc) - timedelta(days=window_days)
     result = await db.execute(
         select(func.count())
         .select_from(AuditLog)
@@ -99,7 +99,7 @@ async def count_recent_login_failures(db: AsyncSession, username: str, window_da
 async def prune_old_entries(db: AsyncSession, retention_days: int) -> int:
     if retention_days <= 0:
         return 0
-    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
     result = await db.execute(delete(AuditLog).where(AuditLog.timestamp < cutoff))
     await db.flush()
     return int(result.rowcount or 0)

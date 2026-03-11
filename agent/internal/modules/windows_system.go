@@ -78,5 +78,5 @@ func (m *WindowsBootTime) Run(ctx context.Context, mctx ModuleContext, params ma
 	if err != nil {
 		return err
 	}
-	return WriteOutput(outputPath, output)
+	return WriteOutput(outputPath, []byte(output))
 }

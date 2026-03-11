@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/dfir/agent/internal/agent"
@@ -78,7 +79,7 @@ func main() {
 	defer cancel()
 
 	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, os.Signal(15)) // SIGTERM
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
 		<-sigChan
@@ -130,5 +131,5 @@ func runDryRun(cfg *config.Config, moduleIDs string, workDir string) error {
 	}
 
 	executor := jobs.NewExecutor(cfg, nil)
-	return executor.Run(context.Background(), "DRYRUN", "DRYRUN", workDir, jobModules, 0, 0, 0)
+	return executor.Run(context.Background(), "DRYRUN", "DRYRUN", workDir, jobModules, 0, 5, 0)
 }
