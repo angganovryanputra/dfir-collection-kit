@@ -3,13 +3,14 @@ Tests for the forensics timeline and processing-status endpoints.
 
 Requires DFIR_TEST_DATABASE_URL to be set (skipped otherwise).
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
 
-from app.models.evidence import EvidenceFolder, EvidenceItem
+from app.models.evidence import EvidenceItem
+from app.models.processing import ProcessingJob
 from app.models.user import User
 from app.core.security import get_password_hash
 
@@ -23,7 +24,7 @@ def _build_user(username: str = "ADMIN", role: str = "admin") -> User:
         role=role,
         status="active",
         last_login="-",
-        created_at=datetime.utcnow().isoformat() + "Z",
+        created_at=datetime.now(timezone.utc).isoformat(),
         password_hash=get_password_hash("secret"),
     )
 
@@ -42,7 +43,7 @@ def _build_evidence_item(
         size="1.0 MB",
         status="HASH_VERIFIED",
         hash="abcdef1234567890",
-        collected_at=datetime.utcnow().isoformat() + "Z",
+        collected_at=datetime.now(timezone.utc).isoformat(),
     )
 
 
@@ -89,58 +90,47 @@ class TestTimelineEndpoint:
 
 
 # ---------------------------------------------------------------------------
-# Processing-status endpoint
+# Processing-status endpoint (new: /processing/incident/{id}/status)
 # ---------------------------------------------------------------------------
 
 class TestProcessingStatus:
-    async def test_not_started_when_no_evidence(self, client, db_session):
+    async def test_404_when_no_processing_job(self, client, db_session):
+        """Returns 404 when no processing job exists for the incident yet."""
         user = _build_user()
         db_session.add(user)
         await db_session.commit()
         token = await _login(client)
 
         resp = await client.get(
-            "/api/v1/evidence/processing-status/INC-EMPTY",
+            "/api/v1/processing/incident/INC-EMPTY/status",
             headers={"Authorization": f"Bearer {token}"},
         )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "NOT_STARTED"
-        assert body["timeline_evidence_id"] is None
+        assert resp.status_code == 404
 
-    async def test_processing_when_raw_evidence_exists(self, client, db_session):
+    async def test_returns_job_status_when_job_exists(self, client, db_session):
+        """Returns job details when a processing job record exists."""
         user = _build_user()
         db_session.add(user)
-        item = _build_evidence_item("INC-002", name="system.evtx", etype="RAW")
-        db_session.add(item)
+        job = ProcessingJob(
+            id="proc-JOB-INC-004",
+            incident_id="INC-004",
+            job_id="JOB-INC-004",
+            status="DONE",
+            phase="analytics",
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+            created_at=datetime.now(timezone.utc),
+        )
+        db_session.add(job)
         await db_session.commit()
         token = await _login(client)
 
         resp = await client.get(
-            "/api/v1/evidence/processing-status/INC-002",
+            "/api/v1/processing/incident/INC-004/status",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 200
         body = resp.json()
-        assert body["status"] == "PROCESSING"
-
-    async def test_complete_when_timeline_exists(self, client, db_session):
-        user = _build_user()
-        db_session.add(user)
-        timeline = _build_evidence_item(
-            "INC-003",
-            name="super_timeline.csv",
-            etype="PROCESSED_TIMELINE",
-        )
-        db_session.add(timeline)
-        await db_session.commit()
-        token = await _login(client)
-
-        resp = await client.get(
-            "/api/v1/evidence/processing-status/INC-003",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["status"] == "COMPLETE"
-        assert body["timeline_evidence_id"] == timeline.id
+        assert body["status"] == "DONE"
+        assert body["incident_id"] == "INC-004"
+        assert body["job_id"] == "JOB-INC-004"

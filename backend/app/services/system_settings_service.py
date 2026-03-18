@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from app.crud.settings import get_settings
 from app.schemas.settings import SystemSettingsOut
+
+_CACHE_TTL_SEC = 60  # re-read from DB after this many seconds
 
 
 @dataclass(slots=True)
@@ -55,6 +58,7 @@ DEFAULT_SETTINGS = RuntimeSettings(
 )
 
 _runtime_cache: RuntimeSettings | None = None
+_cache_loaded_at: float = 0.0
 
 
 def _from_schema(schema: SystemSettingsOut) -> RuntimeSettings:
@@ -62,17 +66,21 @@ def _from_schema(schema: SystemSettingsOut) -> RuntimeSettings:
 
 
 async def get_runtime_settings(db) -> RuntimeSettings:
-    global _runtime_cache
-    if _runtime_cache:
+    global _runtime_cache, _cache_loaded_at
+    now = time.monotonic()
+    if _runtime_cache and (now - _cache_loaded_at) < _CACHE_TTL_SEC:
         return _runtime_cache
     settings = await get_settings(db)
     if not settings:
         _runtime_cache = DEFAULT_SETTINGS
+        _cache_loaded_at = now
         return _runtime_cache
     _runtime_cache = _from_schema(SystemSettingsOut.model_validate(settings))
+    _cache_loaded_at = now
     return _runtime_cache
 
 
 def set_runtime_settings(settings: SystemSettingsOut) -> None:
-    global _runtime_cache
+    global _runtime_cache, _cache_loaded_at
     _runtime_cache = _from_schema(settings)
+    _cache_loaded_at = time.monotonic()

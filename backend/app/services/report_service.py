@@ -115,7 +115,7 @@ async def generate_incident_report(incident_id: str, db: AsyncSession) -> str:
     if not incident:
         raise ValueError(f"Incident not found: {incident_id}")
 
-    custody_entries, _ = await list_entries(db, incident_id)
+    custody_entries = await list_entries(db, incident_id)
     evidence_items = await list_items(db, incident_id)
     proc_job = await get_latest_processing_job_by_incident_id(db, incident_id)
     sigma_hits: list = []

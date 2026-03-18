@@ -53,7 +53,14 @@ COPY alembic ./alembic
 
 ENV PYTHONPATH=/app
 
+# Run as non-root user for reduced attack surface
+RUN useradd --system --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin dfir \
+    && mkdir -p /vault/evidence \
+    && chown -R dfir:dfir /app /vault/evidence
+
+USER dfir
+
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-    CMD curl -f http://localhost:8000/api/v1/status/diagnostics || exit 1
+    CMD curl -f http://localhost:8000/api/v1/status/health || exit 1
 
 CMD ["/bin/sh", "-c", "alembic upgrade head && python app/seed_run.py && uvicorn app.main:app --host 0.0.0.0 --port 8000"]

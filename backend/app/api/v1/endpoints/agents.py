@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -337,7 +338,7 @@ async def upload_job_evidence(
     base_path = safe_join(Path(runtime_settings.evidence_storage_path), job.incident_id, job.id)
     zip_path = base_path / "collection.zip"
     max_bytes = runtime_settings.max_file_size_gb * 1024 * 1024 * 1024
-    size = save_upload(file, zip_path, max_bytes)
+    size = await asyncio.to_thread(save_upload, file, zip_path, max_bytes)
 
     await safe_record_event(
         db,
@@ -354,10 +355,12 @@ async def upload_job_evidence(
     )
 
     extracted_dir = base_path / "extracted"
-    extracted_files = extract_zip(zip_path, extracted_dir)
+    extracted_files = await asyncio.to_thread(extract_zip, zip_path, extracted_dir)
 
     manifest_path = base_path / "hashes.sha256"
-    write_hash_manifest(extracted_files, manifest_path, extracted_dir, runtime_settings.hash_algorithm)
+    await asyncio.to_thread(
+        write_hash_manifest, extracted_files, manifest_path, extracted_dir, runtime_settings.hash_algorithm
+    )
     await safe_record_event(
         db,
         event_type="evidence_hashed",
@@ -374,9 +377,11 @@ async def upload_job_evidence(
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     chain_log_path = base_path / "chain-of-custody.log"
-    append_chain_log(chain_log_path, f"{timestamp} | UPLOAD | AGENT {agent_id} | {zip_path.name}")
-    chain_log_hash = hash_file(chain_log_path, runtime_settings.hash_algorithm)
-    append_chain_log(chain_log_path, f"{timestamp} | HASH | {chain_log_hash}")
+    await asyncio.to_thread(
+        append_chain_log, chain_log_path, f"{timestamp} | UPLOAD | AGENT {agent_id} | {zip_path.name}"
+    )
+    chain_log_hash = await asyncio.to_thread(hash_file, chain_log_path, runtime_settings.hash_algorithm)
+    await asyncio.to_thread(append_chain_log, chain_log_path, f"{timestamp} | HASH | {chain_log_hash}")
 
     total_size = sum(p.stat().st_size for p in extracted_files)
     folder_payload = EvidenceFolderCreate(
@@ -390,8 +395,11 @@ async def upload_job_evidence(
     )
     await create_folder(db, folder_payload)
 
-    for idx, item in enumerate(extracted_files, start=1):
-        item_hash = hash_file(item, runtime_settings.hash_algorithm)
+    # Hash all files concurrently in a thread pool
+    item_hashes = await asyncio.gather(
+        *[asyncio.to_thread(hash_file, item, runtime_settings.hash_algorithm) for item in extracted_files]
+    )
+    for idx, (item, item_hash) in enumerate(zip(extracted_files, item_hashes), start=1):
         item_payload = EvidenceItemCreate(
             id=f"{job.id}-{idx}",
             incident_id=job.incident_id,
@@ -416,7 +424,7 @@ async def upload_job_evidence(
         ),
     )
 
-    write_lock_marker(base_path / "LOCKED")
+    await asyncio.to_thread(write_lock_marker, base_path / "LOCKED")
 
     # Auto-trigger parsing pipeline if enabled in settings
     if runtime_settings.auto_process:

@@ -3,7 +3,7 @@ import sys
 from pathlib import Path
 
 from alembic import context
-from sqlalchemy import engine_from_config, inspect, pool, text
+from sqlalchemy import engine_from_config, pool
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
@@ -42,24 +42,6 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        inspector = inspect(connection)
-        if "alembic_version" in inspector.get_table_names():
-            connection.execute(
-                text(
-                    "ALTER TABLE alembic_version "
-                    "ALTER COLUMN version_num TYPE VARCHAR(64)"
-                )
-            )
-            connection.commit()
-
-        if "incidents" in inspector.get_table_names():
-            incident_columns = {col["name"] for col in inspector.get_columns("incidents")}
-            if "template_id" not in incident_columns:
-                connection.execute(
-                    text("ALTER TABLE incidents ADD COLUMN template_id VARCHAR")
-                )
-                connection.commit()
-
         context.configure(connection=connection, target_metadata=target_metadata)
 
         with context.begin_transaction():

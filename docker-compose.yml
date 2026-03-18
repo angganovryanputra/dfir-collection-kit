@@ -28,6 +28,12 @@ services:
     container_name: dfir-redis
     ports:
       - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped
     networks:
       - dfir-network
@@ -37,6 +43,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: dfir-backend
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       DATABASE_URL: postgresql+asyncpg://dfir:dfir@db:5432/dfir
       # REQUIRED: Set SECRET_KEY in your .env file before starting.
@@ -49,6 +59,9 @@ services:
       AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:?AGENT_SHARED_SECRET must be set. Copy .env.example to .env and generate a strong secret.}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
       DFIR_SEED_PASSWORD: ${DFIR_SEED_PASSWORD:-}
+      DFIR_DEFAULT_ADMIN_PASSWORD: ${DFIR_DEFAULT_ADMIN_PASSWORD:-}
+      DFIR_DEFAULT_OPERATOR_PASSWORD: ${DFIR_DEFAULT_OPERATOR_PASSWORD:-}
+      DFIR_DEFAULT_VIEWER_PASSWORD: ${DFIR_DEFAULT_VIEWER_PASSWORD:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       # Forensics pipeline tool paths (set in Dockerfile, override here if needed)
       EZTOOLS_DIR: ${EZTOOLS_DIR:-/opt/eztools}
@@ -65,7 +78,7 @@ services:
     volumes:
       - dfir_evidence:/vault/evidence
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/status/diagnostics')\""]
+      test: ["CMD-SHELL", "curl -f --silent --max-time 4 http://localhost:8000/api/v1/status/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -80,6 +93,10 @@ services:
       dockerfile: Dockerfile
     container_name: dfir-celery-worker
     command: celery -A app.worker.celery_app worker --loglevel=info --pool=solo
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     environment:
       DATABASE_URL: postgresql+asyncpg://dfir:dfir@db:5432/dfir
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Copy .env.example to .env and generate a strong key.}
@@ -95,8 +112,6 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
-      backend:
         condition: service_healthy
     volumes:
       - dfir_evidence:/vault/evidence
@@ -108,16 +123,18 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
     container_name: dfir-frontend
-    environment:
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
+    security_opt:
+      - no-new-privileges:true
     ports:
-      - "127.0.0.1:5173:5173"
+      - "127.0.0.1:5173:80"
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://0.0.0.0:5173/ || exit 1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://0.0.0.0:80/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

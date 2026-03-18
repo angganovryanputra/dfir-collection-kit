@@ -1,3 +1,4 @@
+import asyncio
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
@@ -155,14 +156,6 @@ def _resolve_incident_export(incident_id: str, storage_path: str, max_bytes: int
     return _build_export_zip(incident_id, storage_path, max_bytes)
 
 
-def _resolve_export_path(root: Path, identifier: str) -> Path:
-    candidates = [path for path in root.rglob("*") if path.is_file() and path.name == identifier]
-    if not candidates:
-        raise HTTPException(status_code=404, detail="Evidence not found")
-    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-    return candidates[0]
-
-
 def _require_signature(export_path: Path, signature: str | None) -> None:
     if not signature:
         raise HTTPException(status_code=401, detail="Missing export signature")
@@ -267,7 +260,8 @@ async def create_export_endpoint(
         raise HTTPException(status_code=400, detail="incident_id or evidence_id is required")
     if payload.incident_id:
         _validate_identifier(payload.incident_id, "incident_id")
-        export_path = _resolve_incident_export(
+        export_path = await asyncio.to_thread(
+            _resolve_incident_export,
             payload.incident_id,
             runtime_settings.evidence_storage_path,
             max_bytes,
@@ -278,14 +272,15 @@ async def create_export_endpoint(
         if not item:
             raise HTTPException(status_code=404, detail="Evidence not found")
         incident_id = item.incident_id
-        export_path = _resolve_evidence_export(
+        export_path = await asyncio.to_thread(
+            _resolve_evidence_export,
             item.incident_id,
             payload.evidence_id,
             item.name,
             runtime_settings.evidence_storage_path,
             max_bytes,
         )
-    signature = compute_export_signature(str(export_path)) if export_path else None
+    signature = await asyncio.to_thread(compute_export_signature, str(export_path)) if export_path else None
     response = build_export_url(payload.incident_id, payload.evidence_id)
     await safe_record_event(
         db,
@@ -332,8 +327,8 @@ async def download_incident_export(
     runtime_settings = await get_runtime_settings(db)
     max_bytes = runtime_settings.max_file_size_gb * 1024 * 1024 * 1024
     safe_incident_id = _validate_identifier(incident_id, "incident_id")
-    export_path = _resolve_incident_export(
-        safe_incident_id, runtime_settings.evidence_storage_path, max_bytes
+    export_path = await asyncio.to_thread(
+        _resolve_incident_export, safe_incident_id, runtime_settings.evidence_storage_path, max_bytes
     )
     _require_signature(export_path, signature)
     await safe_record_event(
@@ -379,7 +374,8 @@ async def download_evidence_export(
     item = await get_item(db, safe_evidence_id)
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
-    export_path = _resolve_evidence_export(
+    export_path = await asyncio.to_thread(
+        _resolve_evidence_export,
         item.incident_id,
         safe_evidence_id,
         item.name,

@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 import hashlib
+import hmac
 
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -60,8 +61,14 @@ def compute_chain_hash(
 
 
 def compute_export_signature(path: str) -> str:
-    hasher = hashlib.sha256()
+    """HMAC-SHA256 of the file content, keyed by SECRET_KEY.
+
+    Unlike a plain SHA-256 hash, an HMAC signature cannot be forged by
+    anyone who does not possess the server's secret key, even if they
+    have a copy of the file.
+    """
+    mac = hmac.new(settings.SECRET_KEY.encode(), digestmod=hashlib.sha256)
     with open(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            hasher.update(chunk)
-    return hasher.hexdigest()
+            mac.update(chunk)
+    return mac.hexdigest()

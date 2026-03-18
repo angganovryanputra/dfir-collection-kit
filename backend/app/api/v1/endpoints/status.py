@@ -6,7 +6,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.deps import get_db
+from app.core.deps import get_db, require_roles
 from app.models.collector import Collector
 from app.schemas.status import DiagnosticsResponse
 from app.services.system_settings_service import get_runtime_settings
@@ -14,7 +14,13 @@ from app.services.system_settings_service import get_runtime_settings
 router = APIRouter()
 
 
-@router.get("/diagnostics", response_model=DiagnosticsResponse)
+@router.get("/health")
+async def health_check() -> dict:
+    """Lightweight liveness probe — no auth, no DB queries."""
+    return {"status": "ok"}
+
+
+@router.get("/diagnostics", response_model=DiagnosticsResponse, dependencies=[Depends(require_roles("admin", "operator"))])
 async def get_diagnostics(request: Request, db: AsyncSession = Depends(get_db)) -> DiagnosticsResponse:
     db_status = "unknown"
     try:

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
@@ -18,7 +18,7 @@ def build_user(username: str, role: str, password: str) -> User:
         role=role,
         status="active",
         last_login="-",
-        created_at=datetime.utcnow().isoformat() + "Z",
+        created_at=datetime.now(timezone.utc).isoformat(),
         password_hash=get_password_hash(password),
     )
 

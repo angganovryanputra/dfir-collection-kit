@@ -40,6 +40,7 @@ async def create_entry(db: AsyncSession, payload: ChainOfCustodyEntryCreate) -> 
         .where(ChainOfCustodyEntry.incident_id == payload.incident_id)
         .order_by(ChainOfCustodyEntry.sequence.desc())
         .limit(1)
+        .with_for_update()
     )
     previous = last_entry.scalar_one_or_none()
     sequence = 1 if not previous else previous.sequence + 1

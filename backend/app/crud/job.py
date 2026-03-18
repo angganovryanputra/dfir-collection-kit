@@ -30,16 +30,18 @@ async def list_jobs_for_incident(db: AsyncSession, incident_id: str) -> list[Job
 
 
 async def get_next_job_for_agent(db: AsyncSession, agent_id: str) -> Job | None:
+    # Filter by the pre-assigned agent_id so an agent only picks up its own jobs.
+    # FOR UPDATE SKIP LOCKED prevents two concurrent agents from claiming the same row.
     result = await db.execute(
         select(Job)
-        .where(Job.status == "pending")
+        .where(Job.status == "pending", Job.agent_id == agent_id)
         .order_by(Job.created_at.asc())
         .limit(1)
+        .with_for_update(skip_locked=True)
     )
     job = result.scalar_one_or_none()
     if not job:
         return None
-    job.agent_id = agent_id
     job.status = "assigned"
     await db.flush()
     return job

@@ -1,6 +1,9 @@
+import logging
 import os
 import secrets
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,13 +29,24 @@ def parse_dt(value: str) -> datetime:
 
 
 async def seed_data(session: AsyncSession) -> None:
-    demo_password = os.getenv("DFIR_SEED_PASSWORD")
-    if not demo_password:
-        demo_password = secrets.token_urlsafe(16)
+    def _get_or_generate(env_var: str, username: str) -> str:
+        val = os.getenv(env_var)
+        if val:
+            return val
+        generated = secrets.token_urlsafe(16)
+        logger.warning(
+            "No %s set — seeding %r with generated password: %s  (set env var to override)",
+            env_var,
+            username,
+            generated,
+        )
+        return generated
+
+    demo_password = _get_or_generate("DFIR_SEED_PASSWORD", "demo users")
     demo_password_hash = get_password_hash(demo_password)
-    admin_password = os.getenv("DFIR_DEFAULT_ADMIN_PASSWORD", "admin123!")
-    operator_password = os.getenv("DFIR_DEFAULT_OPERATOR_PASSWORD", "operator123!")
-    viewer_password = os.getenv("DFIR_DEFAULT_VIEWER_PASSWORD", "viewer123!")
+    admin_password = _get_or_generate("DFIR_DEFAULT_ADMIN_PASSWORD", "admin")
+    operator_password = _get_or_generate("DFIR_DEFAULT_OPERATOR_PASSWORD", "operator1")
+    viewer_password = _get_or_generate("DFIR_DEFAULT_VIEWER_PASSWORD", "viewer1")
     admin_password_hash = get_password_hash(admin_password)
     operator_password_hash = get_password_hash(operator_password)
     viewer_password_hash = get_password_hash(viewer_password)

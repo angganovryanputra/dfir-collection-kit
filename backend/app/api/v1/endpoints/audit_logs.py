@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -8,6 +9,8 @@ from app.crud.audit_log import list_entries_with_total, prune_old_entries
 from app.schemas.audit_log import AuditLogListResponse, AuditLogOut
 from app.services.audit_log_service import safe_record_event
 from app.services.system_settings_service import get_runtime_settings
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -50,8 +53,8 @@ async def get_audit_logs(
     try:
         runtime_settings = await get_runtime_settings(db)
         await prune_old_entries(db, runtime_settings.log_retention_days)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Audit log prune failed (non-critical): %s", exc)
 
     entries, total = await list_entries_with_total(
         db,

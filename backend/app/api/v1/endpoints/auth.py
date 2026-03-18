@@ -10,10 +10,23 @@ _IP_WINDOW_SEC = 60        # sliding window length
 _IP_MAX_ATTEMPTS = 20      # max login attempts per IP per window
 _ip_attempt_log: dict[str, list[float]] = defaultdict(list)
 
+# Periodic full-sweep to prevent unbounded growth from IPs that never return
+_CLEANUP_INTERVAL_SEC = 300   # sweep every 5 minutes
+_last_cleanup: float = 0.0
+
 
 def _check_ip_rate_limit(client_ip: str) -> None:
     """Raise 429 if the IP has exceeded the login rate limit."""
+    global _last_cleanup
     now = time.monotonic()
+
+    # Periodic full-dict sweep: drop IPs whose entry list is empty after pruning
+    if now - _last_cleanup > _CLEANUP_INTERVAL_SEC:
+        stale = [ip for ip, ts in _ip_attempt_log.items() if not any(now - t < _IP_WINDOW_SEC for t in ts)]
+        for ip in stale:
+            del _ip_attempt_log[ip]
+        _last_cleanup = now
+
     times = _ip_attempt_log[client_ip]
     # Evict entries outside the sliding window
     times[:] = [t for t in times if now - t < _IP_WINDOW_SEC]
