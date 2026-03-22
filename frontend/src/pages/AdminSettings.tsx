@@ -322,7 +322,7 @@ export default function AdminSettings() {
       navigate("/login", { replace: true });
       return;
     }
-    loadAdminData();
+    void loadAdminData();
   }, [navigate]);
 
   const {

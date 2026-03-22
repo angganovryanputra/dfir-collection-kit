@@ -1,4 +1,5 @@
 import asyncio
+import functools
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
@@ -483,9 +484,9 @@ async def get_timeline_data(
     # Prefer persistent DuckDB store when available (built by pipeline after export)
     duckdb_store = timeline_path.parent / "duckdb.db"
     if _HAS_DUCKDB and duckdb_store.exists():
-        return _query_duckdb_store(duckdb_store, q, page, limit)
+        return await asyncio.to_thread(_query_duckdb_store, duckdb_store, q, page, limit)
     elif _HAS_DUCKDB:
-        return _query_duckdb(timeline_path, q, page, limit, is_jsonl=is_jsonl)
+        return await asyncio.to_thread(functools.partial(_query_duckdb, timeline_path, q, page, limit, is_jsonl=is_jsonl))
     else:
         if is_jsonl:
             return _query_jsonl_fallback(timeline_path, q, page, limit)
@@ -519,7 +520,7 @@ def _query_duckdb(
             col_names = [row[0] for row in schema]
             like_val = f"%{q.strip().lower()}%"
             conditions = " OR ".join(
-                f"LOWER(CAST(\"{col}\" AS VARCHAR)) LIKE ?"
+                f"LOWER(CAST(\"{col.replace(chr(34), chr(34)*2)}\" AS VARCHAR)) LIKE ?"
                 for col in col_names
             )
             if conditions:
@@ -565,7 +566,7 @@ def _query_duckdb_store(db_path: Path, q: str, page: int, limit: int) -> Timelin
                 col_names = [row[0] for row in schema]
                 like_val = f"%{q.strip().lower()}%"
                 conditions = " OR ".join(
-                    f"LOWER(CAST(\"{col}\" AS VARCHAR)) LIKE ?"
+                    f"LOWER(CAST(\"{col.replace(chr(34), chr(34)*2)}\" AS VARCHAR)) LIKE ?"
                     for col in col_names
                 )
                 if conditions:

@@ -1,390 +1,492 @@
-# Getting Started Guide
+# Getting Started — DFIR Rapid Collection Kit
+
+This guide covers everything from first deployment to running your first collection.
+
+---
 
 ## Prerequisites
 
 ### Docker Deployment (Recommended)
 
-- Docker Engine 20.10 or higher
-- Docker Compose v2.0 or higher
-- At least 4GB RAM available
-- At least 10GB free disk space
+| Requirement | Minimum |
+|-------------|---------|
+| Docker Engine | 20.10+ |
+| Docker Compose | v2.0+ |
+| RAM | 4 GB |
+| Disk | 10 GB free |
 
 ### Local Development
 
-- Python 3.12+
-- Node.js 20+ (or Bun)
-- PostgreSQL 16+ (or Docker)
-- Git
+| Requirement | Version |
+|-------------|---------|
+| Python | 3.12+ |
+| Node.js | 20+ |
+| Go | 1.23+ (agent only) |
+| PostgreSQL | 16+ |
+| Redis | 7+ |
 
-## Quick Start (Docker)
+---
 
-This is the fastest way to get DFIR Rapid Collection Kit running locally.
+## Docker Quick Start
 
-### Step 1: Clone the Repository
+### Step 1 — Clone
 
 ```bash
 git clone <repository-url>
 cd dfir-collection-kit
 ```
 
-### Step 2: Generate Secure Secrets
+### Step 2 — Create `.env` from Template
 
 ```bash
-# Generate SECRET_KEY for JWT signing
-python3 -c "import secrets; print('SECRET_KEY=' + secrets.token_urlsafe(32))"
-
-# Generate AGENT_SHARED_SECRET for agent authentication
-python3 -c "import secrets; print('AGENT_SHARED_SECRET=' + secrets.token_urlsafe(32))"
+cp .env.example .env
 ```
 
-Copy these values for the next step.
+Open `.env` and set at minimum these three required values:
 
-### Step 3: Configure Environment
+```bash
+# JWT signing key — required, backend refuses to start without it
+SECRET_KEY=<generate-below>
 
-Open `docker-compose.yml` and update the backend environment section:
+# Agent shared secret — must match agent AGENT_SHARED_SECRET env var
+AGENT_SHARED_SECRET=<generate-below>
 
-```yaml
-backend:
-  environment:
-    DATABASE_URL: postgresql+asyncpg://dfir:dfir@db:5432/dfir
-    SECRET_KEY: <your-generated-secret-key>        # PASTE HERE
-    ACCESS_TOKEN_EXPIRE_MINUTES: 60
-    EVIDENCE_STORAGE_PATH: /vault/evidence
-    AGENT_SHARED_SECRET: <your-generated-agent-secret>  # PASTE HERE
-    REQUIRE_AUTH: true
+# Admin account password (default: admin123!)
+DFIR_DEFAULT_ADMIN_PASSWORD=admin123!
 ```
 
-### Step 4: Start the Application
+**Generate secrets:**
+```bash
+python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+# Run twice — once for SECRET_KEY, once for AGENT_SHARED_SECRET
+```
+
+### Step 3 — Build and Start
 
 ```bash
 docker compose up --build
 ```
 
-This command will:
-1. Pull PostgreSQL 16 image
-2. Build and start the database
-3. Build and start the FastAPI backend
-4. Build and start the React frontend
-5. Initialize the database with seed data
-
-Watch for the following messages indicating success:
-- `db: database system is ready to accept connections`
-- `backend: Application startup complete`
-- `frontend: ➜  Local:   http://localhost:5173/`
-
-### Step 5: Access the Application
-
-- **Frontend URL**: http://localhost:5173
-- **Backend API**: http://localhost:8000
-- **API Docs**: http://localhost:8000/docs
-
-### Step 6: Default Users (Dev/Demo Only)
-
-When you run `docker compose up --build`, the backend seeds default users automatically.
-For manual/local seeding, run:
-
-```bash
-python scripts/bootstrap/seed-default-users.py
+Wait for all services to report healthy. You should see:
+```
+db          | database system is ready to accept connections
+redis       | Ready to accept connections
+backend     | Application startup complete
+frontend    | (nginx is running silently — check with curl http://localhost:5173)
 ```
 
-### Step 7: Login with Default Credentials (Dev/Demo Only)
+The database is initialized and seeded automatically on first launch.
 
-These accounts are intended for local development and demos. Do NOT use these default
-passwords in production.
+### Step 4 — Open the Application
+
+| Service | URL |
+|---------|-----|
+| **Frontend** | http://localhost:5173 |
+| **Backend API** | http://localhost:8000 |
+| **Interactive API Docs** | http://localhost:8000/docs |
+
+### Step 5 — Login
 
 ```
-Admin
-  Username: admin
-  Password: admin123!  (override with DFIR_DEFAULT_ADMIN_PASSWORD)
-
-Operator
-  Username: operator1
-  Password: operator123!  (override with DFIR_DEFAULT_OPERATOR_PASSWORD)
-
-Viewer
-  Username: viewer1
-  Password: viewer123!  (override with DFIR_DEFAULT_VIEWER_PASSWORD)
+Username: admin
+Password: admin123!
 ```
+
+_(or whatever you set in `DFIR_DEFAULT_ADMIN_PASSWORD`)_
+
+**Change the admin password immediately after first login.** This account has full administrative access. Create separate `operator` and `viewer` accounts for your team from **Admin → Users**.
+
+---
+
+## Services Overview
+
+`docker compose up` starts five services:
+
+| Service | Role | Port |
+|---------|------|------|
+| `db` | PostgreSQL 16 — case and evidence metadata | 5432 |
+| `redis` | Redis 7 — Celery message broker | 6379 |
+| `backend` | FastAPI REST API | 8000 |
+| `celery_worker` | Background forensics pipeline (EZTools, Hayabusa, Chainsaw) | — |
+| `frontend` | React UI served by Nginx | 5173 |
+
+Evidence files are stored in the Docker volume `dfir_evidence` (mounted at `/vault/evidence` in the backend and Celery containers). The database persists in `dfir_postgres`.
+
+---
 
 ## Local Development Setup
 
-If you prefer to develop without Docker, follow these steps.
+For development without the full Docker stack.
 
-### Backend Setup
-
-#### 1. Install Python and Create Virtual Environment
+### Backend
 
 ```bash
 cd backend
 
-# Create virtual environment
+# Create and activate virtual environment
 python3 -m venv .venv
+source .venv/bin/activate          # macOS/Linux
+# .venv\Scripts\Activate.ps1       # Windows (PowerShell)
 
-# Activate virtual environment
-# On macOS/Linux:
-source .venv/bin/activate
-# On Windows (PowerShell):
-.venv\Scripts\Activate.ps1
-# On Windows (Command Prompt):
-.venv\Scripts\activate.bat
-```
-
-#### 2. Install Dependencies
-
-```bash
+# Install dependencies
 pip install -r requirements.txt
-```
 
-#### 3. Configure Environment
-
-```bash
-# Copy example environment file
+# Configure environment
 cp .env.example .env
+# Edit .env: set DATABASE_URL, SECRET_KEY, AGENT_SHARED_SECRET, EVIDENCE_STORAGE_PATH
 
-# Edit .env with your configuration
-# Required settings:
-DATABASE_URL=postgresql+asyncpg://dfir:dfir@localhost:5432/dfir
-SECRET_KEY=your-secret-key-here
-EVIDENCE_STORAGE_PATH=./vault/evidence
-AGENT_SHARED_SECRET=your-agent-secret-here
-REQUIRE_AUTH=true
-```
+# Start a local PostgreSQL (Docker is the easiest way)
+docker run -d --name dfir-db \
+  -e POSTGRES_USER=dfir -e POSTGRES_PASSWORD=dfir -e POSTGRES_DB=dfir \
+  -p 5432:5432 postgres:16
 
-#### 4. Set Up PostgreSQL
+# Apply migrations (always before first run or after pulling new migrations)
+alembic upgrade head
 
-**Option A: Use Docker for database only**
+# Seed initial admin account and default templates
+python -m app.seed_run
 
-```bash
-docker run -d \
-  --name dfir-db \
-  -e POSTGRES_USER=dfir \
-  -e POSTGRES_PASSWORD=dfir \
-  -e POSTGRES_DB=dfir \
-  -p 5432:5432 \
-  postgres:16
-```
-
-**Option B: Use local PostgreSQL**
-
-Install PostgreSQL 16 locally and create the database:
-```bash
-createdb dfir
-```
-
-#### 5. Initialize the Database
-
-```bash
-# Create tables and seed data
-python -m app.seed_run.py
-```
-
-You should see output like:
-```
-Database initialized successfully
-Seed data created
-```
-
-#### 6. Run the Backend
-
-```bash
-# Development server with auto-reload
+# Start development server (auto-reload)
 uvicorn app.main:app --reload --port 8000
-
-# Or without reload
-uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
-The backend will be available at http://localhost:8000
-API documentation: http://localhost:8000/docs
+Backend is available at http://localhost:8000. API docs at http://localhost:8000/docs.
 
-### Frontend Setup
+> **Important:** Always run `alembic upgrade head` before `python -m app.seed_run`. Migrations create the schema; seed_run only adds data.
 
-#### 1. Install Node.js
-
-Ensure you have Node.js 20 or higher installed:
-```bash
-node --version  # Should be v20.x.x or higher
-npm --version  # Should be 10.x.x or higher
-```
-
-#### 2. Install Dependencies
+### Frontend
 
 ```bash
 cd frontend
 
-# Using npm
 npm install
 
-# Using bun (faster)
-bun install
-```
-
-#### 3. Configure Environment
-
-```bash
-# If .env.example exists, copy it
+# Configure API URL
 cp .env.example .env
+# Set: VITE_API_BASE_URL=http://localhost:8000/api/v1
 
-# Edit .env
-VITE_API_BASE_URL=http://localhost:8000/api/v1
+npm run dev    # Dev server at http://localhost:5173
 ```
 
-#### 4. Run the Frontend
+### Go Agent (Optional for Local Dev)
 
 ```bash
-# Development server
-npm run dev
+cd agent
 
-# Or with bun
-bun run dev
+# Build for current platform
+go build -o dfir-agent ./cmd/agent/
+
+# Run with env vars
+BACKEND_URL=http://localhost:8000 \
+AGENT_SHARED_SECRET=your-secret \
+AGENT_ID=DEV-WORKSTATION \
+./dfir-agent
 ```
 
-The frontend will be available at http://localhost:5173
+---
 
-## First Workflow: Creating an Incident
+## Environment Variables Reference
 
-After logging in, follow these steps to create your first incident:
+All variables can be set in the root `.env` file (Docker) or `backend/.env` (local dev).
 
-### 1. Navigate to Create Incident
+### Required
 
-Click **"Create Incident"** in the sidebar menu.
+| Variable | Description |
+|----------|-------------|
+| `SECRET_KEY` | JWT signing key. Backend refuses to start if weak or missing. |
+| `AGENT_SHARED_SECRET` | Agent authentication token. Must match agent config. |
+| `DATABASE_URL` | Async PostgreSQL URL: `postgresql+asyncpg://user:pass@host/db` |
 
-### 2. Fill Incident Details
+### Important
 
-- **Incident Type**: Select from available types (Ransomware, Account Compromise, etc.)
-- **Incident ID**: Auto-generated (e.g., `INC-2026-001`)
-- **Target Endpoints**: Add hostnames or IP addresses of target systems
-- **Operator Name**: Enter your name or badge ID
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DFIR_DEFAULT_ADMIN_PASSWORD` | `admin123!` | Admin password set on first seed |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | JWT session duration in minutes |
+| `EVIDENCE_STORAGE_PATH` | `/vault/evidence` | Where evidence ZIPs are stored |
+| `REQUIRE_AUTH` | `true` | Set `false` only for local loopback testing |
+| `ALLOWED_ORIGINS` | `http://localhost:5173` | CORS whitelist for frontend origin(s) |
 
-### 3. Start Collection
+### Forensics Pipeline
 
-Click **"START COLLECTION"** button.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `EZTOOLS_DIR` | `/opt/eztools` | Directory containing EZTools binaries |
+| `HAYABUSA_PATH` | `/opt/hayabusa/hayabusa` | Hayabusa binary path |
+| `CHAINSAW_PATH` | `/opt/chainsaw/chainsaw` | Chainsaw binary path |
+| `SIGMA_RULES_DIR` | `/opt/chainsaw/rules/` | Sigma rules directory for Chainsaw |
 
-The system will:
-1. Create the incident record
-2. Create an initial chain-of-custody entry
-3. Redirect you to the collection execution page
+Forensics tools are **not required** to run the platform — they are only needed for the background pipeline. Without them, collection and evidence storage still work; only automated parsing is unavailable.
 
-### 4. Add Devices (Optional)
+---
 
-Navigate to **Devices** page to register collection agents:
-- Click **"ADD DEVICE"**
-- Fill in device details (hostname, IP, OS, agent version)
-- Device will appear in the device list
+## First Incident: Step-by-Step
 
-### 5. View Evidence
+### 1. Register an Agent
 
-Once collection is complete (via Go agent), navigate to:
-- **Evidence Vault**: View all collected evidence
-- **Chain of Custody**: Review audit trail
+Before running a collection, register the Go agent on the target endpoint:
 
-## Common Issues and Solutions
+1. Build the agent binary for the target OS (see Agent Deployment in README)
+2. Run the agent with `BACKEND_URL`, `AGENT_SHARED_SECRET`, and `AGENT_ID` set
+3. The agent self-registers on first launch — confirm in **Devices** page
 
-### Backend: "Database connection failed"
+### 2. Create an Incident
 
-**Problem**: Backend cannot connect to PostgreSQL.
+1. Click **Create Incident** in the sidebar
+2. Fill in:
+   - **Type**: Ransomware, Account Compromise, Data Exfiltration, Insider Threat, etc.
+   - **Target Endpoints**: Hostnames or IPs (comma-separated)
+   - **Operator**: Your name or badge ID
+3. Optionally select an **Incident Template** to pre-fill checklists and defaults
+4. Click **Create Incident**
 
-**Solutions**:
-1. Ensure PostgreSQL is running: `docker compose ps db`
-2. Check database logs: `docker compose logs db`
-3. Verify connection string in `.env` or `docker-compose.yml`
-4. Ensure port 5432 is not blocked by firewall
+### 3. Configure Collection Modules
 
-### Frontend: "Connection refused"
+On the Collection Setup page:
 
-**Problem**: Frontend cannot reach backend.
+- **Select a Profile**: `triage` (fastest), `ransomware`, `insider_threat`, or `full`
+- **Or select modules manually** by category (volatile, logs, persistence, artifacts, system)
+- The OS is auto-detected from the registered device; you can override it
 
-**Solutions**:
-1. Check backend is running: `docker compose ps backend`
-2. Verify `VITE_API_BASE_URL` in frontend environment
-3. For Docker: Use `http://backend:8000/api/v1`
-4. For local dev: Use `http://localhost:8000/api/v1`
+Click **Start Collection** when ready.
 
-### Authentication: "401 Unauthorized"
+### 4. Monitor Collection
 
-**Problem**: API requests are failing with 401 errors.
+The Collection Execution page shows real-time logs from the agent. The agent:
+1. Polls for the job instruction (with OPSEC jitter)
+2. Executes modules in parallel (default: 4 concurrent)
+3. Creates a ZIP and uploads to the backend
+4. Backend extracts, hashes, appends chain-of-custody, and locks the folder
 
-**Solutions**:
-1. Check you're logged in (token in `localStorage`)
-2. Verify token hasn't expired (default: 60 minutes)
-3. Check `SECRET_KEY` is set in backend
-4. Clear browser localStorage and login again
+Collection status updates automatically every ~1.2 seconds.
 
-### Evidence Upload: "503 Agent shared secret not configured"
+### 5. Run the Forensics Pipeline
 
-**Problem**: Agent cannot upload evidence.
+After collection completes:
+- **Auto**: If `auto_process = true` in System Settings, the pipeline triggers automatically
+- **Manual**: Navigate to **Processing** for the incident and click **Trigger Pipeline**
 
-**Solutions**:
-1. Set `AGENT_SHARED_SECRET` in backend environment
-2. Ensure agent sends `X-Agent-Token` header
-3. Restart backend after changing environment variables
+Monitor pipeline phases:
+1. `parsing` — EZTools parsing EVTX, registry, prefetch, etc.
+2. `sigma` — Hayabusa + Chainsaw threat hunting
+3. `timeline` — CSV merge and DuckDB indexing
 
-### Docker: "Port already in use"
+### 6. Analyze Results
 
-**Problem**: Docker reports port is already allocated.
+Once the pipeline completes:
 
-**Solutions**:
-1. Check what's using the port:
-   ```bash
-   # macOS/Linux
-   lsof -i :8000
-   lsof -i :5173
-   lsof -i :5432
-   
-   # Windows
-   netstat -ano | findstr :8000
-   netstat -ano | findstr :5173
-   netstat -ano | findstr :5432
-   ```
-2. Stop conflicting service or change port in `docker-compose.yml`
+| Page | What You Find |
+|------|---------------|
+| **Sigma Hits** | Sigma rule detections sorted by severity (critical → informational) |
+| **IOC Matches** | Timeline events matching known-bad IPs, domains, hashes |
+| **YARA Matches** | Files matching YARA rules |
+| **Attack Chains** | MITRE ATT&CK techniques correlated into kill chains |
+| **Evidence Vault** | Raw collected files; download individual artifacts or full ZIP export |
+| **Chain of Custody** | Cryptographically verified event log; export as CSV |
 
-### Database: "relation does not exist"
+### 7. Generate Report & Close
 
-**Problem**: Database tables not created.
+1. Click **Generate HTML Report** on the Processing page — produces a self-contained HTML report
+2. When the investigation concludes, set incident status to **CLOSED**
+3. Closed incidents are immutable — no further collection or updates
 
-**Solutions**:
-1. Run seed script: `python -m app.seed_run.py`
-2. For Docker: Recreate containers: `docker compose down && docker compose up --build`
+---
+
+## Admin Configuration
+
+The **Admin → System Settings** page (`/admin/settings`) controls:
+
+| Setting | Description |
+|---------|-------------|
+| Evidence storage path | Where files are stored on the server filesystem |
+| Max file size (GB) | Upload limit per evidence ZIP |
+| Hash algorithm | SHA-256 (default) |
+| Session timeout (min) | JWT expiry for UI sessions |
+| Max failed logins | Account lockout threshold |
+| Log retention (days) | Audit log retention period |
+| Max concurrent jobs | System-wide job concurrency cap |
+| Agent concurrency limit | Modules to run in parallel per agent job |
+| Auto process | Trigger pipeline automatically after evidence upload |
+| Tool paths | Paths to EZTools, Hayabusa, Chainsaw, Sigma rules, YARA rules |
+| Timesketch | Optional Timesketch integration URL and API token |
+
+After changing settings, click **Save**. Changes take effect within 60 seconds (runtime cache TTL).
+
+Click **Verify Tools** to confirm that all forensics binaries exist at the configured paths.
+
+---
+
+## Database Migrations
+
+Migrations are managed with Alembic. Always run migrations before starting the backend on a new installation or after pulling updates.
+
+```bash
+cd backend
+alembic upgrade head
+```
+
+To create a new migration after modifying a model:
+
+```bash
+alembic revision --autogenerate -m "add new field"
+# Review the generated file in alembic/versions/ before applying
+alembic upgrade head
+```
+
+**Current migration chain:**
+```
+20260101_initial_schema
+  → 20260117_add_incident_collection_state
+    → 20260122_add_incident_template_id
+      → 20260303_add_concurrency_limit
+        → 20260401_processing_pipeline
+          → 20260402_processing_settings
+            → 20260403_phase2_analytics  ← current HEAD
+```
+
+> Do not use `python -m app.seed_run` to create tables in production — use Alembic migrations.
+
+---
+
+## Common Issues
+
+### Backend refuses to start
+
+```bash
+docker compose logs backend | tail -30
+```
+
+**"SECRET_KEY matches a known weak default"** — Set a real random value in `.env`.
+
+**"connection refused"** (database) — The backend retries 30 times with 2-second delays. If it still fails, check: `docker compose logs db`.
+
+### Cannot log in (401)
+
+1. Verify seed ran: `docker compose logs backend | grep -i seed`
+2. Check you're using the correct password (default: `admin123!`)
+3. If you changed `DFIR_DEFAULT_ADMIN_PASSWORD`, use that value instead
+4. Clear browser localStorage and try again
+
+### Login blocked (429)
+
+More than 20 attempts from the same IP in 60 seconds triggers rate limiting. Wait 60 seconds before retrying.
+
+### Pipeline not processing
+
+```bash
+docker compose ps          # Verify celery_worker is running
+docker compose logs celery_worker | tail -30
+```
+
+If tools are not found, configure their paths in **Admin → System Settings → Verify Tools**.
+
+If `auto_process = false`, navigate to the incident's Processing page and click **Trigger Pipeline** manually.
+
+### Evidence upload rejected (413)
+
+The default upload limit is 10 GB. Increase `max_file_size_gb` in Admin Settings, or set `MAX_UPLOAD_SIZE_MB` in `.env`.
+
+### Agent authentication fails (401)
+
+Verify `AGENT_SHARED_SECRET` matches exactly between the backend and the agent:
+
+```bash
+docker compose exec backend env | grep AGENT_SHARED_SECRET
+```
+
+### Ports already in use
+
+```bash
+lsof -i :8000    # Backend
+lsof -i :5173    # Frontend
+lsof -i :5432    # PostgreSQL
+lsof -i :6379    # Redis
+```
+
+Change the conflicting service port in `docker-compose.yml`.
+
+---
+
+## Useful Docker Commands
+
+```bash
+# Start services
+docker compose up -d
+
+# Rebuild and restart
+docker compose up --build
+
+# View logs
+docker compose logs -f backend
+docker compose logs -f celery_worker
+docker compose logs -f frontend
+
+# Check service health
+docker compose ps
+
+# Open a shell in backend
+docker compose exec backend bash
+
+# Apply migrations inside container
+docker compose exec backend alembic upgrade head
+
+# Re-seed (only if no users exist)
+docker compose exec backend python -m app.seed_run
+
+# Stop everything
+docker compose down
+
+# Stop and remove volumes (DESTROYS ALL DATA)
+docker compose down -v
+```
+
+---
+
+## Backup and Recovery
+
+### Backup
+
+```bash
+# Backup database
+docker compose exec db pg_dump -U dfir dfir > backup_$(date +%Y%m%d).sql
+
+# Backup evidence files
+docker run --rm -v dfir_evidence:/data -v $(pwd):/backup alpine \
+  tar czf /backup/evidence_$(date +%Y%m%d).tar.gz /data
+```
+
+### Restore
+
+```bash
+# Restore database
+docker compose exec -T db psql -U dfir dfir < backup_20260322.sql
+
+# Restore evidence files
+docker run --rm -v dfir_evidence:/data -v $(pwd):/backup alpine \
+  tar xzf /backup/evidence_20260322.tar.gz -C /
+```
+
+---
 
 ## Next Steps
 
-### For Users
+### For Operators
 
-1. **Create your first incident**: Follow the workflow above
-2. **Register a device**: Add a target system to the device list
-3. **Review templates**: Check the Incident Templates page for presets
-4. **Explore the API**: Visit http://localhost:8000/docs
+1. **Create your team accounts** — Admin → Users → Create User (role: operator or viewer)
+2. **Set up Incident Templates** — pre-fill checklists for your common incident types
+3. **Configure tool paths** — Admin → System Settings → Verify Tools (for automated parsing)
+4. **Enable auto_process** — if you want the pipeline to trigger automatically after each collection
 
 ### For Developers
 
-1. **Read the architecture**: See `docs/ARCHITECTURE.md`
-2. **Review the codebase**: Explore frontend and backend structure
-3. **Run tests** (if available): `pytest` in backend directory
-4. **Contribute**: Check the contributing guidelines in README
+1. **Read the architecture** — `docs/ARCHITECTURE.md`
+2. **Read the audit report** — `AUDIT_REPORT.md` for known issues and decisions
+3. **Run tests** — `DFIR_TEST_DATABASE_URL=... pytest` in backend directory
+4. **API documentation** — http://localhost:8000/docs (interactive, auto-generated)
 
-### For Operators
+### For Security Teams
 
-1. **Create a standard operating procedure (SOP)** based on your workflow
-2. **Train your team** on incident creation and evidence review
-3. **Configure backups** for evidence storage and database
-4. **Set up monitoring** for evidence collection jobs
-
-## Additional Resources
-
-- **Architecture Documentation**: `docs/ARCHITECTURE.md`
-- **API Reference**: http://localhost:8000/docs (when backend is running)
-- **Project README**: `README.md`
-- **Issue Tracker**: GitHub Issues
-
-## Getting Help
-
-If you encounter issues not covered in this guide:
-
-1. Check the **Troubleshooting** section above
-2. Review the **Architecture** documentation
-3. Search existing GitHub issues
-4. Create a new issue with:
-   - Your operating system and version
-   - Docker or local deployment
-   - Complete error messages
-   - Steps to reproduce the problem
+1. **Change default password** immediately after first login
+2. **Set `ALLOWED_ORIGINS`** to your actual frontend domain in production
+3. **Configure log retention** in Admin Settings to match your policy
+4. **Review security notes** in `README.md` before internet-facing deployment

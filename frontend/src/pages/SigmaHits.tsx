@@ -88,7 +88,7 @@ export default function SigmaHits() {
               (h) =>
                   h.rule_name?.toLowerCase().includes(search.toLowerCase()) ||
                   h.artifact_file?.toLowerCase().includes(search.toLowerCase()) ||
-                  h.rule_tags.some((t) => t.toLowerCase().includes(search.toLowerCase()))
+                  (h.rule_tags ?? []).some((t) => t.toLowerCase().includes(search.toLowerCase()))
           )
         : (data?.items ?? []);
 
@@ -236,7 +236,7 @@ export default function SigmaHits() {
                                             </td>
                                             <td className="px-3 py-2 max-w-[180px]">
                                                 <div className="flex flex-wrap gap-1">
-                                                    {hit.rule_tags.slice(0, 3).map((tag) => (
+                                                    {(hit.rule_tags ?? []).slice(0, 3).map((tag) => (
                                                         <span
                                                             key={tag}
                                                             className="bg-secondary px-1 rounded text-muted-foreground truncate"
@@ -244,9 +244,9 @@ export default function SigmaHits() {
                                                             {tag}
                                                         </span>
                                                     ))}
-                                                    {hit.rule_tags.length > 3 && (
+                                                    {(hit.rule_tags ?? []).length > 3 && (
                                                         <span className="text-muted-foreground">
-                                                            +{hit.rule_tags.length - 3}
+                                                            +{(hit.rule_tags ?? []).length - 3}
                                                         </span>
                                                     )}
                                                 </div>
@@ -310,11 +310,11 @@ export default function SigmaHits() {
                                         : "—"}
                                 </div>
                             </div>
-                            {selectedHit.rule_tags.length > 0 && (
+                            {(selectedHit.rule_tags ?? []).length > 0 && (
                                 <div>
                                     <div className="text-muted-foreground mb-1">MITRE TAGS:</div>
                                     <div className="flex flex-wrap gap-1">
-                                        {selectedHit.rule_tags.map((tag) => (
+                                        {(selectedHit.rule_tags ?? []).map((tag) => (
                                             <span
                                                 key={tag}
                                                 className="bg-secondary border border-border px-2 py-0.5 rounded-sm"

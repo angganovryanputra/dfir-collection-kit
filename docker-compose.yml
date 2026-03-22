@@ -58,10 +58,7 @@ services:
       # Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
       AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:?AGENT_SHARED_SECRET must be set. Copy .env.example to .env and generate a strong secret.}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
-      DFIR_SEED_PASSWORD: ${DFIR_SEED_PASSWORD:-}
-      DFIR_DEFAULT_ADMIN_PASSWORD: ${DFIR_DEFAULT_ADMIN_PASSWORD:-}
-      DFIR_DEFAULT_OPERATOR_PASSWORD: ${DFIR_DEFAULT_OPERATOR_PASSWORD:-}
-      DFIR_DEFAULT_VIEWER_PASSWORD: ${DFIR_DEFAULT_VIEWER_PASSWORD:-}
+      DFIR_DEFAULT_ADMIN_PASSWORD: ${DFIR_DEFAULT_ADMIN_PASSWORD:-admin123!}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       # Forensics pipeline tool paths (set in Dockerfile, override here if needed)
       EZTOOLS_DIR: ${EZTOOLS_DIR:-/opt/eztools}
@@ -74,6 +71,8 @@ services:
       - "127.0.0.1:8000:8000"
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     volumes:
       - dfir_evidence:/vault/evidence

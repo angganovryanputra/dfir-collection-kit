@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
@@ -26,9 +27,15 @@ async def create_job_endpoint(
     device = await get_device(db, payload.agent_id) if payload.agent_id else None
     if not payload.module_ids and not device:
         raise HTTPException(status_code=400, detail="module_ids required when agent_id is missing")
-    modules = build_modules(payload.module_ids, device.os if device else None)
+    try:
+        modules = build_modules(payload.module_ids, device.os if device else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     output_path = f"{payload.incident_id}/{payload.id}"
-    job = await create_job(db, payload, modules, output_path)
+    try:
+        job = await create_job(db, payload, modules, output_path)
+    except IntegrityError:
+        raise HTTPException(status_code=409, detail=f"Job '{payload.id}' already exists")
     await safe_record_event(
         db,
         event_type="job_created",

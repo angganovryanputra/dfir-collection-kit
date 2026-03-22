@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class JobModule(BaseModel):
@@ -27,6 +27,8 @@ class JobCreate(BaseModel):
 
 
 class JobOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     incident_id: str
     agent_id: str | None = None
@@ -36,9 +38,6 @@ class JobOut(BaseModel):
     message: str | None = None
     created_at: datetime
     updated_at: datetime
-
-    class Config:
-        from_attributes = True
 
 
 class JobInstruction(BaseModel):

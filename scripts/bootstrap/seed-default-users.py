@@ -24,18 +24,6 @@ DEFAULT_USERS = [
         "env": "DFIR_DEFAULT_ADMIN_PASSWORD",
         "default_password": "admin123!",
     },
-    {
-        "username": "operator1",
-        "role": "operator",
-        "env": "DFIR_DEFAULT_OPERATOR_PASSWORD",
-        "default_password": "operator123!",
-    },
-    {
-        "username": "viewer1",
-        "role": "viewer",
-        "env": "DFIR_DEFAULT_VIEWER_PASSWORD",
-        "default_password": "viewer123!",
-    },
 ]
 
 

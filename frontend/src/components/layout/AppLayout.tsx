@@ -9,6 +9,7 @@ interface IncidentResponse {
   id: string;
   type: Incident["type"];
   status: Incident["status"];
+  template_id?: string | null;
   target_endpoints: string[];
   operator: string;
   created_at: string;
@@ -34,6 +35,7 @@ const mapIncident = (incident: IncidentResponse): Incident => ({
   id: incident.id,
   type: incident.type,
   status: incident.status,
+  templateId: incident.template_id ?? null,
   targetEndpoints: incident.target_endpoints,
   operator: incident.operator,
   createdAt: incident.created_at,

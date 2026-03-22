@@ -3,7 +3,7 @@ import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import React, { Component } from "react";
 import { getStoredAuth } from "@/lib/auth";
 import AdminSettings from "./pages/AdminSettings";
@@ -26,11 +26,13 @@ import YaraMatches from "./pages/YaraMatches";
 
 const queryClient = new QueryClient();
 
-/** Redirects unauthenticated users to /login before rendering the page. */
+/** Redirects unauthenticated users to /login before rendering the page.
+ *  Passes the original path via router state so Login can redirect back after auth. */
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const auth = getStoredAuth();
+  const location = useLocation();
   if (!auth?.token) {
-    return <Navigate to="/login" replace />;
+    return <Navigate to="/login" state={{ from: location.pathname + location.search }} replace />;
   }
   return <>{children}</>;
 }

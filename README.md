@@ -2,109 +2,116 @@
 
 **Evidence Collection and Management System for Digital Forensics & Incident Response**
 
+---
+
 ## Overview
 
-DFIR Rapid Collection Kit is a secure, web-based platform for managing incident response operations and collecting digital evidence. Built with a modern tech stack, it provides a complete workflow from incident creation to evidence storage with chain-of-custody tracking.
+DFIR Rapid Collection Kit is a secure, web-based platform for managing incident response operations and collecting digital evidence at scale. It provides a complete end-to-end workflow: incident creation → automated evidence collection via Go agents → forensics pipeline → threat hunting → chain-of-custody reporting.
+
+Built for DFIR practitioners who need a single platform to coordinate collections across multiple endpoints, maintain forensic integrity, and run automated analytics without manual scripting.
+
+---
 
 ## Features
 
-- **Incident Management**: Create, track, and manage DFIR incidents
-- **Evidence Collection**: Automated evidence collection via Go-based agents
-- **Chain of Custody**: Tamper-evident audit trail with hash chaining
-- **Evidence Vault**: Secure storage with SHA256 hashing and export capabilities
-- **Scalable Forensics Pipeline**: Automated parsing (EZTools), threat hunting (Hayabusa + Chainsaw), and super timeline generation
-- **Timeline Explorer**: Interactive browser-based hunting interface with DuckDB-powered search
-- **Agent Management**: Register and monitor collection agents with OPSEC jitter
-- **Template System**: Reusable incident templates with preset checklists
-- **Role-Based Access**: Admin, Operator, and Viewer roles with fine-grained permissions
-- **Docker Ready**: Single-command deployment with Docker Compose (includes EZTools, Hayabusa, Chainsaw)
+| Feature | Description |
+|---------|-------------|
+| **Incident Management** | Create, track, and manage DFIR cases with status machine (PENDING → ACTIVE → COLLECTION_IN_PROGRESS → COMPLETE → CLOSED) |
+| **Evidence Collection** | Automated collection via Go-based agents; 40+ Windows modules, 11+ Linux modules across 5 categories |
+| **Collection Profiles** | Pre-built profiles: `triage`, `ransomware`, `insider_threat`, `full` — or select modules manually |
+| **Chain of Custody** | Tamper-evident, cryptographically hash-chained audit trail — verified on every read |
+| **Evidence Vault** | SHA256-hashed evidence with immutable LOCKED state; export as ZIP with signature |
+| **Forensics Pipeline** | Background Celery workers: 8 EZTools parsers → Hayabusa + Chainsaw Sigma hunting → DuckDB super timeline |
+| **Threat Hunting UI** | Sigma hits, YARA matches, IOC indicators, MITRE ATT&CK kill chain visualization |
+| **Timeline Explorer** | DuckDB-powered full-text search across merged super timeline (browser-based) |
+| **Template System** | Reusable incident templates with preflight checklists and default endpoint sets |
+| **Role-Based Access** | Three roles: `admin` > `operator` > `viewer` with fine-grained endpoint enforcement |
+| **Audit Log** | Hash-chained system event log with filtering by event type, actor, target, time range |
+| **Docker Ready** | Single-command deployment; Redis + Celery included for background pipeline tasks |
+
+---
 
 ## Architecture
 
-### Components
-
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        User Browser                         │
-│                   (React + TypeScript)                      │
-└────────────────────────────────┬────────────────────────────────┘
-                             │
+┌─────────────────────────────────────────────────────────────┐
+│                      User Browser                           │
+│               React 18 + TypeScript (Vite)                  │
+│         Port 5173  ·  Served by Nginx (SPA)                 │
+└────────────────────────────┬────────────────────────────────┘
+                             │ REST API (JWT Bearer)
                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Frontend (Vite)                        │
-│          Port: 5173  |  Timeline Explorer UI             │
-└────────────────────────────────┬────────────────────────────────┘
-                             │
-                             ▼ (REST API)
-┌─────────────────────────────────────────────────────────────────┐
-│                  Backend (FastAPI)                         │
-│          Port: 8000  |  Forensics Pipeline               │
-└────────────┬──────────────┬──────────────┬────────────────┘
-             │              │              │
-             ▼              ▼              ▼
-┌──────────────────┐ ┌───────────────┐ ┌────────────────────┐
-│ PostgreSQL DB  │ │ Evidence    │ │ Forensics Tools  │
-│  (Port: 5432)  │ │ /vault/     │ │ EZTools/Hayabusa │
-└──────────────────┘ └───────────────┘ │ Chainsaw/DuckDB  │
-                            ▲          └────────────────────┘
-                            │ (Upload)
-                 ┌──────────────────────────────┐
-                 │    Go Agents (OPSEC)        │
-                 │  Poll jobs with jitter,     │
-                 │  Upload evidence ZIPs       │
-                 └──────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                  Backend (FastAPI)  :8000                    │
+│         async SQLAlchemy · RBAC · Rate Limiting              │
+│         Security Headers · Audit Logging                     │
+└──────┬────────────┬──────────────────┬──────────────────────┘
+       │            │                  │
+       ▼            ▼                  ▼
+┌────────────┐ ┌──────────┐  ┌────────────────────────┐
+│ PostgreSQL │ │  Redis   │  │  Evidence Storage      │
+│   :5432    │ │  :6379   │  │  /vault/evidence       │
+└────────────┘ └──────────┘  └────────────────────────┘
+                    │                  ▲
+                    ▼                  │
+         ┌──────────────────┐  ┌───────────────────────┐
+         │  Celery Worker   │  │  Forensics Tools      │
+         │  (Background)    │→ │  EZTools / Hayabusa   │
+         │  Parsing Pipeline│  │  Chainsaw / DuckDB    │
+         └──────────────────┘  └───────────────────────┘
+                                        ▲
+                              ┌─────────┴──────────────┐
+                              │    Go Agents (OPSEC)   │
+                              │  Poll jobs with jitter  │
+                              │  X-Agent-Token auth     │
+                              │  Upload evidence ZIPs   │
+                              └────────────────────────┘
 ```
 
 ### Tech Stack
 
-**Frontend**:
-- React 18 with TypeScript
-- Vite for build tooling
-- Tailwind CSS for styling
-- shadcn/ui components
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 18, TypeScript, Vite, Tailwind CSS, shadcn/ui, TanStack Query v5 |
+| Backend | FastAPI (Python 3.12), SQLAlchemy 2.0 async, Alembic, Pydantic v2 |
+| Database | PostgreSQL 16, Redis 7 (Celery broker) |
+| Background Tasks | Celery (forensics pipeline worker) |
+| Agent | Go 1.23 (goroutine pool, concurrent module execution) |
+| Forensics | EZTools (8 parsers), Hayabusa, Chainsaw, DuckDB |
+| Serving | Nginx (SPA + security headers, production-ready) |
 
-**Backend**:
-- FastAPI (Python 3.12)
-- SQLAlchemy 2.0 with async PostgreSQL
-- JWT authentication with bcrypt password hashing
-- Alembic for database migrations
+---
 
-**Infrastructure**:
-- Docker & Docker Compose
-- PostgreSQL 16
-- Eric Zimmerman Tools (EZTools) for artifact parsing
-- Hayabusa + Chainsaw for Sigma-based threat hunting
-- DuckDB for high-performance timeline queries
-- Nginx (future reverse proxy)
+## Forensics Pipeline
 
-## Scalable Forensics Pipeline
-
-The built-in forensics pipeline automates the full chain from raw artifact collection to interactive threat hunting.
-
-### How It Works
+The built-in pipeline automates the full chain from raw artifact to interactive hunting.
 
 ```
-Agent Upload → Background Pipeline → Super Timeline → Browser-Based Hunting
+Agent Upload → Celery Worker → EZTools Parse → Sigma Hunt → Timeline Merge → DuckDB
 ```
 
-1. **Evidence Upload**: Go agent collects artifacts and uploads a ZIP file
-2. **Automated Parsing**: Backend triggers background tasks that run 8 EZTools parsers in parallel:
-   - `EvtxECmd` — Windows Event Logs (.evtx)
-   - `MFTECmd` — MFT / $UsnJrnl / $LogFile
-   - `RECmd` — Registry Hives (SYSTEM, SAM, SOFTWARE, etc.)
-   - `PECmd` — Prefetch files (.pf)
+### Pipeline Stages
+
+1. **Evidence Upload** — Go agent collects artifacts, zips them, uploads to `/agents/{id}/jobs/{id}/upload`
+2. **Extraction & Hashing** — Backend extracts ZIP, SHA256 hashes every file, writes `hashes.sha256` manifest, appends chain-of-custody, locks folder
+3. **EZTools Parsing** — 8 parsers run in parallel (Celery):
+   - `EvtxECmd` — Windows Event Logs (`.evtx`)
+   - `MFTECmd` — MFT, `$UsnJrnl`, `$LogFile`
+   - `RECmd` — Registry hives (SYSTEM, SAM, SOFTWARE, NTUSER.DAT)
+   - `PECmd` — Prefetch files (`.pf`)
    - `LECmd` — LNK shortcut files
    - `JLECmd` — Jump Lists
    - `AppCompatCacheParser` — ShimCache
    - `AmcacheParser` — Amcache.hve
-3. **Sigma Hunting**: Hayabusa and Chainsaw scan EVTX files against Sigma detection rules
-4. **Timeline Merge**: All parsed CSVs are normalised to a standard schema and merged into a single `super_timeline.csv`, sorted by UTC datetime
-5. **Timeline Explorer**: Analysts open the browser-based Timeline Explorer to search and hunt through events using DuckDB-powered full-text queries
+4. **Sigma Threat Hunting** — Hayabusa and Chainsaw scan EVTX files against Sigma rules
+5. **Timeline Merge** — All CSVs normalized to a common schema and merged into `super_timeline.csv`
+6. **DuckDB Indexing** — Timeline loaded into DuckDB store for fast full-text search
+7. **Analytics** — YARA file matching, IOC correlation, MITRE ATT&CK kill chain reconstruction
 
 ### Super Timeline Schema
 
 | Column | Description |
-|---|---|
+|--------|-------------|
 | `datetime` | UTC timestamp |
 | `source` | Log channel / hive path |
 | `computer` | Hostname |
@@ -112,273 +119,419 @@ Agent Upload → Background Pipeline → Super Timeline → Browser-Based Huntin
 | `description` | Primary message / path |
 | `details` | Extended payload |
 | `rule_title` | Sigma rule name (alerts only) |
-| `sigma_level` | Alert severity (alerts only) |
-| `user` | Associated user |
-| `original_file` | Source CSV for traceability |
+| `sigma_level` | Alert severity (critical/high/medium/low) |
+| `user` | Associated user account |
+| `original_file` | Source CSV filename for traceability |
 
-### Environment Variables
+---
 
-| Variable | Default | Description |
-|---|---|---|
-| `EZTOOLS_DIR` | `/opt/eztools` | Path to EZTools binaries |
-| `HAYABUSA_PATH` | `/opt/hayabusa/hayabusa` | Path to Hayabusa binary |
-| `CHAINSAW_PATH` | `/opt/chainsaw/chainsaw` | Path to Chainsaw binary |
-| `SIGMA_RULES_DIR` | `/opt/chainsaw/rules/` | Path to Sigma rules directory |
+## Collection Modules
 
-## Quick Start with Docker
+Modules are organized into 5 categories and registered in `backend/app/core/modules.py`. Go implementations live in `agent/internal/modules/*.go`.
+
+### Windows Modules (40+)
+
+| Category | Modules |
+|----------|---------|
+| **volatile** | `process_list`, `network_connections`, `listening_ports`, `dns_cache`, `logged_on_users` |
+| **logs** | `eventlog_security`, `eventlog_system`, `eventlog_application`, `eventlog_powershell_operational`, `eventlog_sysmon_operational` |
+| **persistence** | `scheduled_tasks`, `services`, `registry_run_keys`, `startup_folders`, `wmi_event_subscriptions` |
+| **artifacts** | `registry_hives`, `ntuser_dat`, `prefetch`, `amcache`, `shimcache`, `lnk_files`, `jump_lists`, `browser_chrome`, `browser_edge`, `bits_jobs`, `recycle_bin`, `thumbcache`, `shellbags`, `mru`, `usb_history` |
+| **system** | `local_users`, `system_info`, `installed_patches`, `timezone`, `boot_time` |
+
+Volume Shadow Copy modules: `mft_vss`, `usnjrnl_vss`
+
+### Linux Modules (11+)
+
+| Category | Modules |
+|----------|---------|
+| **volatile** | `process_list`, `network_connections` |
+| **logs** | `journalctl`, `syslog`, `auth_logs`, `wtmp`, `btmp` |
+| **persistence** | `cron`, `systemd_units`, `systemd_timers`, `rc_local`, `authorized_keys` |
+| **system** | `ip_config`, `resolv_conf`, `bash_history`, `logged_in_users`, `installed_packages`, `kernel_version` |
+
+> **macOS**: Module metadata is registered in Python (`MODULE_REGISTRY`) but Go implementations do not yet exist. macOS collection is not functional.
+
+### Collection Profiles
+
+| Profile | Description | Speed |
+|---------|-------------|-------|
+| `triage` | Volatile data + key logs + basic system info | Fastest |
+| `ransomware` | Event logs + persistence + artifacts (malware-focused) | Medium |
+| `insider_threat` | User activity + persistence + browser + artifacts | Medium |
+| `full` | All modules on target platform | Slowest / most complete |
+
+---
+
+## Role-Based Access Control
+
+| Role | Capabilities |
+|------|-------------|
+| **admin** | Full access: user management, system settings, delete incidents/templates, audit logs |
+| **operator** | Create/update incidents, start collections, manage templates, create jobs |
+| **viewer** | Read-only: view incidents, evidence, chain-of-custody, processing results |
+
+Roles are enforced server-side via `require_roles()` dependency on every protected endpoint. The admin account created at first launch can create additional users from the **Admin > Users** page.
+
+---
+
+## Quick Start (Docker)
 
 ### Prerequisites
 
 - Docker Engine 20.10+
 - Docker Compose v2.0+
-- 4GB RAM minimum
-- 10GB free disk space
+- 4 GB RAM minimum
+- 10 GB free disk space
 
-### 1. Clone the Repository
+### 1. Clone
 
 ```bash
 git clone <repository-url>
 cd dfir-collection-kit
 ```
 
-### 2. Configure Environment
+### 2. Create `.env` File
 
-Review `docker-compose.yml` and adjust environment variables as needed:
-
-```yaml
-# Backend environment
-DATABASE_URL: postgresql+asyncpg://dfir:dfir@db:5432/dfir
-SECRET_KEY: <generate-strong-secret-here>      # REQUIRED for production
-ACCESS_TOKEN_EXPIRE_MINUTES: 60
-EVIDENCE_STORAGE_PATH: /vault/evidence
-AGENT_SHARED_SECRET: <generate-agent-secret-here> # REQUIRED for agents
-REQUIRE_AUTH: true
-```
-
-**Generate secure secrets**:
 ```bash
-# For SECRET_KEY (backend JWT)
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-
-# For AGENT_SHARED_SECRET (agent authentication)
-python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+cp .env.example .env
 ```
 
-### 3. Start the System
+Edit `.env` — at minimum set these three values:
+
+```bash
+# JWT signing key — required, startup fails without it
+SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+
+# Agent authentication — must match agent AGENT_SHARED_SECRET env var
+AGENT_SHARED_SECRET=$(python3 -c "import secrets; print(secrets.token_urlsafe(32))")
+
+# Admin password (default: admin123!)
+DFIR_DEFAULT_ADMIN_PASSWORD=admin123!
+```
+
+### 3. Start
 
 ```bash
 docker compose up --build
 ```
 
-This will:
-- Build and start PostgreSQL
-- Build and start the FastAPI backend (port 8000)
-- Build and start the React frontend (port 5173)
-- Create evidence storage volume
-- Initialize the database and seed initial data
+Services that start:
+- `db` — PostgreSQL 16 (port 5432)
+- `redis` — Redis 7 (port 6379, Celery broker)
+- `backend` — FastAPI REST API (port 8000)
+- `celery_worker` — Background forensics pipeline
+- `frontend` — React UI served by Nginx (port 5173)
 
-### 4. Access the Application
+Database is initialized and seeded automatically on first launch.
 
-- **Frontend**: http://localhost:5173
-- **Backend API**: http://localhost:8000
-- **API Documentation**: http://localhost:8000/docs
+### 4. Access
 
-### Quick Start for Local/Community Use
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:5173 |
+| Backend API | http://localhost:8000 |
+| Interactive API Docs | http://localhost:8000/docs |
 
-When you run `docker compose up --build`, the backend seeds the default users automatically.
-For manual/local seeding, run:
+### 5. Default Credentials
 
-```bash
-python scripts/bootstrap/seed-default-users.py
-```
+Only one account is seeded on first launch:
 
-### Default Users & Roles (Dev/Demo Only)
+| Field | Value |
+|-------|-------|
+| Username | `admin` |
+| Password | `admin123!` (or value of `DFIR_DEFAULT_ADMIN_PASSWORD`) |
 
-These accounts are intended for local development, demos, and community evaluation.
-Do NOT use these default passwords in production.
+**Change the default password immediately after first login.** Create additional `operator` and `viewer` accounts from **Admin → Users**.
 
-- **Admin**
-  - Username: `admin`
-  - Password: `admin123!` (override with `DFIR_DEFAULT_ADMIN_PASSWORD`)
-- **Operator**
-  - Username: `operator1`
-  - Password: `operator123!` (override with `DFIR_DEFAULT_OPERATOR_PASSWORD`)
-- **Viewer**
-  - Username: `viewer1`
-  - Password: `viewer123!` (override with `DFIR_DEFAULT_VIEWER_PASSWORD`)
+---
 
-## Security Notes
+## Security
 
-### Critical Security Settings
+### Critical Settings
 
-1. **SECRET_KEY**: Required for JWT token signing. Never use the default `change-me` in production.
-2. **AGENT_SHARED_SECRET**: Required for agent authentication. Must match agent configuration.
-3. **REQUIRE_AUTH**: Keep `true` in production. Set to `false` only for local development.
-4. **ALLOWED_ORIGINS**: Restrict to your frontend domain in production.
+| Setting | Risk if Not Set | How to Generate |
+|---------|----------------|-----------------|
+| `SECRET_KEY` | JWT tokens forgeable | `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `AGENT_SHARED_SECRET` | Agents unauthenticated | `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
+| `DFIR_DEFAULT_ADMIN_PASSWORD` | Default `admin123!` exposed | Set in `.env` before first launch |
+
+The backend **refuses to start** if `SECRET_KEY` matches any known weak default (`change-me`, `local-dev-secret`, etc.).
 
 ### Evidence Integrity
 
-- All evidence files are SHA256 hashed on upload
-- Chain-of-custody entries are cryptographically chained
-- Evidence folders are locked after upload
-- Hash manifests are stored alongside evidence
+- SHA256 manifest (`hashes.sha256`) written after every upload
+- LOCKED marker file prevents post-collection modification
+- Chain-of-custody entries are cryptographically hash-chained (SHA256 of all fields + previous hash)
+- Full chain integrity verified on every `GET /chain-of-custody` request — returns 409 if tampered
+- Export ZIPs signed with HMAC-SHA256 (keyed by `SECRET_KEY`)
 
-### Data Storage
+### Hardening Applied
 
-- **Evidence files**: Stored in Docker volume `dfir_evidence` (or `/vault/evidence`)
-- **Database**: Stored in Docker volume `dfir_postgres`
-- **Backups**: Regularly backup these volumes for disaster recovery
+- Docker containers run as non-root (`dfir` UID 1000), `no-new-privileges:true`, `cap_drop: ALL`
+- Security headers on all responses (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy)
+- In-memory sliding window rate limiter on `/auth/login` — 20 attempts per IP per 60 seconds
+- Agent token comparison via `hmac.compare_digest` (timing-attack resistant)
+- Path traversal prevention via `safe_join()` + ID validation regex on all file paths
+- `timesketch_token` masked as `***` in all API responses
 
-## Workflows
+### Data Persistence
 
-### 1. Create an Incident
+```
+dfir_postgres:/var/lib/postgresql/data   # Database
+dfir_evidence:/vault/evidence            # Evidence files
+```
 
-1. Login to the application
-2. Navigate to **Create Incident**
-3. Fill in incident details:
-   - Incident type (Ransomware, Account Compromise, etc.)
-   - Target endpoints (hostnames/IPs)
-   - Operator name
-4. Click **Start Collection**
+Back up these two volumes regularly. Evidence cannot be recovered from the database alone.
 
-### 2. Configure Collection
-
-After creating an incident, you can:
-
-- **Add Devices**: Register agents for target systems
-- **Select Modules**: Choose collection modules (memory dump, logs, etc.)
-- **Assign Agents**: Assign agents to collection jobs
-
-### 3. Run Collection
-
-1. Agents poll for jobs via `/agents/{agent_id}/jobs/next`
-2. Agent receives `JobInstruction` with modules and target
-3. Agent executes collection and uploads ZIP to `/agents/{agent_id}/jobs/{job_id}/upload`
-4. Backend extracts, hashes, and stores evidence
-5. Chain-of-custody entry is automatically created
-
-### 4. Review Evidence
-
-1. Navigate to **Evidence Vault**
-2. Select incident to view collected evidence
-3. Download individual files or export entire collection as ZIP
-4. Review chain-of-custody logs for audit trail
-
-### 5. Close Incident
-
-1. Navigate to **Dashboard** or incident detail
-2. Update incident status to **CLOSED**
-3. Generate final report (feature coming soon)
+---
 
 ## API Reference
 
 ### Authentication
 
-Most endpoints require authentication. Include the JWT token in the header:
+All endpoints except `/auth/login`, `/status/health`, and agent registration require a JWT Bearer token:
 
 ```http
-Authorization: Bearer <your-jwt-token>
+Authorization: Bearer <token>
 ```
 
-### Key Endpoints
+Tokens expire after `ACCESS_TOKEN_EXPIRE_MINUTES` (default: 60 minutes). The login response includes `expires_at` for proactive refresh.
 
-#### Incidents
-- `GET /api/v1/incidents` - List all incidents
-- `POST /api/v1/incidents` - Create incident
-- `GET /api/v1/incidents/{id}` - Get incident details
-- `DELETE /api/v1/incidents/{id}` - Delete incident (admin only)
+Agent endpoints use a separate header:
 
-#### Evidence
-- `GET /api/v1/evidence/folders` - List evidence folders
-- `GET /api/v1/evidence/items?incident_id={id}` - List evidence items
-- `POST /api/v1/evidence/exports` - Create export job
-- `GET /api/v1/evidence/exports/incident/{id}` - Download incident ZIP
+```http
+X-Agent-Token: <AGENT_SHARED_SECRET>
+```
 
-#### Agents
-- `POST /api/v1/agents/register` - Register new agent
-- `GET /api/v1/agents/{agent_id}/jobs/next` - Poll for next job (agent auth required)
-- `POST /api/v1/agents/{agent_id}/jobs/{job_id}/upload` - Upload evidence ZIP
+### Endpoint Summary
 
-#### Chain of Custody
-- `GET /api/v1/chain-of-custody` - List all entries
-- `GET /api/v1/chain-of-custody/incident/{id}` - List entries for incident
+| Group | Base Path | Key Routes |
+|-------|-----------|------------|
+| **Auth** | `/api/v1/auth` | `POST /login`, `POST /logout` |
+| **Incidents** | `/api/v1/incidents` | CRUD + `POST /{id}/collect`, `POST /{id}/collect/poll`, `GET /{id}/report` |
+| **Devices** | `/api/v1/devices` | CRUD |
+| **Agents** | `/api/v1/agents` | `POST /register`, `GET /{id}/jobs/next` (long-poll), `POST /{id}/jobs/{jid}/upload` |
+| **Jobs** | `/api/v1/jobs` | `POST /`, `GET /{id}`, `POST /{id}/cancel` |
+| **Evidence** | `/api/v1/evidence` | `GET /folders`, `GET /items`, `GET /{fid}/items/{iid}/download`, `POST /{inc_id}/export` |
+| **Chain of Custody** | `/api/v1/chain-of-custody` | `GET /` (verified), `GET /export` (CSV) |
+| **Modules** | `/api/v1/modules` | `GET /?os=`, `GET /profiles`, `GET /profiles/{id}?os=` |
+| **Processing** | `/api/v1/processing` | `POST /{job_id}/trigger`, `GET /{job_id}/status`, `/sigma-hits`, `/yara-matches`, `/ioc-matches`, `/attack-chains` |
+| **Templates** | `/api/v1/templates` | CRUD + `POST /{id}/use` |
+| **Users** | `/api/v1/users` | CRUD (admin), `GET /me` |
+| **Collectors** | `/api/v1/collectors` | CRUD |
+| **Settings** | `/api/v1/settings` | `GET /`, `PUT /`, `POST /verify-tools` |
+| **Audit Logs** | `/api/v1/audit-logs` | `GET /` (filterable) |
+| **Status** | `/api/v1/status` | `GET /health` (public), `GET /diagnostics` (admin+) |
 
-#### Forensics / Timeline
-- `GET /api/v1/evidence/timeline/{evidence_id}` - Query super timeline (DuckDB powered, pagination + search)
-- `GET /api/v1/evidence/processing-status/{incident_id}` - Check forensics pipeline status
+Full interactive documentation: **http://localhost:8000/docs**
 
-For complete API documentation, visit `/docs` when the backend is running.
+---
+
+## Workflows
+
+### Incident Response Workflow
+
+```
+1. Create Incident  →  2. Select Modules  →  3. Agent Collects  →  4. Pipeline Runs  →  5. Analyze
+```
+
+**1. Create Incident**
+- Navigate to **Dashboard → Create Incident**
+- Select incident type (Ransomware, Account Compromise, Data Exfiltration, etc.)
+- Add target endpoint hostnames
+- Optionally apply an Incident Template for pre-filled checklists
+
+**2. Select Modules / Profile**
+- On the Collection Setup page, choose a profile (`triage` for speed, `full` for comprehensive)
+- Or manually select individual modules by category (volatile, logs, persistence, artifacts, system)
+- OS is auto-detected from the registered device; override if needed
+
+**3. Agent Collects**
+- Deploy the Go agent on the target endpoint with matching `AGENT_SHARED_SECRET`
+- Agent polls `/agents/{id}/jobs/next` with jitter (OPSEC-aware)
+- Agent receives `JobInstruction`, executes modules in parallel (default: 4 concurrent)
+- Agent uploads ZIP to backend; evidence is extracted, hashed, and locked
+
+**4. Forensics Pipeline**
+- If `auto_process = true` in Admin Settings: pipeline triggers automatically on upload
+- Otherwise: manually trigger from the **Processing** page
+- Monitor pipeline status: EZTools → Sigma Hunt → Timeline Merge → DuckDB indexing
+
+**5. Analyze**
+- **Timeline Explorer**: Full-text search across super timeline with DuckDB
+- **Sigma Hits**: Browse detections by severity (critical/high/medium/low/informational)
+- **IOC Matches**: See which timeline events matched known-bad indicators
+- **YARA Matches**: File-level detections from YARA rule scanning
+- **Attack Chains**: MITRE ATT&CK kill chain visualization from correlated events
+- **Generate Report**: HTML incident report with full chain-of-custody
+
+**6. Close Incident**
+- Update status to `CLOSED` from the incident detail page
+- Closed incidents are immutable — no further collections or updates allowed
+- Export chain-of-custody as CSV for legal/compliance use
+
+---
+
+## Agent Deployment
+
+The Go agent binary is built for the target platform and configured via environment variables:
+
+```bash
+# Build for current platform
+cd agent
+go build -o dfir-agent ./cmd/agent/
+
+# Build for Windows (cross-compile from Linux/macOS)
+GOOS=windows GOARCH=amd64 go build -o dfir-agent.exe ./cmd/agent/
+```
+
+### Agent Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `BACKEND_URL` | Yes | Backend API base URL (e.g., `http://10.0.0.1:8000`) |
+| `AGENT_SHARED_SECRET` | Yes | Must match backend `AGENT_SHARED_SECRET` |
+| `AGENT_ID` | Yes | Unique identifier for this agent (hostname recommended) |
+| `WORK_DIR` | No | Temporary working directory (default: OS temp dir) |
+
+### Example Deployment
+
+```bash
+export BACKEND_URL="http://dfir-server:8000"
+export AGENT_SHARED_SECRET="your-shared-secret"
+export AGENT_ID="WORKSTATION-01"
+./dfir-agent
+```
+
+The agent registers itself on first run, then enters the job polling loop.
+
+---
 
 ## Development
 
-### Backend Development
+### Backend
 
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
-# Edit .env with your configuration
-python -m app.seed_run.py  # Initialize database
+cp .env.example .env   # Edit with local values
+
+# Apply migrations (required before first run)
+alembic upgrade head
+
+# Seed initial data
+python -m app.seed_run
+
+# Run development server
 uvicorn app.main:app --reload --port 8000
 ```
 
-### Frontend Development
+### Frontend
 
 ```bash
 cd frontend
 npm install
-cp .env.example .env
-# Edit .env with your API base URL
-npm run dev
+cp .env.example .env   # Set VITE_API_BASE_URL=http://localhost:8000/api/v1
+npm run dev            # Dev server at :5173
+npm run build          # Production build
+npm run lint           # ESLint
 ```
+
+### Agent (Go)
+
+```bash
+cd agent
+go build ./cmd/agent/...
+go test ./...
+```
+
+### Running Tests
+
+```bash
+cd backend
+# Requires a test PostgreSQL database
+DFIR_TEST_DATABASE_URL=postgresql+asyncpg://dfir:dfir@localhost:5432/dfir_test pytest
+pytest tests/test_rbac_audit.py   # Single test file
+```
+
+Tests skip automatically if `DFIR_TEST_DATABASE_URL` is not set.
+
+### Database Migrations
+
+```bash
+cd backend
+alembic upgrade head                                   # Apply all migrations
+alembic revision --autogenerate -m "description"       # Generate new migration
+```
+
+**Migration chain** (in order):
+`20260101_initial_schema` → `20260117_add_incident_collection_state` → `20260122_add_incident_template_id` → `20260303_add_concurrency_limit` → `20260401_processing_pipeline` → `20260402_processing_settings` → `20260403_phase2_analytics`
+
+### Code Style
+
+```bash
+cd backend
+black --check .     # Formatter (line length 100)
+isort --check .     # Import sorter (profile=black)
+```
+
+---
 
 ## Troubleshooting
 
 ### Backend fails to start
 
-Check database connection:
 ```bash
 docker compose logs backend
 ```
 
-Ensure PostgreSQL is healthy:
-```bash
-docker compose ps db
-```
+Common causes:
+- `SECRET_KEY` not set or is a known weak value
+- Database not yet ready (backend retries 30× with 2s delay automatically)
+- Missing `AGENT_SHARED_SECRET`
 
-### Frontend cannot connect to backend
+### Cannot log in
 
-Verify environment variable:
-```bash
-docker compose exec frontend env | grep VITE_API_BASE_URL
-```
+- Verify the database seeded correctly: `docker compose logs backend | grep seed`
+- Default password: `admin123!` (or value of `DFIR_DEFAULT_ADMIN_PASSWORD`)
+- Check for rate limiting: more than 20 login attempts in 60s from the same IP returns 429
 
-Should be `http://backend:8000/api/v1` when running in Docker.
+### Agent cannot connect
 
-### Evidence upload fails
-
-Check agent shared secret:
 ```bash
 docker compose exec backend env | grep AGENT_SHARED_SECRET
 ```
 
-Ensure agent sends the correct `X-Agent-Token` header.
+Ensure the agent's `AGENT_SHARED_SECRET` matches the backend exactly. The agent must also be able to reach `BACKEND_URL` on port 8000.
 
-## Contributing
+### Pipeline not running
 
-Contributions are welcome! Please follow these guidelines:
+1. Verify Redis is healthy: `docker compose ps redis`
+2. Verify Celery worker started: `docker compose logs celery_worker`
+3. Check tool paths in **Admin → System Settings → Verify Tools**
+4. If `auto_process = false`, trigger manually from the Processing page
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes with tests
-4. Submit a pull request
+### Evidence upload fails (413)
+
+Increase `max_file_size_gb` in Admin Settings or set `MAX_UPLOAD_SIZE_MB` in `.env`.
+
+### Ports already in use
+
+```bash
+# macOS/Linux
+lsof -i :8000 && lsof -i :5173 && lsof -i :5432
+
+# Windows
+netstat -ano | findstr ":8000"
+```
+
+Change ports in `docker-compose.yml` if needed.
+
+---
 
 ## License
 
-This project is licensed under the MIT License.
-
-## Support
-
-For issues, questions, or contributions, please use the GitHub issue tracker.
+MIT License

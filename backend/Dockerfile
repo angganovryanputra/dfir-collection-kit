@@ -54,7 +54,8 @@ COPY alembic ./alembic
 ENV PYTHONPATH=/app
 
 # Run as non-root user for reduced attack surface
-RUN useradd --system --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin dfir \
+RUN groupadd --gid 1000 dfir \
+    && useradd --system --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin dfir \
     && mkdir -p /vault/evidence \
     && chown -R dfir:dfir /app /vault/evidence
 

@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { WarningBanner } from "@/components/WarningBanner";
 import { FormLabel } from "@/components/common/FormLabel";
 import { InputWithIcon } from "@/components/common/InputWithIcon";
-import { SelectableButton } from "@/components/common/SelectableButton";
 import { Shield, Lock, User, Terminal, Cpu, Radio, Radar, Server, AlertCircle, Database } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
@@ -259,7 +258,7 @@ const computeTokenTTLMinutes = (token: string): number | null => {
 
   const preAuthSteps: SequenceStep[] = [
     { getText: (ctx) => `[AUTH] Validating credentials for ${ctx.username ? ctx.username.toUpperCase() : "OPERATOR"}...`, minDelay: 0, jitter: 0 },
-    { getText: (ctx) => `[AUTH] Checking ${ctx.role.toUpperCase()} access level policies...`, minDelay: 360, jitter: 0 },
+    { getText: () => `[AUTH] Verifying access level policies...`, minDelay: 360, jitter: 0 },
     { getText: () => "[SEC ] Verifying security clearance tokens...", minDelay: 360, jitter: 0 },
     { getText: (ctx) => `[SYS ] Establishing secure session via ${ctx.connectionLabel || "network"}...`, minDelay: 400, jitter: 0 },
   ];
@@ -345,7 +344,6 @@ export default function Login() {
 
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [role, setRole] = useState<"operator" | "viewer">("operator");
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -457,42 +455,40 @@ export default function Login() {
     const fetchDiagnostics = async () => {
       try {
         const start = performance.now();
-        const response = await fetch(`${API_BASE_URL}/status/diagnostics`);
+        // Use the unauthenticated /health liveness probe before login.
+        // Full diagnostics (version, collectors, client_ip) are fetched after
+        // authentication via apiGet("/status/diagnostics") below.
+        const response = await fetch(`${API_BASE_URL}/status/health`);
         const latency = performance.now() - start;
         if (!response.ok) {
-          throw new Error(await response.text());
+          throw new Error(`Backend unreachable: ${response.status}`);
         }
-        const data = (await response.json()) as DiagnosticsResponse;
         if (cancelled) return;
         const newDiagnostics: DiagnosticsState = {
-          dbStatus: normalizeDbStatus(data.db_status),
+          dbStatus: "ok",
           handshakeLatencyMs: latency,
-          serverTime: data.server_time ?? null,
-          backendVersion: data.backend_version ?? null,
-          collectorsOnline: data.collectors_online ?? null,
-          collectorsTotal: data.collectors_total ?? null,
+          serverTime: null,
+          backendVersion: null,
+          collectorsOnline: null,
+          collectorsTotal: null,
         };
         setDiagnostics(newDiagnostics);
         bootContextRef.current = {
           ...bootContextRef.current,
           dbStatus: newDiagnostics.dbStatus,
           handshakeLatencyMs: newDiagnostics.handshakeLatencyMs,
-          serverTime: newDiagnostics.serverTime,
-          backendVersion: newDiagnostics.backendVersion,
-          clientIp: data.client_ip ?? bootContextRef.current.clientIp,
+          serverTime: null,
+          backendVersion: null,
         };
         authContextRef.current = {
           ...authContextRef.current,
           dbStatus: newDiagnostics.dbStatus,
           handshakeLatencyMs: newDiagnostics.handshakeLatencyMs,
-          serverTime: newDiagnostics.serverTime,
-          backendVersion: newDiagnostics.backendVersion,
-          clientIp: data.client_ip ?? authContextRef.current.clientIp,
+          serverTime: null,
+          backendVersion: null,
         };
-        if (data.client_ip && !clientIp) {
-          setClientIp(data.client_ip);
-        }
       } catch {
+        // diagnostics fetch is best-effort on login page
       }
     };
 
@@ -503,7 +499,7 @@ export default function Login() {
       clearTimeout(timeout);
       clearInterval(interval);
     };
-  }, [clientIp]);
+  }, []);
 
   useEffect(() => {
     bootContextRef.current = {
@@ -533,6 +529,7 @@ export default function Login() {
           setLogoutTimestamp(parsed.timestamp ?? null);
         }
       } catch {
+        // ignore malformed logout reason
       }
     }
     if (stateReason) {
@@ -602,7 +599,7 @@ export default function Login() {
     return () => {
       cancelled = true;
     };
-  }, [clientIp]);
+  }, []);
 
   // Simulate system stats during boot/auth
   useEffect(() => {
@@ -632,7 +629,7 @@ export default function Login() {
     authContextRef.current = {
       ...authContextRef.current,
       username,
-      role,
+      role: "",
       tokenTTLMinutes: null,
       clientIp,
       connectionLabel: connectionLabelRef.current,
@@ -675,8 +672,17 @@ export default function Login() {
         const response = await apiPost<{ access_token: string; username?: string; role?: CurrentUserResponse["role"] }>("/auth/login", {
           username,
           password,
-          role,
         });
+
+        // Store token immediately so all subsequent authenticated requests have credentials
+        localStorage.setItem(
+          "dfir_auth",
+          JSON.stringify({
+            username: response.username ?? username,
+            role: response.role ?? "",
+            token: response.access_token,
+          })
+        );
 
         if (!clientIp) {
           try {
@@ -685,9 +691,9 @@ export default function Login() {
               setClientIp(diag.client_ip);
               authContextRef.current.clientIp = diag.client_ip;
             }
-            } catch {
-            }
-
+          } catch {
+            // diagnostics fetch during login is optional
+          }
         }
 
         const ttl = computeTokenTTLMinutes(response.access_token);
@@ -695,17 +701,9 @@ export default function Login() {
 
         await completeSequence(successAuthSteps);
 
-        localStorage.setItem(
-          "dfir_auth",
-          JSON.stringify({
-            username: response.username ?? username,
-            role: response.role ?? role,
-            token: response.access_token,
-          })
-        );
-
         try {
           const me = await apiGet<CurrentUserResponse>("/users/me");
+          // Update with canonical user data from the server
           localStorage.setItem(
             "dfir_auth",
             JSON.stringify({
@@ -715,17 +713,25 @@ export default function Login() {
             })
           );
         } catch {
-          // fallback to provided role
+          // fallback to token-provided role already stored above
         }
 
         await wait(350, 1, 0);
-        navigate("/dashboard");
+        // Redirect back to the page the user was trying to access, or dashboard
+        const stateFrom = (location.state as { from?: string } | null)?.from;
+        const storedFrom = localStorage.getItem("dfir_redirect_after_login");
+        localStorage.removeItem("dfir_redirect_after_login");
+        const redirectTo = stateFrom ?? storedFrom ?? "/dashboard";
+        navigate(redirectTo, { replace: true });
       } catch (error) {
         localStorage.removeItem("dfir_auth");
+        const parsed = parseErrorMessage(error);
+        if (parsed.clientIp) {
+          authContextRef.current.clientIp = parsed.clientIp;
+        }
         setAuthTotalSteps(preAuthSteps.length + failureAuthSteps.length);
         await completeSequence(failureAuthSteps);
         if (isMountedRef.current) {
-          const parsed = parseErrorMessage(error);
           setErrorMessage(parsed.message);
           setAuthFailureMessage(parsed.message || "Login failed. Please check your credentials.");
           setAuthFailureIp(parsed.clientIp ?? null);
@@ -761,16 +767,16 @@ export default function Login() {
             </DialogHeader>
             <div className="mt-4 space-y-2 text-sm font-mono">
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Public IP</span>
-                <span>{authFailureIp ?? clientIp ?? "unknown"}</span>
+                <span className="text-muted-foreground">User</span>
+                <span>{username || "—"}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Connection</span>
-                <span>{connectionLabel}</span>
+                <span className="text-muted-foreground">Public IP</span>
+                <span>{authFailureIp ?? "resolving..."}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Timestamp</span>
-                <span>{new Date().toLocaleTimeString()}</span>
+                <span>{new Date().toISOString()}</span>
               </div>
             </div>
             <DialogFooter className="mt-6">
@@ -937,16 +943,16 @@ export default function Login() {
           </DialogHeader>
           <div className="mt-4 space-y-2 text-sm font-mono">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Public IP</span>
-              <span>{authFailureIp ?? clientIp ?? "unknown"}</span>
+              <span className="text-muted-foreground">User</span>
+              <span>{username || "—"}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Connection</span>
-              <span>{connectionLabel}</span>
+              <span className="text-muted-foreground">Public IP</span>
+              <span>{authFailureIp ?? "resolving..."}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Timestamp</span>
-              <span>{new Date().toLocaleTimeString()}</span>
+              <span>{new Date().toISOString()}</span>
             </div>
           </div>
           <DialogFooter className="mt-6">
@@ -1045,47 +1051,6 @@ export default function Login() {
                     placeholder="Enter password"
                     required
                   />
-                </div>
-
-                {/* Role Selection */}
-                <div className="space-y-2">
-                  <FormLabel>
-                    Access Level
-                  </FormLabel>
-                  <div className="grid grid-cols-2 gap-3">
-                    <SelectableButton
-                      type="button"
-                      isActive={role === "operator"}
-                      onClick={() => {
-                        if (isLoading) return;
-                        setRole("operator");
-                        if (errorMessage) {
-                          setErrorMessage(null);
-                        }
-                      }}
-                      className="p-3"
-                      activeClassName="border-primary bg-primary/10 text-primary glow-green"
-                      inactiveClassName="border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
-                    >
-                      Operator
-                    </SelectableButton>
-                    <SelectableButton
-                      type="button"
-                      isActive={role === "viewer"}
-                      onClick={() => {
-                        if (isLoading) return;
-                        setRole("viewer");
-                        if (errorMessage) {
-                          setErrorMessage(null);
-                        }
-                      }}
-                      className="p-3"
-                      activeClassName="border-primary bg-primary/10 text-primary glow-green"
-                      inactiveClassName="border-border bg-secondary text-muted-foreground hover:border-muted-foreground"
-                    >
-                      Viewer
-                    </SelectableButton>
-                  </div>
                 </div>
 
                 {/* Submit */}

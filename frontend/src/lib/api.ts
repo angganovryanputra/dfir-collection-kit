@@ -30,6 +30,11 @@ const handleAuthFailure = (path: string) => {
       timestamp: new Date().toISOString(),
     })
   );
+  // Preserve current page so Login can redirect back after re-auth
+  const currentPath = window.location.pathname + window.location.search;
+  if (currentPath !== "/" && currentPath !== "/login") {
+    localStorage.setItem("dfir_redirect_after_login", currentPath);
+  }
   window.location.href = "/login";
 };
 
@@ -51,6 +56,7 @@ const request = async <T>(path: string, method: HttpMethod, body?: unknown): Pro
 
   if (response.status === 401) {
     handleAuthFailure(path);
+    throw new Error(JSON.stringify({ detail: "Unauthorized" }));
   }
 
   if (!response.ok) {

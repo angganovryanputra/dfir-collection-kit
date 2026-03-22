@@ -29,7 +29,7 @@ from app.crud.chain_of_custody import create_entry
 from app.crud.collection_log import create_log_entries, get_last_sequence
 from app.crud.device import create_device, get_device, update_device
 from app.crud.evidence import create_folder, create_item
-from app.crud.incident import update_incident
+from app.crud.incident import get_incident, update_incident
 from app.crud.job import create_job, get_job, get_next_job_for_agent, update_job_status
 from app.models.user import User
 from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
@@ -262,7 +262,9 @@ async def update_job_status_endpoint(
         else:
             incident_update["status"] = "COLLECTION_IN_PROGRESS"
         if incident_update:
-            await update_incident(db, job.incident_id, IncidentUpdate(**incident_update))
+            current_incident = await get_incident(db, job.incident_id)
+            if current_incident and current_incident.status != "CLOSED":
+                await update_incident(db, job.incident_id, IncidentUpdate(**incident_update))
 
     status_upper = payload.status.upper() if payload.status else ""
     event_type = "job_updated"
@@ -383,7 +385,7 @@ async def upload_job_evidence(
     chain_log_hash = await asyncio.to_thread(hash_file, chain_log_path, runtime_settings.hash_algorithm)
     await asyncio.to_thread(append_chain_log, chain_log_path, f"{timestamp} | HASH | {chain_log_hash}")
 
-    total_size = sum(p.stat().st_size for p in extracted_files)
+    total_size = await asyncio.to_thread(lambda: sum(p.stat().st_size for p in extracted_files))
     folder_payload = EvidenceFolderCreate(
         id=job.id,
         incident_id=job.incident_id,

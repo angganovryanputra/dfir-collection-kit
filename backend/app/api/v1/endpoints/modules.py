@@ -1,6 +1,6 @@
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.deps import get_current_user
 from app.core.modules import (
@@ -67,7 +67,9 @@ async def get_profile(
     Use this to pre-populate the collection module selector with a profile's modules.
     """
     normalized_os = normalize_os_name(os)
-    module_ids = get_profile_modules(profile_id, os)
+    if not normalized_os:
+        raise HTTPException(status_code=400, detail="Invalid OS parameter")
+    module_ids = get_profile_modules(profile_id, normalized_os)
 
     modules_detail = []
     for module_id in module_ids:

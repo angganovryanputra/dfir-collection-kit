@@ -139,7 +139,7 @@ export default function EvidenceVault() {
       apiGet<EvidenceItemResponse[]>(
         `/evidence/items?incident_id=${selectedFolderData?.incidentId}`
       ),
-    enabled: Boolean(selectedFolderData),
+    enabled: Boolean(selectedFolderData?.incidentId),
   });
 
   // Forensics pipeline processing status — uses new ProcessingJob endpoint
@@ -149,7 +149,7 @@ export default function EvidenceVault() {
       apiGet<ProcessingJobOut>(
         `/processing/incident/${selectedFolderData?.incidentId}/status`
       ),
-    enabled: Boolean(selectedFolderData),
+    enabled: Boolean(selectedFolderData?.incidentId),
     retry: false,
     refetchInterval: (query) => {
       const s = query.state.data?.status;
@@ -298,7 +298,7 @@ export default function EvidenceVault() {
                             )}
                           </div>
                           <div className="font-mono text-xs text-muted-foreground mt-1">
-                            {folder.type.replace("_", " ")}
+                            {folder.type.replace(/_/g, " ")}
                           </div>
                           <div className="font-mono text-xs text-muted-foreground">
                             {folder.filesCount} files • {folder.totalSize}
@@ -332,7 +332,7 @@ export default function EvidenceVault() {
                       <div>
                         <span className="text-muted-foreground">TYPE: </span>
                         <span className="text-foreground">
-                          {selectedFolderData?.type.replace("_", " ")}
+                          {selectedFolderData?.type.replace(/_/g, " ")}
                         </span>
                       </div>
                       <div>

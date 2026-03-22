@@ -32,7 +32,7 @@ async def put_system_settings(
     payload: SystemSettingsCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> SystemSettingsOut:
+) -> SystemSettingsApiOut:
     if not Path(payload.evidence_storage_path.strip()).is_absolute():
         raise HTTPException(status_code=400, detail="evidence_storage_path must be an absolute path")
     if payload.max_file_size_gb <= 0:

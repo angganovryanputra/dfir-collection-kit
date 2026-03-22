@@ -256,7 +256,7 @@ async def get_ioc_indicators(
     _: User = Depends(get_current_user),
 ) -> list[IOCIndicatorOut]:
     """List known bad indicators."""
-    indicators, _ = await list_ioc_indicators(db, ioc_type, limit, offset)
+    indicators, _total = await list_ioc_indicators(db, ioc_type, limit, offset)
     return [IOCIndicatorOut.model_validate(i) for i in indicators]
 
 
@@ -281,7 +281,6 @@ async def add_ioc_indicator(
         severity=body.severity,
         created_by=current_user.username,
     )
-    await db.commit()
     return IOCIndicatorOut.model_validate(ind)
 
 
@@ -299,7 +298,6 @@ async def remove_ioc_indicator(
     deleted = await delete_ioc_indicator(db, indicator_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Indicator not found")
-    await db.commit()
 
 
 # ── IOC Matches ───────────────────────────────────────────────────────────────

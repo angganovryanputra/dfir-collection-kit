@@ -125,6 +125,9 @@ async def start_collection_endpoint(
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
 
+    if incident.status == "CLOSED":
+        raise HTTPException(status_code=409, detail="Cannot start collection on a closed incident")
+
     if incident.status != "COLLECTION_IN_PROGRESS":
         updated = await update_incident(
             db,

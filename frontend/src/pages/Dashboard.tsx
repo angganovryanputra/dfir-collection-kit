@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
 import { apiGet } from "@/lib/api";
+import { getStoredRole } from "@/lib/auth";
 
 interface IncidentResponse {
   id: string;
@@ -99,6 +100,7 @@ export default function Dashboard() {
   const diagnosticsQuery = useQuery<DiagnosticsResponse>({
     queryKey: ["diagnostics"],
     queryFn: () => apiGet<DiagnosticsResponse>("/status/diagnostics"),
+    enabled: getStoredRole() !== "viewer",
   });
 
   useEffect(() => {
@@ -284,7 +286,7 @@ export default function Dashboard() {
                               {incident.id}
                             </span>
                             <span className="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary border border-primary/30">
-                              {incident.type.replace("_", " ")}
+                              {incident.type.replace(/_/g, " ")}
                             </span>
                           </div>
                           <div className="font-mono text-xs text-muted-foreground space-y-1">

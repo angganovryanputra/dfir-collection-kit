@@ -126,7 +126,6 @@ export default function IncidentTemplates() {
   const templatesQuery = useQuery({
     queryKey: ["templates"],
     queryFn: () => apiGet<TemplateResponse[]>("/templates"),
-    onError: () => setErrorMessage("Unable to load templates."),
   });
 
   useEffect(() => {
@@ -135,6 +134,12 @@ export default function IncidentTemplates() {
       setErrorMessage(null);
     }
   }, [templatesQuery.data]);
+
+  useEffect(() => {
+    if (templatesQuery.error) {
+      setErrorMessage("Unable to load templates.");
+    }
+  }, [templatesQuery.error]);
 
   const pagination = usePagination(templates);
   const paginatedTemplates = pagination.paginatedItems;
@@ -242,7 +247,6 @@ export default function IncidentTemplates() {
         setTemplates((current) => current.map((t) => (t.id === mapped.id ? mapped : t)));
       } else {
         const response = await apiPost<TemplateResponse>("/templates", {
-          id: `TPL-${String(templates.length + 1).padStart(3, "0")}`,
           name: formData.name.toUpperCase(),
           incident_type: formData.incidentType!,
           default_endpoints: formData.defaultEndpoints,
@@ -263,7 +267,6 @@ export default function IncidentTemplates() {
     if (isViewer) return;
     try {
       const response = await apiPost<TemplateResponse>("/templates", {
-        id: `TPL-${String(templates.length + 1).padStart(3, "0")}`,
         name: `${template.name} (COPY)`.toUpperCase(),
         incident_type: template.incidentType,
         default_endpoints: template.defaultEndpoints,
@@ -286,18 +289,16 @@ export default function IncidentTemplates() {
     }
   };
 
-  const useTemplate = (template: IncidentTemplate) => {
+  const applyTemplate = (template: IncidentTemplate) => {
     if (isViewer) return;
     apiPost<TemplateResponse>(`/templates/${template.id}/use`, {})
       .then((response) => {
         const mapped = mapTemplate(response);
         setTemplates((current) => current.map((t) => (t.id === mapped.id ? mapped : t)));
+        navigate("/incidents/create", { state: { template } });
       })
       .catch(() => {
         setErrorMessage("Unable to update template usage.");
-      })
-      .finally(() => {
-        navigate("/incidents/create", { state: { template } });
       });
   };
 
@@ -376,7 +377,7 @@ export default function IncidentTemplates() {
                       </TableCell>
                       <TableCell>
                         <span className="px-2 py-1 bg-warning/10 border border-warning/30 text-warning font-mono text-xs">
-                          {template.incidentType.replace("_", " ")}
+                          {template.incidentType.replace(/_/g, " ")}
                         </span>
                       </TableCell>
                       <TableCell className="font-mono text-sm">
@@ -393,7 +394,7 @@ export default function IncidentTemplates() {
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => useTemplate(template)}
+                            onClick={() => applyTemplate(template)}
                             disabled={isViewer}
                           >
                             USE

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { KeyValueRow } from "@/components/common/KeyValueRow";
 import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug } from "lucide-react";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 
 interface ProcessingJobOut {
     id: string;
@@ -224,10 +224,19 @@ export default function ProcessingStatus() {
                                 variant="ghost"
                                 className="col-span-2"
                                 disabled={!job?.job_id}
-                                onClick={() => {
+                                onClick={async () => {
                                     if (!job?.job_id) return;
-                                    const base = (import.meta.env.VITE_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
-                                    window.open(`${base}/processing/${encodeURIComponent(job.job_id)}/timeline/download`, "_blank");
+                                    try {
+                                        const blob = await apiGet<Blob>(`/processing/${encodeURIComponent(job.job_id)}/timeline/download`);
+                                        const url = window.URL.createObjectURL(blob);
+                                        const a = document.createElement("a");
+                                        a.href = url;
+                                        a.download = `timeline_${job.job_id}.jsonl`;
+                                        document.body.appendChild(a);
+                                        a.click();
+                                        a.remove();
+                                        window.URL.revokeObjectURL(url);
+                                    } catch { /* ignore */ }
                                 }}
                             >
                                 <Download className="w-4 h-4 mr-2" />
@@ -237,10 +246,19 @@ export default function ProcessingStatus() {
                                 variant="ghost"
                                 className="col-span-2"
                                 disabled={!incidentId}
-                                onClick={() => {
+                                onClick={async () => {
                                     if (!incidentId) return;
-                                    const base = (import.meta.env.VITE_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
-                                    window.open(`${base}/incidents/${encodeURIComponent(incidentId)}/report`, "_blank");
+                                    try {
+                                        const blob = await apiPost<Blob>(`/incidents/${encodeURIComponent(incidentId)}/report`, {});
+                                        const url = window.URL.createObjectURL(blob);
+                                        const a = document.createElement("a");
+                                        a.href = url;
+                                        a.download = `report_${incidentId}.html`;
+                                        document.body.appendChild(a);
+                                        a.click();
+                                        a.remove();
+                                        window.URL.revokeObjectURL(url);
+                                    } catch { /* ignore */ }
                                 }}
                             >
                                 <FileText className="w-4 h-4 mr-2" />

@@ -16,7 +16,10 @@ async def get_template(db: AsyncSession, template_id: str) -> IncidentTemplate |
 
 
 async def create_template(db: AsyncSession, payload: IncidentTemplateCreate) -> IncidentTemplate:
-    template = IncidentTemplate(**payload.model_dump())
+    from uuid import uuid4
+    data = payload.model_dump()
+    data["id"] = data.get("id") or uuid4().hex
+    template = IncidentTemplate(**data)
     db.add(template)
     await db.flush()
     return template

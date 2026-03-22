@@ -3,22 +3,21 @@ from typing import Optional
 import hashlib
 import hmac
 
-from jose import JWTError, jwt
-from passlib.context import CryptContext
+import bcrypt
+import jwt
+from jwt import InvalidTokenError  # noqa: F401 — re-exported for deps.py
 
 from app.core.config import settings
 
 ALGORITHM = "HS256"
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    return bcrypt.checkpw(plain_password.encode("utf-8"), hashed_password.encode("utf-8"))
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def create_access_token(
@@ -27,10 +26,11 @@ def create_access_token(
     claims: dict | None = None,
 ) -> tuple[str, datetime]:
     expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
-    to_encode = {"sub": subject, "exp": expire}
+    to_encode: dict = {"sub": subject, "exp": expire}
     if claims:
         to_encode.update(claims)
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM), expire
+    token = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=ALGORITHM)
+    return token, expire
 
 
 def decode_access_token(token: str) -> dict:

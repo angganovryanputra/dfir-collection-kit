@@ -72,7 +72,8 @@ export default function ChainOfCustody() {
       const params = selectedIncident ? `?incident_id=${encodeURIComponent(selectedIncident)}` : "";
       const url = `${base}/chain-of-custody/export${params}`;
       const raw = localStorage.getItem("dfir_auth");
-      const token = raw ? (JSON.parse(raw) as { token?: string }).token : null;
+      let token: string | null = null;
+      try { token = raw ? (JSON.parse(raw) as { token?: string }).token ?? null : null; } catch { token = null; }
       const response = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });
@@ -217,9 +218,9 @@ export default function ChainOfCustody() {
                 No chain-of-custody entries available.
               </div>
             ) : (
-              paginatedItems.map((entry, index) => (
+              paginatedItems.map((entry) => (
                 <div
-                  key={index}
+                  key={entry.id}
                   className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors"
                 >
                   <div className="col-span-3 font-mono text-sm text-muted-foreground">

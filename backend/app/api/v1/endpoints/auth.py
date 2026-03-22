@@ -67,7 +67,7 @@ async def login(
     if user and runtime_settings.max_failed_logins > 0:
         # Use a rolling window based on log retention for failed login attempts.
         window_days = max(runtime_settings.log_retention_days, 1)
-        failure_count = await count_recent_login_failures(db, user.username, window_days)
+        failure_count = await count_recent_login_failures(db, normalized_username, window_days)
         if failure_count >= runtime_settings.max_failed_logins:
             await safe_record_event(
                 db,

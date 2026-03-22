@@ -201,7 +201,7 @@ export default function CollectionExecution() {
 
   useEffect(() => {
     const pollStatus = async () => {
-      if (!incidentId) return;
+      if (!incidentId || !startedRef.current) return;
       try {
         const status = await apiPost<CollectionStatusResponse>(
           `/incidents/${incidentId}/collect/poll`,
@@ -278,7 +278,7 @@ export default function CollectionExecution() {
 
   useEffect(() => {
     const fetchExistingEvidence = async () => {
-      if (!incidentId || !incident || !isComplete) return;
+      if (!incidentId || !isComplete) return;
       try {
         const folders = await apiGet<EvidenceFolderResponse[]>("/evidence/folders");
         const folder = folders.find((entry) => entry.incident_id === incidentId) ?? null;
@@ -294,11 +294,12 @@ export default function CollectionExecution() {
           status: folder.status,
         });
       } catch {
+        // summary fetch is best-effort; silently skip on error
       }
     };
 
     fetchExistingEvidence();
-  }, [incident, isComplete]);
+  }, [incidentId, isComplete]);
 
   const handleAbort = async () => {
     if (!incidentId || isViewer) return;

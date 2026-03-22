@@ -1,6 +1,7 @@
+from datetime import datetime
 from typing import List
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class IncidentTemplateBase(BaseModel):
@@ -9,12 +10,13 @@ class IncidentTemplateBase(BaseModel):
     default_endpoints: List[str]
     description: str
     preflight_checklist: List[str]
-    created_by: str
+    # Server-set fields — optional in create requests; always overridden by the endpoint
+    created_by: str = ""
     usage_count: int = 0
 
 
 class IncidentTemplateCreate(IncidentTemplateBase):
-    id: str
+    id: str | None = None
 
 
 class IncidentTemplateUpdate(BaseModel):
@@ -23,12 +25,10 @@ class IncidentTemplateUpdate(BaseModel):
     default_endpoints: List[str] | None = None
     description: str | None = None
     preflight_checklist: List[str] | None = None
-    created_by: str | None = None
-    usage_count: int | None = None
 
 
 class IncidentTemplateOut(IncidentTemplateBase):
     id: str
+    created_at: datetime | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

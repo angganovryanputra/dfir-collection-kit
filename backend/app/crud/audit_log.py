@@ -7,7 +7,9 @@ from app.models.audit_log import AuditLog
 
 
 async def get_latest_entry(db: AsyncSession) -> AuditLog | None:
-    result = await db.execute(select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(1))
+    result = await db.execute(
+        select(AuditLog).order_by(AuditLog.timestamp.desc()).limit(1).with_for_update()
+    )
     return result.scalar_one_or_none()
 
 
