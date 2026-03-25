@@ -23,6 +23,7 @@ import SigmaHits from "./pages/SigmaHits";
 import AttackChains from "./pages/AttackChains";
 import IOCMatches from "./pages/IOCMatches";
 import YaraMatches from "./pages/YaraMatches";
+import SuperTimeline from "./pages/SuperTimeline";
 
 const queryClient = new QueryClient();
 
@@ -101,6 +102,7 @@ const App = () => {
                 <Route path="/incidents/:id/attack-chains" element={<ProtectedRoute><AttackChains /></ProtectedRoute>} />
                 <Route path="/incidents/:id/ioc-matches" element={<ProtectedRoute><IOCMatches /></ProtectedRoute>} />
                 <Route path="/incidents/:id/yara-matches" element={<ProtectedRoute><YaraMatches /></ProtectedRoute>} />
+                <Route path="/incidents/:id/super-timeline" element={<ProtectedRoute><SuperTimeline /></ProtectedRoute>} />
 
                 <Route path="*" element={<NotFound />} />
               </Routes>

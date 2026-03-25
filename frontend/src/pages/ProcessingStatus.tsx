@@ -5,7 +5,7 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { KeyValueRow } from "@/components/common/KeyValueRow";
-import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug } from "lucide-react";
+import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug, Layers } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 
 interface ProcessingJobOut {
@@ -219,6 +219,14 @@ export default function ProcessingStatus() {
                             >
                                 <Bug className="w-4 h-4 mr-2" />
                                 YARA MATCHES
+                            </Button>
+                            <Button
+                                variant="outline"
+                                className="col-span-2"
+                                onClick={() => navigate(`/incidents/${incidentId}/super-timeline`)}
+                            >
+                                <Layers className="w-4 h-4 mr-2" />
+                                SUPER TIMELINE (MULTI-HOST)
                             </Button>
                             <Button
                                 variant="ghost"

@@ -22,6 +22,11 @@ from app.crud.processing import (
     get_processing_job_by_evidence_job_id,
     list_sigma_hits,
 )
+from app.crud.super_timeline import (
+    create_super_timeline,
+    get_super_timeline_by_incident,
+    list_lateral_movements,
+)
 from app.models.user import User
 from app.schemas.analytics import (
     AttackChainOut,
@@ -37,6 +42,11 @@ from app.schemas.processing import (
     ProcessingTriggerResponse,
     SigmaHitListOut,
     SigmaHitOut,
+)
+from app.schemas.super_timeline import (
+    LateralMovementOut,
+    SuperTimelineOut,
+    SuperTimelineTriggerResponse,
 )
 from app.services.system_settings_service import get_runtime_settings
 
@@ -337,3 +347,87 @@ async def get_yara_matches(
         total=total,
         items=[YaraMatchOut.model_validate(m) for m in matches],
     )
+
+
+# ── Super Timeline ─────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/incident/{incident_id}/super-timeline/trigger",
+    response_model=SuperTimelineTriggerResponse,
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
+async def trigger_super_timeline(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> SuperTimelineTriggerResponse:
+    """Trigger a cross-host super timeline build for an incident.
+
+    Merges all per-job timeline.jsonl files into a single DuckDB store and
+    runs lateral movement heuristics.  Safe to re-trigger — existing record
+    is reused if already BUILDING; otherwise a new build is queued.
+    """
+    # Guard: at least one DONE processing job must exist
+    proc_job = await get_latest_processing_job_by_incident_id(db, incident_id)
+    if not proc_job or proc_job.status != "DONE":
+        raise HTTPException(
+            status_code=409,
+            detail="No completed processing job found for this incident — run the pipeline first",
+        )
+
+    existing = await get_super_timeline_by_incident(db, incident_id)
+    if existing and existing.status == "BUILDING":
+        return SuperTimelineTriggerResponse(
+            incident_id=incident_id,
+            status="BUILDING",
+            message="Super timeline build already in progress",
+        )
+
+    # Create (or recreate) the record
+    if not existing:
+        await create_super_timeline(db, incident_id)
+        await db.commit()
+
+    runtime = await get_runtime_settings(db)
+    base_path = Path(runtime.evidence_storage_path)
+
+    from app.services.super_timeline_service import dispatch_super_timeline
+
+    dispatch_super_timeline(incident_id, base_path)
+
+    return SuperTimelineTriggerResponse(
+        incident_id=incident_id,
+        status="PENDING",
+        message="Super timeline build queued — poll /processing/incident/{id}/super-timeline/status",
+    )
+
+
+@router.get("/incident/{incident_id}/super-timeline/status", response_model=SuperTimelineOut)
+async def get_super_timeline_status(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> SuperTimelineOut:
+    """Return the current build status of the super timeline for an incident."""
+    record = await get_super_timeline_by_incident(db, incident_id)
+    if not record:
+        raise HTTPException(
+            status_code=404,
+            detail="No super timeline found for this incident — trigger a build first",
+        )
+    return SuperTimelineOut.model_validate(record)
+
+
+@router.get(
+    "/incident/{incident_id}/super-timeline/lateral-movement",
+    response_model=list[LateralMovementOut],
+)
+async def get_lateral_movements(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[LateralMovementOut]:
+    """Return all lateral movement detections for an incident, ordered by confidence desc."""
+    detections = await list_lateral_movements(db, incident_id)
+    return [LateralMovementOut.model_validate(d) for d in detections]

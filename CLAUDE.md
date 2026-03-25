@@ -37,7 +37,7 @@ alembic upgrade head                                    # Apply all migrations
 alembic revision --autogenerate -m "description"        # Create new migration
 ```
 
-Migration chain: `20260101_initial_schema` → `20260117_add_incident_collection_state` → `20260122_add_incident_template_id` → `20260303_add_concurrency_limit` → `20260401_processing_pipeline` → `20260402_processing_settings` → `20260403_phase2_analytics`. When adding a new migration, set `down_revision` to the last entry in this chain.
+Migration chain: `20260101_initial_schema` → `20260117_add_incident_collection_state` → `20260122_add_incident_template_id` → `20260303_add_concurrency_limit` → `20260401_processing_pipeline` → `20260402_processing_settings` → `20260403_phase2_analytics` → `20260501_super_timeline`. When adding a new migration, set `down_revision` to the last entry in this chain.
 
 `app/seed.py` contains the seeding logic. `app/seed_run.py` calls `create_all` (no-op if tables exist) then runs seed. Do not use `seed_run.py` to create tables in production — use Alembic.
 

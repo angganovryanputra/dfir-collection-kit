@@ -653,3 +653,122 @@ def _query_jsonl_fallback(jsonl_path: Path, q: str, page: int, limit: int) -> Ti
     return TimelineResponse(data=results, total=total_matched, page=page, limit=limit)
 
 
+
+# ── Super Timeline ─────────────────────────────────────────────────────────────
+
+
+class SuperTimelineResponse(BaseModel):
+    data: list[dict]
+    total: int
+    page: int
+    limit: int
+    hosts: list[str]
+
+
+@router.get("/super-timeline/{incident_id}", response_model=SuperTimelineResponse)
+async def get_super_timeline_data(
+    incident_id: str,
+    q: str = Query(default=""),
+    page: int = Query(default=1, ge=1),
+    limit: int = Query(default=100, ge=10, le=1000),
+    hosts: str = Query(default="", description="Comma-separated host filter"),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> SuperTimelineResponse:
+    """Query the merged cross-host super timeline for an incident."""
+    from app.crud.super_timeline import get_super_timeline_by_incident
+
+    suptl = await get_super_timeline_by_incident(db, incident_id)
+    if not suptl or suptl.status != "DONE":
+        raise HTTPException(
+            status_code=404,
+            detail="Super timeline not built — trigger /processing/incident/{id}/super-timeline/trigger first",
+        )
+    if not suptl.duckdb_path:
+        raise HTTPException(status_code=404, detail="Super timeline DuckDB file path not set")
+
+    duckdb_path = Path(suptl.duckdb_path)
+    if not duckdb_path.exists():
+        raise HTTPException(status_code=404, detail="Super timeline DuckDB file not found on disk")
+
+    host_filter = [h.strip() for h in hosts.split(",") if h.strip()] if hosts else []
+
+    return await asyncio.to_thread(
+        functools.partial(_query_super_timeline_duckdb, duckdb_path, q, page, limit, host_filter)
+    )
+
+
+def _query_super_timeline_duckdb(
+    duckdb_path: Path,
+    q: str,
+    page: int,
+    limit: int,
+    host_filter: list[str],
+) -> SuperTimelineResponse:
+    """Query the persistent super timeline DuckDB store."""
+    import duckdb
+    import json as _json
+
+    offset = (page - 1) * limit
+    con = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        hosts_rows = con.execute("SELECT DISTINCT host FROM timeline_events ORDER BY host").fetchall()
+        all_hosts = [row[0] for row in hosts_rows if row[0]]
+
+        where_parts: list[str] = []
+        params: list = []
+
+        if q:
+            q_like = f"%{q.lower()}%"
+            where_parts.append(
+                "(LOWER(message) LIKE ? OR LOWER(source) LIKE ? OR LOWER(timestamp_desc) LIKE ?)"
+            )
+            params.extend([q_like, q_like, q_like])
+
+        if host_filter:
+            placeholders = ", ".join("?" for _ in host_filter)
+            where_parts.append(f"host IN ({placeholders})")
+            params.extend(host_filter)
+
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+        total = con.execute(
+            f"SELECT COUNT(*) FROM timeline_events {where_sql}", params
+        ).fetchone()[0]
+
+        rows = con.execute(
+            f"""
+            SELECT row_id, host, job_id, event_dt, message, timestamp_desc, source, source_short, extra
+            FROM timeline_events {where_sql}
+            ORDER BY event_dt ASC NULLS LAST, row_id ASC
+            LIMIT ? OFFSET ?
+            """,
+            params + [limit, offset],
+        ).fetchall()
+
+        results = []
+        for row in rows:
+            _, host, job_id, event_dt, message, ts_desc, source, source_short, extra_json = row
+            entry: dict = {
+                "host": host,
+                "job_id": job_id,
+                "datetime": event_dt.isoformat() if event_dt else None,
+                "message": message,
+                "timestamp_desc": ts_desc,
+                "source": source,
+                "source_short": source_short,
+            }
+            if extra_json:
+                try:
+                    entry.update(
+                        _json.loads(extra_json) if isinstance(extra_json, str) else extra_json
+                    )
+                except Exception:
+                    pass
+            results.append(entry)
+
+        return SuperTimelineResponse(
+            data=results, total=total, page=page, limit=limit, hosts=all_hosts
+        )
+    finally:
+        con.close()

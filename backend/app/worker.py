@@ -54,3 +54,23 @@ def run_pipeline_task(self, incident_id: str, job_id: str, base_path: str) -> di
     except Exception as exc:
         logger.error("Celery: pipeline failed for job %s: %s", job_id, exc, exc_info=True)
         raise self.retry(exc=exc, countdown=30)
+
+
+@celery_app.task(bind=True, name="dfir.run_super_timeline", max_retries=1)
+def run_super_timeline_task(self, incident_id: str, base_path: str) -> dict:
+    """
+    Celery task wrapper for the Super Timeline merge + lateral movement detection.
+    Runs the async service inside a fresh event loop.
+    """
+    from app.services.super_timeline_service import build_super_timeline_background
+
+    logger.info("Celery: starting super timeline for incident %s", incident_id)
+    try:
+        asyncio.run(build_super_timeline_background(incident_id, Path(base_path)))
+        logger.info("Celery: super timeline completed for incident %s", incident_id)
+        return {"status": "done", "incident_id": incident_id}
+    except Exception as exc:
+        logger.error(
+            "Celery: super timeline failed for incident %s: %s", incident_id, exc, exc_info=True
+        )
+        raise self.retry(exc=exc, countdown=30)

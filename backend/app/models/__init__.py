@@ -11,6 +11,7 @@ from app.models.job import Job
 from app.models.audit_log import AuditLog
 from app.models.processing import ProcessingJob, SigmaHit
 from app.models.analytics import AttackChain, IOCIndicator, IOCMatch, YaraMatch
+from app.models.super_timeline import SuperTimeline, LateralMovement
 
 __all__ = [
     "Incident",
@@ -31,4 +32,6 @@ __all__ = [
     "IOCIndicator",
     "IOCMatch",
     "YaraMatch",
+    "SuperTimeline",
+    "LateralMovement",
 ]
