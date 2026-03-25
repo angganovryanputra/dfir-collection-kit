@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
-import { SearchInput } from "@/components/common/SearchInput";
 import {
     ChevronLeft,
     ChevronRight,
@@ -18,6 +17,10 @@ import {
     Clock,
     Search,
     Users,
+    X,
+    CalendarRange,
+    Tag,
+    Zap,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 
@@ -58,6 +61,14 @@ type SuperTimelineResponse = {
     page: number;
     limit: number;
     hosts: string[];
+    source_shorts: string[];
+};
+
+type QuickFilter = {
+    id: string;
+    label: string;
+    q?: string;
+    sources?: string[];
 };
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -73,11 +84,34 @@ const HOST_COLORS = [
     { bg: "bg-red-500/20", text: "text-red-400", border: "border-red-500/30" },
 ];
 
+const SOURCE_SHORT_COLORS: Record<string, string> = {
+    EVTX:     "bg-blue-500/15 text-blue-400 border-blue-500/30",
+    SIGMA:    "bg-red-500/15 text-red-400 border-red-500/30",
+    MFT:      "bg-green-500/15 text-green-400 border-green-500/30",
+    PREFETCH: "bg-purple-500/15 text-purple-400 border-purple-500/30",
+    REGISTRY: "bg-yellow-500/15 text-yellow-400 border-yellow-500/30",
+    SYSMON:   "bg-cyan-500/15 text-cyan-400 border-cyan-500/30",
+    AMCACHE:  "bg-orange-500/15 text-orange-400 border-orange-500/30",
+    LNK:      "bg-pink-500/15 text-pink-400 border-pink-500/30",
+    HAYABUSA: "bg-red-600/15 text-red-300 border-red-600/30",
+};
+
 const DETECTION_TYPE_COLORS: Record<LateralMovementDetection["detection_type"], string> = {
-    account_pivot: "text-red-400 border-red-400/40 bg-red-400/10",
-    process_spread: "text-orange-400 border-orange-400/40 bg-orange-400/10",
+    account_pivot:    "text-red-400 border-red-400/40 bg-red-400/10",
+    process_spread:   "text-orange-400 border-orange-400/40 bg-orange-400/10",
     credential_reuse: "text-yellow-400 border-yellow-400/40 bg-yellow-400/10",
 };
+
+const QUICK_FILTERS: QuickFilter[] = [
+    { id: "sigma",    label: "SIGMA ALERTS",     sources: ["SIGMA", "HAYABUSA"] },
+    { id: "logon",    label: "LOGON EVENTS",      q: "logon" },
+    { id: "process",  label: "PROCESS EXECUTION", sources: ["PREFETCH", "AMCACHE"] },
+    { id: "fileops",  label: "FILE OPERATIONS",   sources: ["MFT", "LNK"] },
+    { id: "network",  label: "NETWORK ACTIVITY",  sources: ["SYSMON"], q: "network" },
+    { id: "registry", label: "REGISTRY",          sources: ["REGISTRY"] },
+    { id: "lateral",  label: "LATERAL MOVEMENT",  q: "lateral" },
+    { id: "ransom",   label: "RANSOMWARE",         q: "ransom" },
+];
 
 const LIMIT = 100;
 
@@ -86,6 +120,13 @@ const LIMIT = 100;
 function getHostColor(host: string, allHosts: string[]) {
     const idx = allHosts.indexOf(host);
     return HOST_COLORS[idx % HOST_COLORS.length] ?? HOST_COLORS[0];
+}
+
+function getSourceColor(sourceShort: string): string {
+    return (
+        SOURCE_SHORT_COLORS[sourceShort?.toUpperCase()] ??
+        "bg-secondary/60 text-muted-foreground border-border/40"
+    );
 }
 
 function formatTs(ts: string | null): string {
@@ -97,6 +138,24 @@ function truncate(val: unknown, max = 120): string {
     if (val === null || val === undefined) return "—";
     const str = String(val);
     return str.length > max ? str.slice(0, max) + "…" : str;
+}
+
+/** Highlight query term in a string with <mark> spans (returns JSX-safe string chunks). */
+function highlightTerms(text: string, term: string): React.ReactNode {
+    if (!term || term.length < 2) return text;
+    const lower = text.toLowerCase();
+    const lowerTerm = term.toLowerCase();
+    const idx = lower.indexOf(lowerTerm);
+    if (idx === -1) return text;
+    return (
+        <>
+            {text.slice(0, idx)}
+            <mark className="bg-primary/30 text-primary rounded-sm px-0.5">
+                {text.slice(idx, idx + term.length)}
+            </mark>
+            {text.slice(idx + term.length)}
+        </>
+    );
 }
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
@@ -123,6 +182,30 @@ function HostChip({
             }`}
         >
             {host}
+        </button>
+    );
+}
+
+function SourceChip({
+    source,
+    active,
+    onClick,
+}: {
+    source: string;
+    active: boolean;
+    onClick: () => void;
+}) {
+    const activeColor = getSourceColor(source);
+    return (
+        <button
+            onClick={onClick}
+            className={`px-2.5 py-1 rounded-sm border font-mono text-xs transition-all ${
+                active
+                    ? activeColor
+                    : "border-border/40 text-muted-foreground hover:border-border"
+            }`}
+        >
+            {source}
         </button>
     );
 }
@@ -160,12 +243,26 @@ export default function SuperTimeline() {
     const [buildError, setBuildError] = useState<string | null>(null);
     const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-    // Timeline grid state
+    // Search & filter state
     const [searchInput, setSearchInput] = useState("");
     const [debouncedSearch, setDebouncedSearch] = useState("");
     const [page, setPage] = useState(1);
+
+    // Host filter
     const [activeHosts, setActiveHosts] = useState<Set<string>>(new Set());
     const [allHostsActive, setAllHostsActive] = useState(true);
+
+    // Source filter
+    const [activeSources, setActiveSources] = useState<Set<string>>(new Set());
+    const [allSourcesActive, setAllSourcesActive] = useState(true);
+
+    // Date range filter
+    const [dateFrom, setDateFrom] = useState("");
+    const [dateTo, setDateTo] = useState("");
+    const [dateFilterActive, setDateFilterActive] = useState(false);
+
+    // Active quick filter
+    const [activeQuickFilter, setActiveQuickFilter] = useState<string | null>(null);
 
     // Lateral movement collapsible
     const [lmExpanded, setLmExpanded] = useState(true);
@@ -181,7 +278,6 @@ export default function SuperTimeline() {
             setStatusError(null);
         } catch (err) {
             const msg = err instanceof Error ? err.message : "Unknown error";
-            // 404 is expected when no super timeline has been built yet
             if (!msg.includes("404") && !msg.includes("not found")) {
                 setStatusError(msg);
             }
@@ -191,16 +287,12 @@ export default function SuperTimeline() {
         }
     }, [incidentId]);
 
-    // Initial fetch
-    useEffect(() => {
-        fetchStatus();
-    }, [fetchStatus]);
+    useEffect(() => { fetchStatus(); }, [fetchStatus]);
 
-    // Polling while PENDING or BUILDING
+    // Polling while PENDING / BUILDING
     useEffect(() => {
         const shouldPoll =
             stStatus?.status === "BUILDING" || stStatus?.status === "PENDING";
-
         if (shouldPoll) {
             pollingRef.current = setInterval(fetchStatus, 3000);
         } else {
@@ -209,7 +301,6 @@ export default function SuperTimeline() {
                 pollingRef.current = null;
             }
         }
-
         return () => {
             if (pollingRef.current !== null) {
                 clearInterval(pollingRef.current);
@@ -236,12 +327,11 @@ export default function SuperTimeline() {
         }
     }
 
-    // ── Timeline data query ───────────────────────────────────────────────────
+    // ── Query param builders ──────────────────────────────────────────────────
     const isDone = stStatus?.status === "DONE";
 
-    const hostsParam = allHostsActive
-        ? ""
-        : Array.from(activeHosts).join(",");
+    const hostsParam = allHostsActive ? "" : Array.from(activeHosts).join(",");
+    const sourceParam = allSourcesActive ? "" : Array.from(activeSources).join(",");
 
     const { data: timelineData, isLoading: tlLoading, error: tlError } =
         useQuery<SuperTimelineResponse>({
@@ -251,6 +341,9 @@ export default function SuperTimeline() {
                 debouncedSearch,
                 page,
                 hostsParam,
+                sourceParam,
+                dateFilterActive ? dateFrom : "",
+                dateFilterActive ? dateTo : "",
             ],
             queryFn: () => {
                 const params = new URLSearchParams({
@@ -258,7 +351,10 @@ export default function SuperTimeline() {
                     limit: String(LIMIT),
                 });
                 if (debouncedSearch) params.set("q", debouncedSearch);
-                if (hostsParam) params.set("hosts", hostsParam);
+                if (hostsParam)     params.set("hosts", hostsParam);
+                if (sourceParam)    params.set("source", sourceParam);
+                if (dateFilterActive && dateFrom) params.set("date_from", new Date(dateFrom).toISOString());
+                if (dateFilterActive && dateTo)   params.set("date_to",   new Date(dateTo).toISOString());
                 return apiGet<SuperTimelineResponse>(
                     `/evidence/super-timeline/${incidentId}?${params}`
                 );
@@ -267,36 +363,28 @@ export default function SuperTimeline() {
         });
 
     // ── Lateral movement query ────────────────────────────────────────────────
-    const {
-        data: lmData,
-        isLoading: lmLoading,
-        error: lmError,
-    } = useQuery<LateralMovementDetection[]>({
-        queryKey: ["lateral-movement", incidentId, stStatus?.id],
-        queryFn: () =>
-            apiGet<LateralMovementDetection[]>(
-                `/processing/incident/${incidentId}/super-timeline/lateral-movement`
-            ),
-        enabled: isDone,
-    });
+    const { data: lmData, isLoading: lmLoading, error: lmError } =
+        useQuery<LateralMovementDetection[]>({
+            queryKey: ["lateral-movement", incidentId, stStatus?.id],
+            queryFn: () =>
+                apiGet<LateralMovementDetection[]>(
+                    `/processing/incident/${incidentId}/super-timeline/lateral-movement`
+                ),
+            enabled: isDone,
+        });
 
-    // ── Error side-effects (TanStack Query v5 — no onError callback) ──────────
     useEffect(() => {
-        if (tlError) {
-            console.error("[SuperTimeline] timeline query error:", tlError);
-        }
+        if (tlError) console.error("[SuperTimeline] timeline query error:", tlError);
     }, [tlError]);
-
     useEffect(() => {
-        if (lmError) {
-            console.error("[SuperTimeline] lateral movement query error:", lmError);
-        }
+        if (lmError) console.error("[SuperTimeline] lateral movement query error:", lmError);
     }, [lmError]);
 
-    // ── Host list derived from timeline data ──────────────────────────────────
-    const knownHosts: string[] = timelineData?.hosts ?? [];
+    // ── Derived lists from response ───────────────────────────────────────────
+    const knownHosts: string[]  = timelineData?.hosts ?? [];
+    const knownSources: string[] = timelineData?.source_shorts ?? [];
 
-    // Initialise activeHosts when host list first arrives
+    // Initialise activeHosts on first load
     useEffect(() => {
         if (knownHosts.length > 0 && activeHosts.size === 0) {
             setActiveHosts(new Set(knownHosts));
@@ -304,15 +392,48 @@ export default function SuperTimeline() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [knownHosts.join(",")]);
 
+    // Initialise activeSources on first load
+    useEffect(() => {
+        if (knownSources.length > 0 && activeSources.size === 0) {
+            setActiveSources(new Set(knownSources));
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [knownSources.join(",")]);
+
     // ── Search debounce ───────────────────────────────────────────────────────
     const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-    function handleSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
-        setSearchInput(e.target.value);
+    function handleSearchChange(val: string) {
+        setSearchInput(val);
         if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
         debounceTimerRef.current = setTimeout(() => {
-            setDebouncedSearch(e.target.value);
+            setDebouncedSearch(val);
             setPage(1);
         }, 400);
+    }
+
+    // ── Quick filter ──────────────────────────────────────────────────────────
+    function applyQuickFilter(qf: QuickFilter) {
+        if (activeQuickFilter === qf.id) {
+            // Toggle off — clear
+            setActiveQuickFilter(null);
+            setDebouncedSearch("");
+            setSearchInput("");
+            setAllSourcesActive(true);
+            setActiveSources(new Set(knownSources));
+        } else {
+            setActiveQuickFilter(qf.id);
+            const newQ = qf.q ?? "";
+            setSearchInput(newQ);
+            setDebouncedSearch(newQ);
+            if (qf.sources) {
+                setAllSourcesActive(false);
+                setActiveSources(new Set(qf.sources));
+            } else {
+                setAllSourcesActive(true);
+                setActiveSources(new Set(knownSources));
+            }
+        }
+        setPage(1);
     }
 
     // ── Pagination ────────────────────────────────────────────────────────────
@@ -323,30 +444,57 @@ export default function SuperTimeline() {
         setAllHostsActive(false);
         setActiveHosts((prev) => {
             const next = new Set(prev);
-            if (next.has(host)) {
-                next.delete(host);
-            } else {
-                next.add(host);
-            }
+            next.has(host) ? next.delete(host) : next.add(host);
             return next;
         });
         setPage(1);
     }
-
     function toggleAllHosts() {
         setAllHostsActive(true);
         setActiveHosts(new Set(knownHosts));
         setPage(1);
     }
 
-    // ── Derived build state ───────────────────────────────────────────────────
-    const isBuilding =
-        building ||
-        stStatus?.status === "BUILDING" ||
-        stStatus?.status === "PENDING";
+    // ── Source filter helpers ─────────────────────────────────────────────────
+    function toggleSource(src: string) {
+        setAllSourcesActive(false);
+        setActiveQuickFilter(null);
+        setActiveSources((prev) => {
+            const next = new Set(prev);
+            next.has(src) ? next.delete(src) : next.add(src);
+            return next;
+        });
+        setPage(1);
+    }
+    function toggleAllSources() {
+        setAllSourcesActive(true);
+        setActiveSources(new Set(knownSources));
+        setActiveQuickFilter(null);
+        setPage(1);
+    }
 
-    const isFailed = stStatus?.status === "FAILED";
-    const canBuild = !isBuilding;
+    // ── Date filter helpers ───────────────────────────────────────────────────
+    function applyDateFilter() {
+        setDateFilterActive(true);
+        setPage(1);
+    }
+    function clearDateFilter() {
+        setDateFrom("");
+        setDateTo("");
+        setDateFilterActive(false);
+        setPage(1);
+    }
+
+    // ── Active filter count (for badge) ──────────────────────────────────────
+    const activeFilterCount =
+        (debouncedSearch ? 1 : 0) +
+        (!allHostsActive ? 1 : 0) +
+        (!allSourcesActive ? 1 : 0) +
+        (dateFilterActive ? 1 : 0);
+
+    // ── Derived build state ───────────────────────────────────────────────────
+    const isBuilding = building || stStatus?.status === "BUILDING" || stStatus?.status === "PENDING";
+    const isFailed   = stStatus?.status === "FAILED";
 
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -365,7 +513,7 @@ export default function SuperTimeline() {
                 </Button>
             }
         >
-            <div className="p-6 flex flex-col gap-6 h-full">
+            <div className="p-6 flex flex-col gap-5 h-full">
 
                 {/* ── Initial loading ─────────────────────────────────────── */}
                 {statusLoading && (
@@ -395,21 +543,18 @@ export default function SuperTimeline() {
                         <div className="space-y-5">
                             <p className="font-mono text-sm text-muted-foreground leading-relaxed">
                                 Merge timelines from all processed hosts into a unified
-                                cross-host timeline for correlation analysis.
+                                cross-host timeline with lateral movement detection.
                             </p>
-
                             {isFailed && stStatus?.error_message && (
                                 <div className="p-3 border border-destructive/40 bg-destructive/10 text-destructive font-mono text-xs">
                                     LAST BUILD FAILED: {stStatus.error_message}
                                 </div>
                             )}
-
                             {buildError && (
                                 <div className="p-3 border border-destructive/40 bg-destructive/10 text-destructive font-mono text-xs">
                                     ERROR: {buildError}
                                 </div>
                             )}
-
                             {isBuilding ? (
                                 <div className="flex items-center gap-4 font-mono text-sm text-primary py-3">
                                     <Loader2 className="w-5 h-5 animate-spin" />
@@ -428,7 +573,7 @@ export default function SuperTimeline() {
                                 <Button
                                     variant="tactical"
                                     onClick={triggerBuild}
-                                    disabled={!canBuild}
+                                    disabled={isBuilding}
                                     className="gap-2"
                                 >
                                     <Database className="w-4 h-4" />
@@ -447,24 +592,24 @@ export default function SuperTimeline() {
                                 <div className="flex items-center gap-2 px-3 py-2 border border-border/60 bg-secondary/40 rounded-sm font-mono text-xs">
                                     <Server className="w-3.5 h-3.5 text-primary" />
                                     <span className="text-muted-foreground">HOSTS</span>
-                                    <span className="font-bold text-foreground">
-                                        {stStatus.host_count ?? 0}
-                                    </span>
+                                    <span className="font-bold">{stStatus.host_count ?? 0}</span>
                                 </div>
                                 <div className="flex items-center gap-2 px-3 py-2 border border-border/60 bg-secondary/40 rounded-sm font-mono text-xs">
                                     <Database className="w-3.5 h-3.5 text-primary" />
                                     <span className="text-muted-foreground">EVENTS</span>
-                                    <span className="font-bold text-foreground">
-                                        {stStatus.event_count?.toLocaleString() ?? 0}
-                                    </span>
+                                    <span className="font-bold">{stStatus.event_count?.toLocaleString() ?? 0}</span>
                                 </div>
                                 {stStatus.completed_at && (
                                     <div className="flex items-center gap-2 px-3 py-2 border border-border/60 bg-secondary/40 rounded-sm font-mono text-xs">
                                         <Clock className="w-3.5 h-3.5 text-primary" />
                                         <span className="text-muted-foreground">COMPLETED</span>
-                                        <span className="font-bold text-foreground">
-                                            {formatTs(stStatus.completed_at)}
-                                        </span>
+                                        <span className="font-bold">{formatTs(stStatus.completed_at)}</span>
+                                    </div>
+                                )}
+                                {lmData && lmData.length > 0 && (
+                                    <div className="flex items-center gap-2 px-3 py-2 border border-red-500/40 bg-red-500/10 rounded-sm font-mono text-xs text-red-400">
+                                        <AlertTriangle className="w-3.5 h-3.5" />
+                                        <span>{lmData.length} LATERAL MOVEMENT DETECTIONS</span>
                                     </div>
                                 )}
                             </div>
@@ -482,74 +627,194 @@ export default function SuperTimeline() {
                     </TacticalPanel>
                 )}
 
-                {/* ── Host Filter (DONE) ──────────────────────────────────── */}
-                {isDone && knownHosts.length > 0 && (
-                    <TacticalPanel title="HOST FILTER" className="shrink-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                            <button
-                                onClick={toggleAllHosts}
-                                className={`flex items-center gap-2 px-3 py-1.5 rounded-sm border font-mono text-xs transition-colors ${
-                                    allHostsActive
-                                        ? "border-primary bg-primary/10 text-primary"
-                                        : "border-border/40 text-muted-foreground hover:border-border"
-                                }`}
-                            >
-                                <Users className="w-3 h-3" />
-                                ALL HOSTS
-                                <span className="ml-1 px-1.5 py-0.5 bg-secondary rounded-sm text-xs">
-                                    {knownHosts.length}
-                                </span>
-                            </button>
+                {/* ── Filter Panel ────────────────────────────────────────── */}
+                {isDone && (
+                    <TacticalPanel
+                        title={`FILTERS${activeFilterCount > 0 ? ` (${activeFilterCount} ACTIVE)` : ""}`}
+                        className="shrink-0"
+                        headerActions={
+                            activeFilterCount > 0 ? (
+                                <button
+                                    onClick={() => {
+                                        setDebouncedSearch(""); setSearchInput("");
+                                        setAllHostsActive(true); setActiveHosts(new Set(knownHosts));
+                                        setAllSourcesActive(true); setActiveSources(new Set(knownSources));
+                                        clearDateFilter();
+                                        setActiveQuickFilter(null);
+                                        setPage(1);
+                                    }}
+                                    className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                >
+                                    <X className="w-3 h-3" />
+                                    CLEAR ALL
+                                </button>
+                            ) : undefined
+                        }
+                    >
+                        <div className="space-y-4">
 
-                            {knownHosts.map((host) => (
-                                <HostChip
-                                    key={host}
-                                    host={host}
-                                    allHosts={knownHosts}
-                                    active={allHostsActive || activeHosts.has(host)}
-                                    onClick={toggleHost.bind(null, host)}
-                                />
-                            ))}
+                            {/* Search + Date range */}
+                            <div className="flex items-center gap-3 flex-wrap">
+                                {/* Search input */}
+                                <div className="relative flex-1 min-w-[200px] max-w-md">
+                                    <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground pointer-events-none" />
+                                    <input
+                                        type="text"
+                                        value={searchInput}
+                                        onChange={(e) => handleSearchChange(e.target.value)}
+                                        placeholder="Search events, processes, IPs, users..."
+                                        className="w-full pl-8 pr-3 h-8 bg-background border border-input rounded-sm font-mono text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                                    />
+                                    {searchInput && (
+                                        <button
+                                            onClick={() => { handleSearchChange(""); setActiveQuickFilter(null); }}
+                                            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                        >
+                                            <X className="w-3 h-3" />
+                                        </button>
+                                    )}
+                                </div>
 
-                            {!allHostsActive && (
-                                <span className="ml-auto font-mono text-xs text-muted-foreground">
-                                    {activeHosts.size}/{knownHosts.length} ACTIVE
+                                {/* Date from */}
+                                <div className="flex items-center gap-2">
+                                    <CalendarRange className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                                    <input
+                                        type="datetime-local"
+                                        value={dateFrom}
+                                        onChange={(e) => { setDateFrom(e.target.value); setDateFilterActive(false); }}
+                                        className="h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                                    />
+                                    <span className="font-mono text-xs text-muted-foreground">TO</span>
+                                    <input
+                                        type="datetime-local"
+                                        value={dateTo}
+                                        onChange={(e) => { setDateTo(e.target.value); setDateFilterActive(false); }}
+                                        className="h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary text-foreground"
+                                    />
+                                    {(dateFrom || dateTo) && (
+                                        <Button
+                                            variant={dateFilterActive ? "tactical" : "outline"}
+                                            size="sm"
+                                            className="h-8 font-mono text-xs px-3"
+                                            onClick={dateFilterActive ? clearDateFilter : applyDateFilter}
+                                        >
+                                            {dateFilterActive ? (
+                                                <><X className="w-3 h-3 mr-1" />CLEAR</>
+                                            ) : (
+                                                "APPLY"
+                                            )}
+                                        </Button>
+                                    )}
+                                </div>
+                            </div>
+
+                            {/* Quick filters */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1">
+                                    <Zap className="w-3 h-3" />
+                                    QUICK:
                                 </span>
+                                {QUICK_FILTERS.map((qf) => (
+                                    <button
+                                        key={qf.id}
+                                        onClick={() => applyQuickFilter(qf)}
+                                        className={`px-2.5 py-1 rounded-sm border font-mono text-xs transition-all ${
+                                            activeQuickFilter === qf.id
+                                                ? "border-primary bg-primary/15 text-primary"
+                                                : "border-border/40 text-muted-foreground hover:border-border hover:text-foreground"
+                                        }`}
+                                    >
+                                        {qf.label}
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Host filter */}
+                            {knownHosts.length > 0 && (
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1 shrink-0">
+                                        <Users className="w-3 h-3" />
+                                        HOSTS:
+                                    </span>
+                                    <button
+                                        onClick={toggleAllHosts}
+                                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm border font-mono text-xs transition-colors ${
+                                            allHostsActive
+                                                ? "border-primary bg-primary/10 text-primary"
+                                                : "border-border/40 text-muted-foreground hover:border-border"
+                                        }`}
+                                    >
+                                        ALL
+                                        <span className="px-1 py-0.5 bg-secondary rounded-sm text-[10px]">
+                                            {knownHosts.length}
+                                        </span>
+                                    </button>
+                                    {knownHosts.map((host) => (
+                                        <HostChip
+                                            key={host}
+                                            host={host}
+                                            allHosts={knownHosts}
+                                            active={allHostsActive || activeHosts.has(host)}
+                                            onClick={() => toggleHost(host)}
+                                        />
+                                    ))}
+                                </div>
+                            )}
+
+                            {/* Source filter */}
+                            {knownSources.length > 0 && (
+                                <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider flex items-center gap-1 shrink-0">
+                                        <Tag className="w-3 h-3" />
+                                        SOURCE:
+                                    </span>
+                                    <button
+                                        onClick={toggleAllSources}
+                                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-sm border font-mono text-xs transition-colors ${
+                                            allSourcesActive
+                                                ? "border-primary bg-primary/10 text-primary"
+                                                : "border-border/40 text-muted-foreground hover:border-border"
+                                        }`}
+                                    >
+                                        ALL
+                                        <span className="px-1 py-0.5 bg-secondary rounded-sm text-[10px]">
+                                            {knownSources.length}
+                                        </span>
+                                    </button>
+                                    {knownSources.map((src) => (
+                                        <SourceChip
+                                            key={src}
+                                            source={src}
+                                            active={allSourcesActive || activeSources.has(src)}
+                                            onClick={() => toggleSource(src)}
+                                        />
+                                    ))}
+                                </div>
                             )}
                         </div>
                     </TacticalPanel>
                 )}
 
-                {/* ── Timeline Grid (DONE) ────────────────────────────────── */}
+                {/* ── Timeline Grid ────────────────────────────────────────── */}
                 {isDone && (
                     <TacticalPanel
                         title="CROSS-HOST EVENT TIMELINE"
                         className="flex-1 flex flex-col min-h-0"
                         status={tlLoading ? "active" : "online"}
                         headerActions={
-                            <div className="flex items-center gap-3">
-                                <SearchInput
-                                    value={searchInput}
-                                    onChange={handleSearchChange}
-                                    placeholder="Search events, hosts, sources..."
-                                    className="w-64 h-7 text-xs"
-                                />
+                            <div className="flex items-center gap-2">
                                 <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
                                     PAGE {page}/{totalPages || 1}
                                 </span>
                                 <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-7"
+                                    variant="outline" size="sm" className="h-7"
                                     disabled={page <= 1 || tlLoading}
                                     onClick={() => setPage((p) => Math.max(1, p - 1))}
                                 >
                                     <ChevronLeft className="w-3 h-3" />
                                 </Button>
                                 <Button
-                                    variant="outline"
-                                    size="sm"
-                                    className="h-7"
+                                    variant="outline" size="sm" className="h-7"
                                     disabled={page >= totalPages || tlLoading}
                                     onClick={() => setPage((p) => p + 1)}
                                 >
@@ -575,54 +840,57 @@ export default function SuperTimeline() {
                                     ))}
                                 </div>
                             ) : !timelineData?.data.length ? (
-                                <div className="flex items-center justify-center h-40 font-mono text-sm text-muted-foreground">
-                                    <Search className="w-4 h-4 mr-2 opacity-50" />
-                                    {debouncedSearch
-                                        ? "NO EVENTS MATCH SEARCH QUERY"
+                                <div className="flex flex-col items-center justify-center h-40 gap-3 font-mono text-sm text-muted-foreground">
+                                    <Search className="w-6 h-6 opacity-30" />
+                                    {activeFilterCount > 0
+                                        ? "NO EVENTS MATCH THE ACTIVE FILTERS"
                                         : "NO TIMELINE EVENTS AVAILABLE"}
+                                    {activeFilterCount > 0 && (
+                                        <button
+                                            onClick={() => {
+                                                setDebouncedSearch(""); setSearchInput("");
+                                                setAllHostsActive(true); setActiveHosts(new Set(knownHosts));
+                                                setAllSourcesActive(true); setActiveSources(new Set(knownSources));
+                                                clearDateFilter(); setActiveQuickFilter(null);
+                                            }}
+                                            className="text-xs text-primary hover:underline"
+                                        >
+                                            CLEAR FILTERS
+                                        </button>
+                                    )}
                                 </div>
                             ) : (
                                 <table className="w-full text-sm font-mono">
                                     <thead className="sticky top-0 bg-card border-b border-border z-10">
                                         <tr className="text-muted-foreground text-xs">
-                                            <th className="px-3 py-2 text-left font-bold uppercase whitespace-nowrap">
-                                                HOST
-                                            </th>
-                                            <th className="px-3 py-2 text-left font-bold uppercase whitespace-nowrap">
-                                                DATETIME
-                                            </th>
-                                            <th className="px-3 py-2 text-left font-bold uppercase whitespace-nowrap">
-                                                TYPE
-                                            </th>
-                                            <th className="px-3 py-2 text-left font-bold uppercase whitespace-nowrap">
-                                                SOURCE
-                                            </th>
-                                            <th className="px-3 py-2 text-left font-bold uppercase">
-                                                MESSAGE
-                                            </th>
+                                            <th className="px-3 py-2 text-left font-bold uppercase whitespace-nowrap">HOST</th>
+                                            <th className="px-3 py-2 text-left font-bold uppercase whitespace-nowrap">DATETIME</th>
+                                            <th className="px-3 py-2 text-left font-bold uppercase whitespace-nowrap">TYPE</th>
+                                            <th className="px-3 py-2 text-left font-bold uppercase whitespace-nowrap">SOURCE</th>
+                                            <th className="px-3 py-2 text-left font-bold uppercase">MESSAGE</th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {timelineData.data.map((row, i) => {
-                                            const host = String(
-                                                row["computer"] ?? row["host"] ?? row["hostname"] ?? "UNKNOWN"
-                                            );
-                                            const color = getHostColor(host, knownHosts);
-                                            const datetime =
-                                                String(row["datetime"] ?? row["timestamp"] ?? "—");
-                                            const tsDesc = String(row["timestamp_desc"] ?? "—");
-                                            const source = String(row["source"] ?? row["source_name"] ?? "—");
-                                            const message = String(row["message"] ?? row["description"] ?? row["msg"] ?? "—");
+                                            const host       = String(row["host"] ?? row["computer"] ?? "UNKNOWN");
+                                            const color      = getHostColor(host, knownHosts);
+                                            const srcShort   = String(row["source_short"] ?? "");
+                                            const srcColor   = getSourceColor(srcShort);
+                                            const datetime   = String(row["datetime"] ?? row["timestamp"] ?? "—");
+                                            const tsDesc     = String(row["timestamp_desc"] ?? "—");
+                                            const source     = String(row["source"] ?? "—");
+                                            const message    = String(row["message"] ?? row["description"] ?? "—");
+
+                                            // Highlight SIGMA rows
+                                            const isSigma = srcShort === "SIGMA" || srcShort === "HAYABUSA";
+                                            const rowCls = isSigma
+                                                ? "border-b border-red-500/20 bg-red-500/5 hover:bg-red-500/10"
+                                                : "border-b border-border/30 hover:bg-primary/5";
 
                                             return (
-                                                <tr
-                                                    key={i}
-                                                    className="border-b border-border/30 hover:bg-primary/5 transition-colors text-xs"
-                                                >
+                                                <tr key={i} className={`transition-colors text-xs ${rowCls}`}>
                                                     <td className="px-3 py-1.5 whitespace-nowrap">
-                                                        <span
-                                                            className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm border text-xs font-mono ${color.bg} ${color.text} ${color.border}`}
-                                                        >
+                                                        <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm border text-xs font-mono ${color.bg} ${color.text} ${color.border}`}>
                                                             <Server className="w-2.5 h-2.5" />
                                                             {host}
                                                         </span>
@@ -635,26 +903,27 @@ export default function SuperTimeline() {
                                                     </td>
                                                     <td className="px-3 py-1.5 whitespace-nowrap">
                                                         <span
-                                                            className="px-1.5 py-0.5 bg-secondary/60 border border-border/40 rounded-sm text-muted-foreground text-xs truncate block max-w-[120px]"
+                                                            className="px-1.5 py-0.5 rounded-sm border text-xs truncate block max-w-[120px]"
                                                             title={tsDesc}
                                                         >
                                                             {truncate(tsDesc, 30)}
                                                         </span>
                                                     </td>
-                                                    <td className="px-3 py-1.5 max-w-[140px]">
-                                                        <span
-                                                            className="truncate block text-muted-foreground"
-                                                            title={source}
-                                                        >
-                                                            {truncate(source, 40)}
-                                                        </span>
+                                                    <td className="px-3 py-1.5 whitespace-nowrap">
+                                                        <div className="flex items-center gap-1.5">
+                                                            {srcShort && (
+                                                                <span className={`px-1.5 py-0.5 rounded-sm border text-[10px] font-bold shrink-0 ${srcColor}`}>
+                                                                    {srcShort}
+                                                                </span>
+                                                            )}
+                                                            <span className="text-muted-foreground truncate block max-w-[100px]" title={source}>
+                                                                {truncate(source, 28)}
+                                                            </span>
+                                                        </div>
                                                     </td>
-                                                    <td className="px-3 py-1.5 max-w-[400px]">
-                                                        <span
-                                                            className="truncate block"
-                                                            title={String(row["message"] ?? row["description"] ?? row["msg"] ?? "")}
-                                                        >
-                                                            {truncate(message, 120)}
+                                                    <td className="px-3 py-1.5 max-w-[420px]">
+                                                        <span className="truncate block" title={message}>
+                                                            {highlightTerms(truncate(message, 120), debouncedSearch)}
                                                         </span>
                                                     </td>
                                                 </tr>
@@ -672,27 +941,26 @@ export default function SuperTimeline() {
                                     {((page - 1) * LIMIT + 1).toLocaleString()}–
                                     {Math.min(page * LIMIT, timelineData.total).toLocaleString()} OF{" "}
                                     {timelineData.total.toLocaleString()} EVENTS
+                                    {activeFilterCount > 0 && (
+                                        <span className="ml-2 text-primary">
+                                            (FILTERED)
+                                        </span>
+                                    )}
                                 </span>
                                 <div className="flex items-center gap-2">
                                     <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-6 text-xs"
+                                        variant="outline" size="sm" className="h-6 text-xs"
                                         disabled={page <= 1 || tlLoading}
                                         onClick={() => setPage((p) => Math.max(1, p - 1))}
                                     >
-                                        <ChevronLeft className="w-3 h-3 mr-1" />
-                                        PREV
+                                        <ChevronLeft className="w-3 h-3 mr-1" />PREV
                                     </Button>
                                     <Button
-                                        variant="outline"
-                                        size="sm"
-                                        className="h-6 text-xs"
+                                        variant="outline" size="sm" className="h-6 text-xs"
                                         disabled={page >= totalPages || tlLoading}
                                         onClick={() => setPage((p) => p + 1)}
                                     >
-                                        NEXT
-                                        <ChevronRight className="w-3 h-3 ml-1" />
+                                        NEXT<ChevronRight className="w-3 h-3 ml-1" />
                                     </Button>
                                 </div>
                             </div>
@@ -700,7 +968,7 @@ export default function SuperTimeline() {
                     </TacticalPanel>
                 )}
 
-                {/* ── Lateral Movement Panel (DONE + detections) ─────────── */}
+                {/* ── Lateral Movement Panel ──────────────────────────────── */}
                 {isDone && lmData && lmData.length > 0 && (
                     <TacticalPanel
                         title={`LATERAL MOVEMENT DETECTIONS (${lmData.length})`}
@@ -716,91 +984,55 @@ export default function SuperTimeline() {
                     >
                         {lmExpanded && (
                             <div className="space-y-3">
-                                {lmLoading && (
-                                    <div className="flex items-center gap-2 font-mono text-sm text-muted-foreground py-3">
-                                        <Loader2 className="w-4 h-4 animate-spin" />
-                                        LOADING DETECTIONS...
-                                    </div>
-                                )}
-                                {lmError && (
-                                    <div className="font-mono text-xs text-destructive py-2">
-                                        ERROR: {(lmError as Error).message}
-                                    </div>
-                                )}
                                 {lmData.map((det) => (
                                     <div
                                         key={det.id}
                                         className="border border-border/60 bg-secondary/20 p-4 rounded-sm space-y-3"
                                     >
-                                        {/* Top row: type badge + host path */}
                                         <div className="flex items-center gap-3 flex-wrap">
-                                            <span
-                                                className={`px-2 py-0.5 rounded-sm border text-xs font-mono font-bold uppercase ${
-                                                    DETECTION_TYPE_COLORS[det.detection_type]
-                                                }`}
-                                            >
+                                            <span className={`px-2 py-0.5 rounded-sm border text-xs font-mono font-bold uppercase ${DETECTION_TYPE_COLORS[det.detection_type]}`}>
                                                 {det.detection_type.replace(/_/g, " ")}
                                             </span>
-
                                             <div className="flex items-center gap-2 font-mono text-sm">
-                                                <span
-                                                    className={`px-2 py-0.5 rounded-sm border text-xs ${(() => {
-                                                        const c = getHostColor(det.source_host, [
-                                                            det.source_host,
-                                                            det.target_host,
-                                                        ]);
-                                                        return `${c.bg} ${c.text} ${c.border}`;
-                                                    })()}`}
-                                                >
+                                                <span className={`px-2 py-0.5 rounded-sm border text-xs ${(() => { const c = getHostColor(det.source_host, knownHosts); return `${c.bg} ${c.text} ${c.border}`; })()}`}>
                                                     {det.source_host}
                                                 </span>
                                                 <Network className="w-3.5 h-3.5 text-muted-foreground" />
-                                                <span
-                                                    className={`px-2 py-0.5 rounded-sm border text-xs ${(() => {
-                                                        const c = getHostColor(det.target_host, [
-                                                            det.source_host,
-                                                            det.target_host,
-                                                        ]);
-                                                        return `${c.bg} ${c.text} ${c.border}`;
-                                                    })()}`}
-                                                >
+                                                <span className={`px-2 py-0.5 rounded-sm border text-xs ${(() => { const c = getHostColor(det.target_host, knownHosts); return `${c.bg} ${c.text} ${c.border}`; })()}`}>
                                                     {det.target_host}
                                                 </span>
                                             </div>
-
                                             {det.actor && (
                                                 <span className="flex items-center gap-1 font-mono text-xs text-muted-foreground">
                                                     <Shield className="w-3 h-3" />
                                                     {det.actor}
                                                 </span>
                                             )}
+                                            {/* Quick pivot — filter timeline by this actor */}
+                                            {det.actor && (
+                                                <button
+                                                    onClick={() => {
+                                                        handleSearchChange(det.actor!);
+                                                        setActiveQuickFilter(null);
+                                                        setAllSourcesActive(true);
+                                                        setActiveSources(new Set(knownSources));
+                                                        setPage(1);
+                                                        window.scrollTo({ top: 0, behavior: "smooth" });
+                                                    }}
+                                                    className="ml-auto font-mono text-[10px] text-primary hover:underline"
+                                                >
+                                                    PIVOT → TIMELINE
+                                                </button>
+                                            )}
                                         </div>
-
-                                        {/* Metadata grid */}
                                         <div className="grid grid-cols-2 gap-x-8 gap-y-1 font-mono text-xs">
-                                            <div>
-                                                <span className="text-muted-foreground">FIRST SEEN: </span>
-                                                {formatTs(det.first_seen)}
-                                            </div>
-                                            <div>
-                                                <span className="text-muted-foreground">LAST SEEN: </span>
-                                                {formatTs(det.last_seen)}
-                                            </div>
-                                            <div>
-                                                <span className="text-muted-foreground">EVENT COUNT: </span>
-                                                {det.event_count.toLocaleString()}
-                                            </div>
-                                            <div>
-                                                <span className="text-muted-foreground">DETECTED: </span>
-                                                {formatTs(det.detected_at)}
-                                            </div>
+                                            <div><span className="text-muted-foreground">FIRST SEEN: </span>{formatTs(det.first_seen)}</div>
+                                            <div><span className="text-muted-foreground">LAST SEEN: </span>{formatTs(det.last_seen)}</div>
+                                            <div><span className="text-muted-foreground">EVENT COUNT: </span>{det.event_count.toLocaleString()}</div>
+                                            <div><span className="text-muted-foreground">DETECTED: </span>{formatTs(det.detected_at)}</div>
                                         </div>
-
-                                        {/* Confidence bar */}
                                         <div>
-                                            <div className="font-mono text-xs text-muted-foreground mb-1">
-                                                CONFIDENCE
-                                            </div>
+                                            <div className="font-mono text-xs text-muted-foreground mb-1">CONFIDENCE</div>
                                             <ConfidenceBar value={det.confidence} />
                                         </div>
                                     </div>
@@ -810,7 +1042,7 @@ export default function SuperTimeline() {
                     </TacticalPanel>
                 )}
 
-                {/* ── Lateral movement loading placeholder ────────────────── */}
+                {/* ── LM loading placeholder ───────────────────────────────── */}
                 {isDone && lmLoading && !lmData && (
                     <TacticalPanel title="LATERAL MOVEMENT DETECTIONS" status="active">
                         <div className="flex items-center gap-3 font-mono text-sm text-muted-foreground py-3">

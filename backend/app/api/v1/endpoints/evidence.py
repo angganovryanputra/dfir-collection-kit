@@ -663,6 +663,7 @@ class SuperTimelineResponse(BaseModel):
     page: int
     limit: int
     hosts: list[str]
+    source_shorts: list[str]  # distinct source_short values for filter UI
 
 
 @router.get("/super-timeline/{incident_id}", response_model=SuperTimelineResponse)
@@ -672,10 +673,17 @@ async def get_super_timeline_data(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=100, ge=10, le=1000),
     hosts: str = Query(default="", description="Comma-separated host filter"),
+    source: str = Query(default="", description="Comma-separated source_short filter (EVTX,MFT,SIGMA…)"),
+    date_from: str = Query(default="", description="ISO-8601 start datetime filter"),
+    date_to: str = Query(default="", description="ISO-8601 end datetime filter"),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> SuperTimelineResponse:
-    """Query the merged cross-host super timeline for an incident."""
+    """Query the merged cross-host super timeline for an incident.
+
+    Supports full-text search (q), host filter, source_short filter,
+    and date range filter (date_from / date_to in ISO-8601 format).
+    """
     from app.crud.super_timeline import get_super_timeline_by_incident
 
     suptl = await get_super_timeline_by_incident(db, incident_id)
@@ -692,9 +700,20 @@ async def get_super_timeline_data(
         raise HTTPException(status_code=404, detail="Super timeline DuckDB file not found on disk")
 
     host_filter = [h.strip() for h in hosts.split(",") if h.strip()] if hosts else []
+    source_filter = [s.strip().upper() for s in source.split(",") if s.strip()] if source else []
 
     return await asyncio.to_thread(
-        functools.partial(_query_super_timeline_duckdb, duckdb_path, q, page, limit, host_filter)
+        functools.partial(
+            _query_super_timeline_duckdb,
+            duckdb_path,
+            q,
+            page,
+            limit,
+            host_filter,
+            source_filter,
+            date_from.strip(),
+            date_to.strip(),
+        )
     )
 
 
@@ -704,31 +723,71 @@ def _query_super_timeline_duckdb(
     page: int,
     limit: int,
     host_filter: list[str],
+    source_filter: list[str],
+    date_from: str,
+    date_to: str,
 ) -> SuperTimelineResponse:
-    """Query the persistent super timeline DuckDB store."""
+    """Query the persistent super timeline DuckDB store.
+
+    Supports:
+    - Full-text search across message, source, timestamp_desc, and extra JSON
+    - Host filter (IN list)
+    - Source-short filter (IN list, e.g. EVTX, MFT, SIGMA)
+    - Date range filter (event_dt >= date_from AND event_dt <= date_to)
+    """
     import duckdb
     import json as _json
 
     offset = (page - 1) * limit
     con = duckdb.connect(str(duckdb_path), read_only=True)
     try:
-        hosts_rows = con.execute("SELECT DISTINCT host FROM timeline_events ORDER BY host").fetchall()
-        all_hosts = [row[0] for row in hosts_rows if row[0]]
+        # Always fetch all distinct hosts and source_shorts for the filter UI
+        all_hosts = [
+            row[0]
+            for row in con.execute(
+                "SELECT DISTINCT host FROM timeline_events ORDER BY host"
+            ).fetchall()
+            if row[0]
+        ]
+        all_source_shorts = [
+            row[0]
+            for row in con.execute(
+                "SELECT DISTINCT source_short FROM timeline_events ORDER BY source_short"
+            ).fetchall()
+            if row[0]
+        ]
 
         where_parts: list[str] = []
         params: list = []
 
+        # Full-text search — match message, source, timestamp_desc, or extra JSON
         if q:
             q_like = f"%{q.lower()}%"
             where_parts.append(
-                "(LOWER(message) LIKE ? OR LOWER(source) LIKE ? OR LOWER(timestamp_desc) LIKE ?)"
+                "(LOWER(message) LIKE ? OR LOWER(source) LIKE ?"
+                " OR LOWER(timestamp_desc) LIKE ? OR LOWER(CAST(extra AS VARCHAR)) LIKE ?)"
             )
-            params.extend([q_like, q_like, q_like])
+            params.extend([q_like, q_like, q_like, q_like])
 
+        # Host filter
         if host_filter:
             placeholders = ", ".join("?" for _ in host_filter)
             where_parts.append(f"host IN ({placeholders})")
             params.extend(host_filter)
+
+        # Source-short filter
+        if source_filter:
+            placeholders = ", ".join("?" for _ in source_filter)
+            where_parts.append(f"UPPER(source_short) IN ({placeholders})")
+            params.extend(source_filter)
+
+        # Date range filter
+        if date_from:
+            where_parts.append("event_dt >= ?")
+            params.append(date_from)
+        if date_to:
+            where_parts.append("event_dt <= ?")
+            params.append(date_to)
 
         where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
@@ -738,7 +797,8 @@ def _query_super_timeline_duckdb(
 
         rows = con.execute(
             f"""
-            SELECT row_id, host, job_id, event_dt, message, timestamp_desc, source, source_short, extra
+            SELECT row_id, host, job_id, event_dt, message, timestamp_desc,
+                   source, source_short, extra
             FROM timeline_events {where_sql}
             ORDER BY event_dt ASC NULLS LAST, row_id ASC
             LIMIT ? OFFSET ?
@@ -748,14 +808,14 @@ def _query_super_timeline_duckdb(
 
         results = []
         for row in rows:
-            _, host, job_id, event_dt, message, ts_desc, source, source_short, extra_json = row
+            _, host, job_id, event_dt, message, ts_desc, source_val, source_short, extra_json = row
             entry: dict = {
                 "host": host,
                 "job_id": job_id,
                 "datetime": event_dt.isoformat() if event_dt else None,
                 "message": message,
                 "timestamp_desc": ts_desc,
-                "source": source,
+                "source": source_val,
                 "source_short": source_short,
             }
             if extra_json:
@@ -768,7 +828,12 @@ def _query_super_timeline_duckdb(
             results.append(entry)
 
         return SuperTimelineResponse(
-            data=results, total=total, page=page, limit=limit, hosts=all_hosts
+            data=results,
+            total=total,
+            page=page,
+            limit=limit,
+            hosts=all_hosts,
+            source_shorts=all_source_shorts,
         )
     finally:
         con.close()
