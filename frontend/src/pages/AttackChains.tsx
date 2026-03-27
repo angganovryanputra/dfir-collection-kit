@@ -5,6 +5,7 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, GitBranch, Shield, Clock } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 interface AttackChain {
     id: string;
@@ -34,6 +35,113 @@ const TACTIC_ORDER = [
     "defense_evasion", "credential_access", "discovery", "lateral_movement",
     "collection", "command_and_control", "exfiltration", "impact",
 ];
+
+const TACTIC_SHORT: Record<string, string> = {
+    initial_access: "INIT ACCESS",
+    execution: "EXECUTION",
+    persistence: "PERSIST",
+    privilege_escalation: "PRIV ESC",
+    defense_evasion: "DEF EVASION",
+    credential_access: "CRED ACCESS",
+    discovery: "DISCOVERY",
+    lateral_movement: "LAT MOVE",
+    collection: "COLLECT",
+    command_and_control: "C2",
+    exfiltration: "EXFIL",
+    impact: "IMPACT",
+};
+
+function MitreHeatmap({ chains }: { chains: AttackChain[] }) {
+    const tacticStats: Record<string, { chains: number; hits: number }> = {};
+    for (const t of TACTIC_ORDER) tacticStats[t] = { chains: 0, hits: 0 };
+    for (const chain of chains) {
+        for (const tactic of chain.tactics) {
+            if (tacticStats[tactic]) {
+                tacticStats[tactic].chains++;
+                tacticStats[tactic].hits += chain.hit_count;
+            }
+        }
+    }
+
+    const techCounts: Record<string, number> = {};
+    for (const chain of chains) {
+        for (const tech of chain.techniques) {
+            techCounts[tech] = (techCounts[tech] ?? 0) + 1;
+        }
+    }
+    const sortedTechs = Object.entries(techCounts).sort((a, b) => b[1] - a[1]);
+
+    const maxChains = Math.max(1, ...Object.values(tacticStats).map((v) => v.chains));
+
+    const heatClass = (count: number) => {
+        if (count === 0)
+            return "border-border/30 bg-secondary/5 text-muted-foreground/30";
+        const r = count / maxChains;
+        if (r <= 0.25) return "border-green-500/30 bg-green-500/8 text-green-400/80";
+        if (r <= 0.5)  return "border-green-500/50 bg-green-500/15 text-green-400";
+        if (r <= 0.75) return "border-yellow-500/50 bg-yellow-500/15 text-yellow-400";
+        return "border-red-500/50 bg-red-500/20 text-red-400";
+    };
+
+    return (
+        <TacticalPanel title="MITRE ATT&CK COVERAGE">
+            <div className="space-y-4">
+                <div className="grid grid-cols-6 md:grid-cols-12 gap-1">
+                    {TACTIC_ORDER.map((tactic) => {
+                        const { chains: cCount, hits } = tacticStats[tactic];
+                        return (
+                            <div
+                                key={tactic}
+                                className={cn(
+                                    "border p-2 text-center space-y-0.5 rounded-sm",
+                                    heatClass(cCount)
+                                )}
+                                title={tactic.replace(/_/g, " ").toUpperCase()}
+                            >
+                                <div className="font-mono text-[8px] uppercase leading-tight tracking-wide">
+                                    {TACTIC_SHORT[tactic]}
+                                </div>
+                                {cCount > 0 ? (
+                                    <>
+                                        <div className="font-mono text-lg font-bold leading-none">
+                                            {cCount}
+                                        </div>
+                                        <div className="font-mono text-[8px] opacity-70">
+                                            {hits} HIT{hits !== 1 ? "S" : ""}
+                                        </div>
+                                    </>
+                                ) : (
+                                    <div className="font-mono text-lg font-bold leading-none opacity-20">
+                                        —
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })}
+                </div>
+
+                {sortedTechs.length > 0 && (
+                    <div className="space-y-2">
+                        <div className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">
+                            TECHNIQUE FREQUENCY
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                            {sortedTechs.map(([tech, count]) => (
+                                <span
+                                    key={tech}
+                                    className="inline-flex items-center gap-1.5 px-2 py-0.5 border border-amber-500/30 bg-amber-500/8 text-amber-400 font-mono text-xs rounded-sm"
+                                >
+                                    {tech}
+                                    <span className="text-amber-400/50 text-[10px]">×{count}</span>
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </TacticalPanel>
+    );
+}
 
 function TacticPill({ tactic }: { tactic: string }) {
     const idx = TACTIC_ORDER.indexOf(tactic);
@@ -170,6 +278,9 @@ export default function AttackChains() {
                         </div>
                     </TacticalPanel>
                 </div>
+
+                {/* ATT&CK heatmap */}
+                {chains.length > 0 && <MitreHeatmap chains={chains} />}
 
                 {/* Chain list */}
                 <TacticalPanel title="ATTACK CHAINS">

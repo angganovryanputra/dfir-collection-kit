@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getStoredAuth } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -71,9 +72,7 @@ export default function ChainOfCustody() {
       const base = (baseUrl?.trim() || "http://localhost:8000/api/v1").replace(/\/$/, "");
       const params = selectedIncident ? `?incident_id=${encodeURIComponent(selectedIncident)}` : "";
       const url = `${base}/chain-of-custody/export${params}`;
-      const raw = localStorage.getItem("dfir_auth");
-      let token: string | null = null;
-      try { token = raw ? (JSON.parse(raw) as { token?: string }).token ?? null : null; } catch { token = null; }
+      const token = getStoredAuth()?.token ?? null;
       const response = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });

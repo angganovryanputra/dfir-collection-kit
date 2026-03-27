@@ -33,7 +33,9 @@ sys.path.insert(0, str(BACKEND_PATH))
 from sqlalchemy import select  # noqa: E402
 
 from app.db.session import AsyncSessionLocal  # noqa: E402
+from app.models.collector import Collector  # noqa: E402
 from app.models.device import Device  # noqa: E402
+from app.models.evidence import EvidenceFolder  # noqa: E402
 from app.models.incident import Incident  # noqa: E402
 from app.models.job import Job  # noqa: E402
 from app.models.processing import ProcessingJob  # noqa: E402
@@ -50,6 +52,7 @@ HOSTS = [
         "device_id": "DEVICE-WS01",
         "hostname": "WORKSTATION-01",
         "ip_address": "192.168.1.50",
+        "type": "workstation",
         "job_id": "job-mock-ws01",
         "proc_job_id": "proc-job-mock-ws01",
     },
@@ -57,6 +60,7 @@ HOSTS = [
         "device_id": "DEVICE-DC01",
         "hostname": "DC01",
         "ip_address": "192.168.1.10",
+        "type": "server",
         "job_id": "job-mock-dc01",
         "proc_job_id": "proc-job-mock-dc01",
     },
@@ -64,6 +68,7 @@ HOSTS = [
         "device_id": "DEVICE-FS02",
         "hostname": "FILESERVER-02",
         "ip_address": "192.168.1.20",
+        "type": "server",
         "job_id": "job-mock-fs02",
         "proc_job_id": "proc-job-mock-fs02",
     },
@@ -71,9 +76,68 @@ HOSTS = [
         "device_id": "DEVICE-HR03",
         "hostname": "LAPTOP-HR03",
         "ip_address": "192.168.1.75",
+        "type": "laptop",
         "job_id": "job-mock-hr03",
         "proc_job_id": "proc-job-mock-hr03",
     },
+]
+
+# Extra "online" devices not linked to the incident (populate Devices page / Dashboard stats)
+EXTRA_DEVICES = [
+    {
+        "device_id": "DEVICE-OBS01",
+        "hostname": "WORKSTATION-02",
+        "ip_address": "192.168.1.51",
+        "type": "workstation",
+        "os": "windows",
+    },
+    {
+        "device_id": "DEVICE-OBS02",
+        "hostname": "MAILSERVER-01",
+        "ip_address": "192.168.1.15",
+        "type": "server",
+        "os": "linux",
+    },
+    {
+        "device_id": "DEVICE-OBS03",
+        "hostname": "LAPTOP-DEV01",
+        "ip_address": "192.168.1.80",
+        "type": "laptop",
+        "os": "windows",
+    },
+]
+
+# Mock collectors (show on Dashboard "COLLECTORS ONLINE" stat)
+MOCK_COLLECTORS = [
+    {
+        "id": "COLLECTOR-ALPHA",
+        "name": "ALPHA-NODE",
+        "endpoint": "http://192.168.1.200:8080",
+        "status": "ONLINE",
+    },
+    {
+        "id": "COLLECTOR-BETA",
+        "name": "BETA-NODE",
+        "endpoint": "http://192.168.1.201:8080",
+        "status": "ONLINE",
+    },
+]
+
+# Evidence folders — one per host job (populate Dashboard "Evidence Files" count)
+EVIDENCE_FOLDERS = [
+    {
+        "id": f"evfolder-mock-{h['job_id']}",
+        "incident_id": INCIDENT_ID,
+        "type": "collection",
+        "files_count": fc,
+        "total_size": ts,
+        "status": "locked",
+    }
+    for h, fc, ts in zip(
+        HOSTS,
+        [312, 289, 347, 198],
+        ["1.2 GB", "980 MB", "1.5 GB", "650 MB"],
+    )
 ]
 
 
@@ -1291,6 +1355,9 @@ async def clean_existing(db) -> None:
     proc_job_ids = [h["proc_job_id"] for h in HOSTS]
     job_ids = [h["job_id"] for h in HOSTS]
     device_ids = [h["device_id"] for h in HOSTS]
+    extra_device_ids = [d["device_id"] for d in EXTRA_DEVICES]
+    collector_ids = [c["id"] for c in MOCK_COLLECTORS]
+    folder_ids = [f["id"] for f in EVIDENCE_FOLDERS]
 
     for pjid in proc_job_ids:
         existing = await db.get(ProcessingJob, pjid)
@@ -1304,6 +1371,12 @@ async def clean_existing(db) -> None:
             await db.delete(existing)
             print(f"  deleted Job {jid}")
 
+    for fid in folder_ids:
+        existing = await db.get(EvidenceFolder, fid)
+        if existing:
+            await db.delete(existing)
+            print(f"  deleted EvidenceFolder {fid}")
+
     incident = await db.get(Incident, INCIDENT_ID)
     if incident:
         await db.delete(incident)
@@ -1314,6 +1387,18 @@ async def clean_existing(db) -> None:
         if existing:
             await db.delete(existing)
             print(f"  deleted Device {did}")
+
+    for did in extra_device_ids:
+        existing = await db.get(Device, did)
+        if existing:
+            await db.delete(existing)
+            print(f"  deleted extra Device {did}")
+
+    for cid in collector_ids:
+        existing = await db.get(Collector, cid)
+        if existing:
+            await db.delete(existing)
+            print(f"  deleted Collector {cid}")
 
     await db.commit()
     print("[clean] Done.\n")
@@ -1337,7 +1422,7 @@ async def seed_db(db, evidence_base_path: Path) -> None:
         incident = Incident(
             id=INCIDENT_ID,
             type="ransomware",
-            status="collected",
+            status="COLLECTION_COMPLETE",
             operator="admin",
             target_endpoints=[h["hostname"] for h in HOSTS],
             collection_progress=100,
@@ -1365,14 +1450,14 @@ async def seed_db(db, evidence_base_path: Path) -> None:
                 id=device_id,
                 hostname=host["hostname"],
                 ip_address=host["ip_address"],
-                type="endpoint",
+                type=host["type"],
                 os="windows",
                 agent_version="1.4.0",
                 status="online",
                 last_seen=NOW_STR,
                 cpu_usage=None,
                 memory_usage=None,
-                collection_status="done",
+                collection_status="idle",
                 registered_at=NOW_STR,
             )
             db.add(device)
@@ -1420,6 +1505,66 @@ async def seed_db(db, evidence_base_path: Path) -> None:
             db.add(proc_job)
             await db.flush()
             print(f"[db] Created ProcessingJob {proc_job_id}")
+
+    # ── Evidence Folders ──────────────────────────────────────────────────────
+    for folder_spec in EVIDENCE_FOLDERS:
+        existing_folder = await db.get(EvidenceFolder, folder_spec["id"])
+        if existing_folder:
+            print(f"[db] EvidenceFolder {folder_spec['id']} already exists — skipping.")
+        else:
+            folder = EvidenceFolder(
+                id=folder_spec["id"],
+                incident_id=folder_spec["incident_id"],
+                type=folder_spec["type"],
+                date=NOW_STR,
+                files_count=folder_spec["files_count"],
+                total_size=folder_spec["total_size"],
+                status=folder_spec["status"],
+            )
+            db.add(folder)
+            await db.flush()
+            print(f"[db] Created EvidenceFolder {folder_spec['id']} ({folder_spec['files_count']} files)")
+
+    # ── Extra observer devices ─────────────────────────────────────────────────
+    for spec in EXTRA_DEVICES:
+        existing = await db.get(Device, spec["device_id"])
+        if existing:
+            print(f"[db] Extra Device {spec['device_id']} already exists — skipping.")
+        else:
+            device = Device(
+                id=spec["device_id"],
+                hostname=spec["hostname"],
+                ip_address=spec["ip_address"],
+                type=spec["type"],
+                os=spec["os"],
+                agent_version="1.4.0",
+                status="online",
+                last_seen=NOW_STR,
+                cpu_usage=None,
+                memory_usage=None,
+                collection_status="idle",
+                registered_at=NOW_STR,
+            )
+            db.add(device)
+            await db.flush()
+            print(f"[db] Created extra Device {spec['device_id']} ({spec['hostname']})")
+
+    # ── Collectors ────────────────────────────────────────────────────────────
+    for spec in MOCK_COLLECTORS:
+        existing = await db.get(Collector, spec["id"])
+        if existing:
+            print(f"[db] Collector {spec['id']} already exists — skipping.")
+        else:
+            collector = Collector(
+                id=spec["id"],
+                name=spec["name"],
+                endpoint=spec["endpoint"],
+                status=spec["status"],
+                last_heartbeat=NOW_STR,
+            )
+            db.add(collector)
+            await db.flush()
+            print(f"[db] Created Collector {spec['id']} ({spec['name']})")
 
     await db.commit()
     print("[db] All records committed.\n")
@@ -1474,6 +1619,9 @@ async def main() -> None:
     evidence_base_path = Path(args.base_path)
     print(f"Evidence base path : {evidence_base_path}")
     print(f"Incident ID        : {INCIDENT_ID}")
+    print(f"Hosts              : {len(HOSTS)} (incident) + {len(EXTRA_DEVICES)} (extra online)")
+    print(f"Collectors         : {len(MOCK_COLLECTORS)}")
+    print(f"Evidence folders   : {len(EVIDENCE_FOLDERS)}")
     print(f"Clean mode         : {args.clean}")
     print()
 
@@ -1511,7 +1659,21 @@ async def main() -> None:
     await build_super_timeline_background(INCIDENT_ID, evidence_base_path)
     print("[super_timeline] Build complete.\n")
 
-    print("Seed complete. Super Timeline is ready for incident:", INCIDENT_ID)
+    total_evidence_files = sum(f["files_count"] for f in EVIDENCE_FOLDERS)
+    print("=" * 60)
+    print("Seed complete!")
+    print(f"  Incident       : {INCIDENT_ID}  (status: COLLECTION_COMPLETE)")
+    print(f"  Devices        : {len(HOSTS)} incident hosts + {len(EXTRA_DEVICES)} extra online")
+    print(f"  Collectors     : {len(MOCK_COLLECTORS)} online")
+    print(f"  Evidence files : {total_evidence_files} across {len(EVIDENCE_FOLDERS)} folders")
+    print(f"  Timeline events: {total_events}")
+    print("=" * 60)
+    print()
+    print("Demo flow:")
+    print("  1. Open Dashboard → incident INC-MOCK-SUPERTL should appear")
+    print("  2. Click the incident row → IncidentHub")
+    print("  3. Click SUPER TIMELINE → cross-host forensic view")
+    print("  4. Check Devices page → 7 online devices total")
 
 
 if __name__ == "__main__":

@@ -333,7 +333,10 @@ async def update_incident_endpoint(
     return IncidentOut.model_validate(incident)
 
 
-@router.get("/{incident_id}/report")
+@router.get(
+    "/{incident_id}/report",
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
 async def get_incident_report(
     incident_id: str,
     db: AsyncSession = Depends(get_db),
@@ -344,7 +347,12 @@ async def get_incident_report(
         html_content = await generate_incident_report(incident_id, db)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return Response(content=html_content, media_type="text/html")
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in incident_id)
+    return Response(
+        content=html_content,
+        media_type="text/html",
+        headers={"Content-Disposition": f'attachment; filename="report_{safe_id}.html"'},
+    )
 
 
 @router.delete(

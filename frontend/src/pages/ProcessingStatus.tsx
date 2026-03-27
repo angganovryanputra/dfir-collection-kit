@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { KeyValueRow } from "@/components/common/KeyValueRow";
 import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug, Layers } from "lucide-react";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet } from "@/lib/api";
 
 interface ProcessingJobOut {
     id: string;
@@ -251,26 +251,12 @@ export default function ProcessingStatus() {
                                 DOWNLOAD TIMELINE.JSONL
                             </Button>
                             <Button
-                                variant="ghost"
+                                variant="outline"
                                 className="col-span-2"
-                                disabled={!incidentId}
-                                onClick={async () => {
-                                    if (!incidentId) return;
-                                    try {
-                                        const blob = await apiPost<Blob>(`/incidents/${encodeURIComponent(incidentId)}/report`, {});
-                                        const url = window.URL.createObjectURL(blob);
-                                        const a = document.createElement("a");
-                                        a.href = url;
-                                        a.download = `report_${incidentId}.html`;
-                                        document.body.appendChild(a);
-                                        a.click();
-                                        a.remove();
-                                        window.URL.revokeObjectURL(url);
-                                    } catch { /* ignore */ }
-                                }}
+                                onClick={() => navigate(`/incidents/${incidentId}/report`)}
                             >
                                 <FileText className="w-4 h-4 mr-2" />
-                                GENERATE HTML REPORT
+                                VIEW REPORT
                             </Button>
                         </div>
                     </TacticalPanel>

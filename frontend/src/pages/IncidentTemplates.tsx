@@ -175,17 +175,8 @@ export default function IncidentTemplates() {
     }
   };
 
-  const allowedModules = ["MEMORY", "DISK", "LOGS", "NETWORK", "REGISTRY", "BROWSER"];
-  const legacyModules = editingTemplate
-    ? editingTemplate.preflightChecklist.map((item) => item.trim().toUpperCase())
-    : [];
-  const allowedModuleSet = new Set([...allowedModules, ...legacyModules]);
-
   const sanitizeChecklist = (items: string[]) =>
-    items
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0)
-      .filter((item) => allowedModuleSet.has(item.toUpperCase()));
+    items.map((item) => item.trim()).filter((item) => item.length > 0);
 
   const removeEndpoint = (endpoint: string) => {
     if (isViewer) return;
@@ -304,11 +295,6 @@ export default function IncidentTemplates() {
 
   const isFormValid = formData.name.trim() && formData.incidentType;
 
-  const moduleHint = formData.preflightChecklist
-    .filter((item) => item.trim().length > 0)
-    .some((item) => !allowedModuleSet.has(item.trim().toUpperCase()))
-    ? "Only approved module names are saved."
-    : null;
 
   return (
     <AppLayout
@@ -327,13 +313,6 @@ export default function IncidentTemplates() {
             {errorMessage}
           </div>
         )}
-        <div className="mb-3 font-mono text-[10px] text-muted-foreground">
-          APPROVED MODULES: {allowedModules.join(" • ")}
-          {legacyModules.length > 0
-            ? ` • LEGACY MODULES: ${legacyModules.join(" • ")}`
-            : ""}
-          {moduleHint ? ` · ${moduleHint}` : ""}
-        </div>
         {/* Templates Table */}
         <TacticalPanel 
           title="AVAILABLE TEMPLATES" 

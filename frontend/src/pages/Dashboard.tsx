@@ -14,6 +14,7 @@ import {
   HardDrive,
   AlertTriangle,
   ArrowUpRight,
+  CheckCircle2,
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
 import { apiGet } from "@/lib/api";
@@ -143,6 +144,12 @@ export default function Dashboard() {
 
   const activeIncidents = incidents.filter((i) => i.status !== "CLOSED").length;
   const onlineCollectors = collectors.filter((c) => c.status !== "OFFLINE").length;
+  const statusBreakdown = {
+    active: incidents.filter((i) => i.status === "ACTIVE" || i.status === "PENDING").length,
+    collecting: incidents.filter((i) => i.status === "COLLECTION_IN_PROGRESS").length,
+    complete: incidents.filter((i) => i.status === "COLLECTION_COMPLETE").length,
+    closed: incidents.filter((i) => i.status === "CLOSED").length,
+  };
   const hasActiveCollection = incidents.some((i) => i.status === "COLLECTION_IN_PROGRESS");
   const totalEvidenceFiles = evidenceFolders.reduce((total, folder) => total + folder.files_count, 0);
   const offlineCollectors = collectors.filter((c) => c.status === "OFFLINE").length;
@@ -187,18 +194,9 @@ export default function Dashboard() {
     }
   };
 
+  // All incidents route to the IncidentHub — the hub decides the right state view.
   const handleIncidentClick = (incident: Incident) => {
-    if (incident.status === "COLLECTION_IN_PROGRESS") {
-      navigate(`/incidents/${incident.id}/collect`);
-    } else if (incident.status === "COLLECTION_COMPLETE" || incident.status === "CLOSED") {
-      navigate(`/evidence/${incident.id}`);
-    } else if (incident.status === "COLLECTION_FAILED") {
-      // Failed — go to evidence vault so user can inspect logs and retry
-      navigate(`/evidence/${incident.id}`);
-    } else {
-      // PENDING or ACTIVE — open the module selector
-      navigate(`/incidents/${incident.id}/setup`);
-    }
+    navigate(`/incidents/${incident.id}`);
   };
 
   return (
@@ -255,6 +253,35 @@ export default function Dashboard() {
             />
         </div>
 
+        {/* Incident status breakdown */}
+        {incidents.length > 0 && (
+          <div className="flex items-center gap-3 mb-6 flex-wrap">
+            <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">STATUS BREAKDOWN</span>
+            {statusBreakdown.collecting > 0 && (
+              <span className="flex items-center gap-1.5 px-2.5 py-1 border border-primary/40 bg-primary/10 font-mono text-xs text-primary rounded-sm animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                {statusBreakdown.collecting} COLLECTING
+              </span>
+            )}
+            {statusBreakdown.active > 0 && (
+              <span className="flex items-center gap-1.5 px-2.5 py-1 border border-yellow-500/40 bg-yellow-500/10 font-mono text-xs text-yellow-400 rounded-sm">
+                {statusBreakdown.active} ACTIVE
+              </span>
+            )}
+            {statusBreakdown.complete > 0 && (
+              <span className="flex items-center gap-1.5 px-2.5 py-1 border border-green-500/40 bg-green-500/10 font-mono text-xs text-green-400 rounded-sm">
+                <CheckCircle2 className="w-3 h-3" />
+                {statusBreakdown.complete} ANALYSIS READY
+              </span>
+            )}
+            {statusBreakdown.closed > 0 && (
+              <span className="px-2.5 py-1 border border-border/40 bg-secondary/30 font-mono text-xs text-muted-foreground rounded-sm">
+                {statusBreakdown.closed} CLOSED
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-12 gap-6">
           {/* Main Content - Incidents */}
           <div className="col-span-8 space-y-6">
@@ -273,39 +300,54 @@ export default function Dashboard() {
                     No incidents available.
                   </div>
                 ) : (
-                  paginatedIncidents.map((incident) => (
-                    <div
-                      key={incident.id}
-                      className="border border-border bg-secondary/30 p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all cursor-pointer group"
-                      onClick={() => handleIncidentClick(incident)}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-3">
-                            <span className="font-mono text-sm font-bold text-foreground">
-                              {incident.id}
-                            </span>
-                            <span className="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary border border-primary/30">
-                              {incident.type.replace(/_/g, " ")}
-                            </span>
+                  paginatedIncidents.map((incident) => {
+                    const isCollectionDone =
+                      incident.status === "COLLECTION_COMPLETE" || incident.status === "CLOSED";
+                    const isCollecting = incident.status === "COLLECTION_IN_PROGRESS";
+                    return (
+                      <div
+                        key={incident.id}
+                        className="border border-border bg-secondary/30 p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all cursor-pointer group"
+                        onClick={() => handleIncidentClick(incident)}
+                      >
+                        <div className="flex items-start justify-between gap-4">
+                          <div className="space-y-2 flex-1 min-w-0">
+                            <div className="flex items-center gap-3 flex-wrap">
+                              <span className="font-mono text-sm font-bold text-foreground">
+                                {incident.id}
+                              </span>
+                              <span className="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary border border-primary/30">
+                                {incident.type.replace(/_/g, " ")}
+                              </span>
+                              {/* Status badge for collection-complete incidents */}
+                              {isCollectionDone && (
+                                <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 border border-green-500/30 bg-green-500/10 text-green-400 rounded-sm">
+                                  <CheckCircle2 className="w-2.5 h-2.5" />
+                                  ANALYSIS READY
+                                </span>
+                              )}
+                              {isCollecting && (
+                                <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 border border-primary/30 bg-primary/10 text-primary rounded-sm animate-pulse">
+                                  COLLECTING…
+                                </span>
+                              )}
+                            </div>
+                            <div className="font-mono text-xs text-muted-foreground space-y-1">
+                              <div>TARGETS: {incident.targetEndpoints.slice(0, 4).join(", ")}{incident.targetEndpoints.length > 4 ? ` +${incident.targetEndpoints.length - 4}` : ""}</div>
+                              <div>OPERATOR: {incident.operator}</div>
+                            </div>
                           </div>
-                          <div className="font-mono text-xs text-muted-foreground space-y-1">
-                            <div>TARGETS: {incident.targetEndpoints.join(", ")}</div>
-                            <div>OPERATOR: {incident.operator}</div>
-                          </div>
-                        </div>
-                        <div className="text-right space-y-2">
-                          {getIncidentStatusIndicator(incident.status)}
-                          <div className="font-mono text-xs text-muted-foreground">
-                            {new Date(incident.updatedAt).toLocaleTimeString()}
-                          </div>
-                          {incident.status === "COLLECTION_IN_PROGRESS" && (
+                          <div className="text-right space-y-2 shrink-0">
+                            {getIncidentStatusIndicator(incident.status)}
+                            <div className="font-mono text-xs text-muted-foreground">
+                              {new Date(incident.updatedAt).toLocaleString()}
+                            </div>
                             <ArrowUpRight className="w-4 h-4 text-primary opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
-                          )}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
               <TablePagination

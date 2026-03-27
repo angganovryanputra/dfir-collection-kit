@@ -67,6 +67,8 @@ services:
       SIGMA_RULES_DIR: ${SIGMA_RULES_DIR:-/opt/chainsaw/rules/}
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
+      # Set to true in .env to auto-seed demo data on startup (for feature testing only)
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:

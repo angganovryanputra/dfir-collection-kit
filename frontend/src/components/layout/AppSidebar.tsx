@@ -33,6 +33,7 @@ const mainNavItems: NavItem[] = [
 ];
 
 const systemNavItems: NavItem[] = [
+  { label: "COLLECTORS", icon: Server, path: "/collectors" },
   { label: "DEVICES", icon: Monitor, path: "/devices" },
   { label: "TEMPLATES", icon: FileStack, path: "/incident-templates" },
   { label: "ADMIN SETTINGS", icon: Settings, path: "/admin/settings" },
@@ -65,9 +66,10 @@ export function AppSidebar({
       return null;
     }
   })();
+  const adminOnlyPaths = ["/admin/settings"];
   const visibleSystemNavItems = authRole === "admin"
     ? systemNavItems
-    : systemNavItems.filter((item) => item.path !== "/admin/settings");
+    : systemNavItems.filter((item) => !adminOnlyPaths.includes(item.path));
 
   const handleLogout = () => {
     void apiPost("/auth/logout", {}).catch(() => {

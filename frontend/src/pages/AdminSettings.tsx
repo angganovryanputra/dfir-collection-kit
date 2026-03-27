@@ -36,6 +36,11 @@ import {
   CheckCircle2,
   XCircle,
   CircleDashed,
+  Key,
+  Eye,
+  EyeOff,
+  Download,
+  Calendar,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 
@@ -145,6 +150,17 @@ interface IOCIndicator {
 
 type TabType = "users" | "collectors" | "system" | "audit" | "threatintel";
 
+function pwStrength(pw: string): 0 | 1 | 2 | 3 {
+  if (!pw) return 0;
+  let s = 0;
+  if (pw.length >= 8) s++;
+  if (pw.length >= 12) s++;
+  if (/[A-Z]/.test(pw) && /[0-9]/.test(pw)) s++;
+  return Math.min(3, s) as 0 | 1 | 2 | 3;
+}
+const PW_LABEL = ["", "WEAK", "MEDIUM", "STRONG"];
+const PW_COLOR = ["", "bg-destructive", "bg-yellow-500", "bg-green-500"];
+
 export default function AdminSettings() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<TabType>("users");
@@ -161,7 +177,17 @@ export default function AdminSettings() {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [editUserRole, setEditUserRole] = useState<User["role"]>("operator");
   const [editUserStatus, setEditUserStatus] = useState<User["status"]>("active");
+  const [editUserPassword, setEditUserPassword] = useState("");
+  const [showEditPassword, setShowEditPassword] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [showNewPassword, setShowNewPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const selfUsername: string = (() => {
+    try {
+      return (JSON.parse(localStorage.getItem("dfir_auth") ?? "{}") as { username?: string }).username ?? "";
+    } catch { return ""; }
+  })();
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isSavingUser, setIsSavingUser] = useState(false);
   const [isRefreshingCollectors, setIsRefreshingCollectors] = useState(false);
@@ -169,6 +195,10 @@ export default function AdminSettings() {
   const [auditEventType, setAuditEventType] = useState("");
   const [auditActorId, setAuditActorId] = useState("");
   const [auditTargetId, setAuditTargetId] = useState("");
+  const [auditDateFrom, setAuditDateFrom] = useState("");
+  const [auditDateTo, setAuditDateTo] = useState("");
+  const [auditStatusFilter, setAuditStatusFilter] = useState<"all" | "success" | "failure">("all");
+  const [auditExpandedId, setAuditExpandedId] = useState<string | null>(null);
   const [auditTotal, setAuditTotal] = useState(0);
   const [auditPage, setAuditPage] = useState(1);
   const [auditItemsPerPage, setAuditItemsPerPage] = useState(25);
@@ -231,16 +261,23 @@ export default function AdminSettings() {
     ]);
   };
 
+  const buildAuditParams = (extra?: { limit?: number; offset?: number }) => {
+    const params = new URLSearchParams();
+    params.set("limit", String(extra?.limit ?? auditItemsPerPage));
+    params.set("offset", String(extra?.offset ?? (auditPage - 1) * auditItemsPerPage));
+    if (auditEventType.trim()) params.set("event_type", auditEventType.trim());
+    if (auditActorId.trim()) params.set("actor_id", auditActorId.trim());
+    if (auditTargetId.trim()) params.set("target_id", auditTargetId.trim());
+    if (auditDateFrom) params.set("date_from", auditDateFrom);
+    if (auditDateTo) params.set("date_to", auditDateTo);
+    if (auditStatusFilter !== "all") params.set("status", auditStatusFilter);
+    return params;
+  };
+
   const loadAuditLogs = async () => {
     setErrorMessage(null);
     try {
-      const params = new URLSearchParams();
-      params.set("limit", String(auditItemsPerPage));
-      params.set("offset", String((auditPage - 1) * auditItemsPerPage));
-      if (auditEventType.trim()) params.set("event_type", auditEventType.trim());
-      if (auditActorId.trim()) params.set("actor_id", auditActorId.trim());
-      if (auditTargetId.trim()) params.set("target_id", auditTargetId.trim());
-      const response = await apiGet<AuditLogListResponse>(`/audit-logs?${params.toString()}`);
+      const response = await apiGet<AuditLogListResponse>(`/audit-logs?${buildAuditParams().toString()}`);
       setAuditLogs(response.entries);
       setAuditTotal(response.total);
     } catch {
@@ -248,10 +285,30 @@ export default function AdminSettings() {
     }
   };
 
+  const exportAuditLogs = async () => {
+    try {
+      const params = buildAuditParams({ limit: 10000, offset: 0 });
+      const response = await apiGet<AuditLogListResponse>(`/audit-logs?${params.toString()}`);
+      const header = "timestamp,event_type,actor_id,action,target_type,target_id,status,message,source\n";
+      const rows = response.entries.map((e) =>
+        [e.timestamp, e.event_type, e.actor_id, e.action, e.target_type ?? "", e.target_id ?? "", e.status, `"${e.message.replace(/"/g, '""')}"`, e.source].join(",")
+      ).join("\n");
+      const blob = new Blob([header + rows], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      setErrorMessage("Unable to export audit log.");
+    }
+  };
+
   useEffect(() => {
     if (activeTab !== "audit") return;
     loadAuditLogs();
-  }, [activeTab, auditPage, auditItemsPerPage, auditEventType, auditActorId, auditTargetId]);
+  }, [activeTab, auditPage, auditItemsPerPage, auditEventType, auditActorId, auditTargetId, auditDateFrom, auditDateTo, auditStatusFilter]);
 
   const loadIOCIndicators = async () => {
     setErrorMessage(null);
@@ -384,6 +441,11 @@ export default function AdminSettings() {
   };
 
   const handleDeleteUser = async (id: string) => {
+    if (confirmDeleteId !== id) {
+      setConfirmDeleteId(id);
+      return;
+    }
+    setConfirmDeleteId(null);
     try {
       await apiDelete(`/users/${id}`);
       setUsers(users.filter((u) => u.id !== id));
@@ -413,6 +475,8 @@ export default function AdminSettings() {
     setEditingUser(user);
     setEditUserRole(user.role);
     setEditUserStatus(user.status);
+    setEditUserPassword("");
+    setShowEditPassword(false);
     setIsEditUserOpen(true);
   };
 
@@ -435,14 +499,14 @@ export default function AdminSettings() {
     setIsSavingUser(true);
     setErrorMessage(null);
     try {
-      const updated = await apiPatch<UserResponse>(`/users/${editingUser.id}`, {
-        role: editUserRole,
-        status: editUserStatus,
-      });
+      const payload: Record<string, unknown> = { role: editUserRole, status: editUserStatus };
+      if (editUserPassword.trim()) payload.password = editUserPassword.trim();
+      const updated = await apiPatch<UserResponse>(`/users/${editingUser.id}`, payload);
       const mapped = mapUser(updated);
       setUsers(users.map((user) => (user.id === mapped.id ? mapped : user)));
       setIsEditUserOpen(false);
       setEditingUser(null);
+      setEditUserPassword("");
     } catch {
       setErrorMessage("Unable to update user.");
     } finally {
@@ -548,13 +612,18 @@ export default function AdminSettings() {
                         No users available.
                       </div>
                     ) : (
-                      paginatedUsers.map((user) => (
+                      paginatedUsers.map((user) => {
+                        const isSelf = user.username === selfUsername;
+                        return (
                         <div
                           key={user.id}
                           className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors items-center"
                         >
-                          <div className="col-span-3 font-mono text-sm font-bold">
+                          <div className="col-span-3 font-mono text-sm font-bold flex items-center gap-2">
                             {user.username}
+                            {isSelf && (
+                              <span className="font-mono text-[10px] text-primary border border-primary/30 px-1">YOU</span>
+                            )}
                           </div>
                           <div className="col-span-2">
                             <span
@@ -573,11 +642,11 @@ export default function AdminSettings() {
                               ? "-"
                               : new Date(user.lastLogin).toLocaleDateString()}
                           </div>
-                          <div className="col-span-3 flex items-center gap-2">
+                          <div className="col-span-3 flex items-center gap-1">
                             <Button
                               variant="ghost"
                               size="sm"
-                              title="Edit User"
+                              title="Edit / Reset Password"
                               onClick={() => openEditUserDialog(user)}
                             >
                               <Edit2 className="w-3 h-3" />
@@ -585,30 +654,44 @@ export default function AdminSettings() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleToggleUserStatus(user.id)}
+                              disabled={isSelf}
+                              onClick={() => !isSelf && handleToggleUserStatus(user.id)}
                               title={user.status === "active" ? "Lock User" : "Unlock User"}
+                              className={isSelf ? "opacity-30" : ""}
                             >
                               <Power
                                 className={`w-3 h-3 ${
-                                  user.status === "active"
-                                    ? "text-primary"
-                                    : "text-warning"
+                                  user.status === "active" ? "text-primary" : "text-warning"
                                 }`}
                               />
                             </Button>
-                            {user.role !== "admin" && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={isSelf}
+                              onClick={() => !isSelf && handleDeleteUser(user.id)}
+                              title={confirmDeleteId === user.id ? "Click again to confirm deletion" : "Delete User"}
+                              className={`transition-colors ${confirmDeleteId === user.id ? "text-destructive bg-destructive/10" : ""} ${isSelf ? "opacity-30" : ""}`}
+                            >
+                              {confirmDeleteId === user.id
+                                ? <span className="font-mono text-[10px]">CONFIRM?</span>
+                                : <Trash2 className="w-3 h-3 text-muted-foreground" />
+                              }
+                            </Button>
+                            {confirmDeleteId === user.id && (
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => handleDeleteUser(user.id)}
-                                title="Delete User"
+                                onClick={() => setConfirmDeleteId(null)}
+                                className="font-mono text-[10px] text-muted-foreground"
                               >
-                                <Trash2 className="w-3 h-3 text-destructive" />
+                                ✕
                               </Button>
                             )}
                           </div>
                         </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                   <TablePagination
@@ -1043,42 +1126,79 @@ export default function AdminSettings() {
                   <h2 className="font-mono text-sm font-bold uppercase tracking-wider text-foreground">
                     Audit Log Entries ({auditTotal})
                   </h2>
-                  <Button variant="secondary" onClick={loadAuditLogs}>
-                    <RefreshCw className="w-4 h-4 mr-2" />
-                    REFRESH
-                  </Button>
+                  <div className="flex items-center gap-2">
+                    <Button variant="secondary" size="sm" onClick={() => void exportAuditLogs()}>
+                      <Download className="w-4 h-4 mr-2" />
+                      EXPORT CSV
+                    </Button>
+                    <Button variant="secondary" size="sm" onClick={() => void loadAuditLogs()}>
+                      <RefreshCw className="w-4 h-4 mr-2" />
+                      REFRESH
+                    </Button>
+                  </div>
                 </div>
 
-                <div className="grid grid-cols-12 gap-4">
-                  <div className="col-span-4">
-                    <SearchInput
-                      value={auditEventType}
-                      onChange={(event) => {
-                        setAuditEventType(event.target.value);
-                        setAuditPage(1);
-                      }}
-                      placeholder="Filter event_type..."
+                {/* Filter row 1: text filters */}
+                <div className="grid grid-cols-3 gap-3">
+                  <SearchInput
+                    value={auditEventType}
+                    onChange={(event) => { setAuditEventType(event.target.value); setAuditPage(1); }}
+                    placeholder="Filter event_type…"
+                  />
+                  <SearchInput
+                    value={auditActorId}
+                    onChange={(event) => { setAuditActorId(event.target.value); setAuditPage(1); }}
+                    placeholder="Filter actor…"
+                  />
+                  <SearchInput
+                    value={auditTargetId}
+                    onChange={(event) => { setAuditTargetId(event.target.value); setAuditPage(1); }}
+                    placeholder="Filter target…"
+                  />
+                </div>
+
+                {/* Filter row 2: date range + status chips */}
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <Calendar className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                    <input
+                      type="date"
+                      value={auditDateFrom}
+                      onChange={(e) => { setAuditDateFrom(e.target.value); setAuditPage(1); }}
+                      className="h-8 px-2 bg-secondary border border-border font-mono text-xs text-foreground focus:outline-none focus:border-primary"
                     />
+                    <span className="font-mono text-xs text-muted-foreground">to</span>
+                    <input
+                      type="date"
+                      value={auditDateTo}
+                      onChange={(e) => { setAuditDateTo(e.target.value); setAuditPage(1); }}
+                      className="h-8 px-2 bg-secondary border border-border font-mono text-xs text-foreground focus:outline-none focus:border-primary"
+                    />
+                    {(auditDateFrom || auditDateTo) && (
+                      <button
+                        onClick={() => { setAuditDateFrom(""); setAuditDateTo(""); setAuditPage(1); }}
+                        className="font-mono text-[10px] text-muted-foreground hover:text-foreground px-1"
+                      >
+                        CLEAR
+                      </button>
+                    )}
                   </div>
-                  <div className="col-span-4">
-                    <SearchInput
-                      value={auditActorId}
-                      onChange={(event) => {
-                        setAuditActorId(event.target.value);
-                        setAuditPage(1);
-                      }}
-                      placeholder="Filter actor_id..."
-                    />
-                  </div>
-                  <div className="col-span-4">
-                    <SearchInput
-                      value={auditTargetId}
-                      onChange={(event) => {
-                        setAuditTargetId(event.target.value);
-                        setAuditPage(1);
-                      }}
-                      placeholder="Filter target_id..."
-                    />
+                  <div className="flex items-center gap-1 ml-auto">
+                    {(["all", "success", "failure"] as const).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => { setAuditStatusFilter(s); setAuditPage(1); }}
+                        className={`px-3 py-1 border font-mono text-[10px] uppercase transition-colors ${
+                          auditStatusFilter === s
+                            ? s === "success" ? "border-green-500/50 bg-green-500/15 text-green-400"
+                              : s === "failure" ? "border-red-500/50 bg-red-500/15 text-red-400"
+                              : "border-primary/50 bg-primary/10 text-primary"
+                            : "border-border/50 bg-secondary/30 text-muted-foreground hover:border-primary/30"
+                        }`}
+                      >
+                        {s}
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -1093,45 +1213,77 @@ export default function AdminSettings() {
                   }
                 >
                   <div className="flex-1 overflow-auto">
-                    <TableHeaderRow className="grid grid-cols-12 gap-4 sticky top-0 bg-card">
-                      <div className="col-span-3">Timestamp</div>
+                    <TableHeaderRow className="grid grid-cols-12 gap-3 sticky top-0 bg-card">
+                      <div className="col-span-2">Timestamp</div>
                       <div className="col-span-2">Event</div>
                       <div className="col-span-2">Actor</div>
                       <div className="col-span-2">Action</div>
                       <div className="col-span-2">Target</div>
                       <div className="col-span-1">Status</div>
+                      <div className="col-span-1"></div>
                     </TableHeaderRow>
 
-                    {auditLogs.map((entry) => (
-                      <div
-                        key={entry.id}
-                        className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors"
-                      >
-                        <div className="col-span-3 font-mono text-xs text-muted-foreground">
-                          <div>{new Date(entry.timestamp).toLocaleDateString()}</div>
-                          <div className="text-[10px]">
-                            {new Date(entry.timestamp).toLocaleTimeString("en-US", {
-                              hour12: false,
-                            })}
-                          </div>
-                        </div>
-                        <div className="col-span-2 font-mono text-xs text-primary">
-                          {entry.event_type}
-                        </div>
-                        <div className="col-span-2 font-mono text-xs">
-                          {entry.actor_id}
-                        </div>
-                        <div className="col-span-2 font-mono text-xs text-muted-foreground">
-                          {entry.action}
-                        </div>
-                        <div className="col-span-2 font-mono text-xs text-muted-foreground">
-                          {entry.target_id ?? "-"}
-                        </div>
-                        <div className="col-span-1 font-mono text-xs uppercase text-muted-foreground">
-                          {entry.status}
-                        </div>
+                    {auditLogs.length === 0 ? (
+                      <div className="py-10 text-center font-mono text-xs text-muted-foreground">
+                        No audit log entries match the current filters.
                       </div>
-                    ))}
+                    ) : auditLogs.map((entry) => {
+                      const isExpanded = auditExpandedId === entry.id;
+                      const statusClass = entry.status === "success"
+                        ? "text-green-400 border-green-400/30 bg-green-400/10"
+                        : entry.status === "failure"
+                          ? "text-red-400 border-red-400/30 bg-red-400/10"
+                          : "text-muted-foreground border-border bg-secondary";
+                      return (
+                        <div key={entry.id}>
+                          <div
+                            className="grid grid-cols-12 gap-3 px-4 py-3 border-b border-border/50 hover:bg-secondary/20 transition-colors cursor-pointer"
+                            onClick={() => setAuditExpandedId(isExpanded ? null : entry.id)}
+                          >
+                            <div className="col-span-2 font-mono text-xs text-muted-foreground">
+                              <div>{new Date(entry.timestamp).toLocaleDateString()}</div>
+                              <div className="text-[10px]">
+                                {new Date(entry.timestamp).toLocaleTimeString("en-US", { hour12: false })}
+                              </div>
+                            </div>
+                            <div className="col-span-2 font-mono text-xs text-primary truncate">
+                              {entry.event_type}
+                            </div>
+                            <div className="col-span-2 font-mono text-xs font-medium truncate">
+                              {entry.actor_id}
+                            </div>
+                            <div className="col-span-2 font-mono text-xs text-muted-foreground truncate">
+                              {entry.action}
+                            </div>
+                            <div className="col-span-2 font-mono text-xs text-muted-foreground truncate">
+                              {entry.target_id ?? "—"}
+                            </div>
+                            <div className="col-span-1">
+                              <span className={`px-1.5 py-0.5 border font-mono text-[10px] uppercase rounded-sm ${statusClass}`}>
+                                {entry.status}
+                              </span>
+                            </div>
+                            <div className="col-span-1 text-right font-mono text-[10px] text-muted-foreground">
+                              {isExpanded ? "▲" : "▼"}
+                            </div>
+                          </div>
+                          {isExpanded && (
+                            <div className="px-4 py-3 border-b border-primary/20 bg-primary/[0.03] space-y-2">
+                              <div className="grid grid-cols-2 gap-x-6 gap-y-1 font-mono text-xs">
+                                <div><span className="text-muted-foreground">SOURCE:</span> <span className="text-foreground">{entry.source}</span></div>
+                                <div><span className="text-muted-foreground">ACTOR TYPE:</span> <span className="text-foreground">{entry.actor_type}</span></div>
+                                <div><span className="text-muted-foreground">TARGET TYPE:</span> <span className="text-foreground">{entry.target_type ?? "—"}</span></div>
+                                <div><span className="text-muted-foreground">EVENT ID:</span> <span className="text-foreground">{entry.event_id}</span></div>
+                              </div>
+                              <div className="font-mono text-xs">
+                                <span className="text-muted-foreground">MESSAGE: </span>
+                                <span className="text-foreground">{entry.message}</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
 
                   <TablePagination
@@ -1318,14 +1470,37 @@ export default function AdminSettings() {
             </div>
             <div className="space-y-2">
               <FormLabel className="text-muted-foreground uppercase">Password</FormLabel>
-              <Input
-                type="password"
-                value={newUser.password}
-                onChange={(event) =>
-                  setNewUser({ ...newUser, password: event.target.value })
-                }
-                placeholder="Enter password"
-              />
+              <div className="relative">
+                <Input
+                  type={showNewPassword ? "text" : "password"}
+                  value={newUser.password}
+                  onChange={(event) =>
+                    setNewUser({ ...newUser, password: event.target.value })
+                  }
+                  placeholder="Min 8 characters"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNewPassword((v) => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showNewPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              {newUser.password && (() => {
+                const s = pwStrength(newUser.password);
+                return (
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-1 bg-secondary rounded-full overflow-hidden">
+                      <div className={`h-full rounded-full transition-all ${PW_COLOR[s]}`} style={{ width: `${(s / 3) * 100}%` }} />
+                    </div>
+                    <span className={`font-mono text-[10px] ${s === 3 ? "text-green-400" : s === 2 ? "text-yellow-400" : "text-destructive"}`}>
+                      {PW_LABEL[s]}
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
             <div className="space-y-2">
               <FormLabel className="text-muted-foreground uppercase">Role</FormLabel>
@@ -1415,6 +1590,42 @@ export default function AdminSettings() {
                     </button>
                   ))}
                 </div>
+              </div>
+              <div className="space-y-2">
+                <FormLabel className="text-muted-foreground uppercase flex items-center gap-2">
+                  <Key className="w-3.5 h-3.5" />
+                  Reset Password
+                  <span className="text-[10px] text-muted-foreground font-normal normal-case">(leave blank to keep unchanged)</span>
+                </FormLabel>
+                <div className="relative">
+                  <Input
+                    type={showEditPassword ? "text" : "password"}
+                    value={editUserPassword}
+                    onChange={(e) => setEditUserPassword(e.target.value)}
+                    placeholder="New password…"
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPassword((v) => !v)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showEditPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                {editUserPassword && (() => {
+                  const s = pwStrength(editUserPassword);
+                  return (
+                    <div className="flex items-center gap-2">
+                      <div className="flex-1 h-1 bg-secondary rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full transition-all ${PW_COLOR[s]}`} style={{ width: `${(s / 3) * 100}%` }} />
+                      </div>
+                      <span className={`font-mono text-[10px] ${s === 3 ? "text-green-400" : s === 2 ? "text-yellow-400" : "text-destructive"}`}>
+                        {PW_LABEL[s]}
+                      </span>
+                    </div>
+                  );
+                })()}
               </div>
               <div className="flex gap-3 pt-4 border-t border-border">
                 <Button

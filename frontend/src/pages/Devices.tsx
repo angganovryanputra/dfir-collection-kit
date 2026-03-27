@@ -110,6 +110,7 @@ export default function Devices() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   const [isSavingDevice, setIsSavingDevice] = useState(false);
+  const [confirmToggleId, setConfirmToggleId] = useState<string | null>(null);
   const [newDevice, setNewDevice] = useState({
     hostname: "",
     ipAddress: "",
@@ -268,6 +269,11 @@ export default function Devices() {
       setErrorMessage("Only admin accounts can update devices.");
       return;
     }
+    if (confirmToggleId !== device.id) {
+      setConfirmToggleId(device.id);
+      return;
+    }
+    setConfirmToggleId(null);
     const nextStatus = device.status === "online" ? "offline" : "online";
     try {
       const response = await apiPatch<DeviceResponse>(`/devices/${device.id}`, {
@@ -466,17 +472,38 @@ export default function Devices() {
                     <Button variant="ghost" size="sm" title="Configure" disabled={!isAdmin}>
                       <Settings className="w-3 h-3" />
                     </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      title="Toggle Status"
-                      onClick={() => toggleDeviceStatus(device)}
-                      disabled={!isAdmin}
-                    >
-                      <Power
-                        className={`w-3 h-3 ${device.status === "online" ? "text-primary" : "text-muted-foreground"}`}
-                      />
-                    </Button>
+                    {confirmToggleId === device.id ? (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-destructive hover:text-destructive font-mono text-[10px] px-1.5"
+                          onClick={() => void toggleDeviceStatus(device)}
+                        >
+                          CONFIRM
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="font-mono text-[10px] px-1.5"
+                          onClick={() => setConfirmToggleId(null)}
+                        >
+                          CANCEL
+                        </Button>
+                      </>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title="Toggle Status"
+                        onClick={() => void toggleDeviceStatus(device)}
+                        disabled={!isAdmin}
+                      >
+                        <Power
+                          className={`w-3 h-3 ${device.status === "online" ? "text-primary" : "text-muted-foreground"}`}
+                        />
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"

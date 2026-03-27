@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 from sqlalchemy import select
 
@@ -20,13 +21,18 @@ async def init_db() -> None:
                 if result.scalar_one_or_none() is None:
                     await seed_data(session)
                     await session.commit()
-            return
+            break
         except Exception as exc:
             last_error = exc
             await asyncio.sleep(2)
+    else:
+        if last_error:
+            raise last_error
 
-    if last_error:
-        raise last_error
+    if os.environ.get("SEED_DEMO_DATA", "").lower() == "true":
+        from app.seed_demo import seed_all
+        print("[seed_run] SEED_DEMO_DATA=true — seeding demo data …")
+        await seed_all()
 
 
 if __name__ == "__main__":

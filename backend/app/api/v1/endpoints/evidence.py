@@ -9,7 +9,7 @@ import zipfile
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.system_settings_service import get_runtime_settings
@@ -656,12 +656,23 @@ def _query_jsonl_fallback(jsonl_path: Path, q: str, page: int, limit: int) -> Ti
 
 # ── Super Timeline ─────────────────────────────────────────────────────────────
 
+# Whitelist of sortable columns — maps frontend key to DuckDB column expression.
+# Only these keys are accepted to prevent SQL injection via sort_by.
+_VALID_SORT_COLS: dict[str, str] = {
+    "datetime":  "event_dt",
+    "host":      "host",
+    "source":    "source_short",
+    "type":      "timestamp_desc",
+    "message":   "message",
+}
+
 
 class SuperTimelineResponse(BaseModel):
     data: list[dict]
     total: int
     page: int
     limit: int
+    total_pages: int
     hosts: list[str]
     source_shorts: list[str]  # distinct source_short values for filter UI
 
@@ -676,6 +687,11 @@ async def get_super_timeline_data(
     source: str = Query(default="", description="Comma-separated source_short filter (EVTX,MFT,SIGMA…)"),
     date_from: str = Query(default="", description="ISO-8601 start datetime filter"),
     date_to: str = Query(default="", description="ISO-8601 end datetime filter"),
+    sort_by: str = Query(default="datetime", description="Column to sort by (datetime|host|source|type|message)"),
+    sort_dir: str = Query(default="asc", description="Sort direction: asc or desc"),
+    user_filter: str = Query(default="", description="Comma-separated username filter (matches extra.user)"),
+    event_id_filter: str = Query(default="", description="Comma-separated event ID filter (matches extra.event_id)"),
+    rule_filter: str = Query(default="", description="Comma-separated Sigma rule name filter (matches extra.rule_name)"),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> SuperTimelineResponse:
@@ -702,6 +718,13 @@ async def get_super_timeline_data(
     host_filter = [h.strip() for h in hosts.split(",") if h.strip()] if hosts else []
     source_filter = [s.strip().upper() for s in source.split(",") if s.strip()] if source else []
 
+    safe_sort_by = sort_by if sort_by in _VALID_SORT_COLS else "datetime"
+    safe_sort_dir = "DESC" if sort_dir.lower() == "desc" else "ASC"
+
+    user_list = [u.strip() for u in user_filter.split(",") if u.strip()] if user_filter else []
+    eid_list  = [e.strip() for e in event_id_filter.split(",") if e.strip()] if event_id_filter else []
+    rule_list = [r.strip() for r in rule_filter.split(",") if r.strip()] if rule_filter else []
+
     return await asyncio.to_thread(
         functools.partial(
             _query_super_timeline_duckdb,
@@ -713,6 +736,11 @@ async def get_super_timeline_data(
             source_filter,
             date_from.strip(),
             date_to.strip(),
+            safe_sort_by,
+            safe_sort_dir,
+            user_list,
+            eid_list,
+            rule_list,
         )
     )
 
@@ -726,6 +754,11 @@ def _query_super_timeline_duckdb(
     source_filter: list[str],
     date_from: str,
     date_to: str,
+    sort_by: str = "datetime",
+    sort_dir: str = "ASC",
+    user_filter: list[str] | None = None,
+    event_id_filter: list[str] | None = None,
+    rule_filter: list[str] | None = None,
 ) -> SuperTimelineResponse:
     """Query the persistent super timeline DuckDB store.
 
@@ -789,18 +822,45 @@ def _query_super_timeline_duckdb(
             where_parts.append("event_dt <= ?")
             params.append(date_to)
 
+        # User filter — matches extra.user JSON field
+        if user_filter:
+            user_conditions = " OR ".join(
+                "LOWER(COALESCE(json_extract_string(extra, '$.user'), '')) LIKE ?"
+                for _ in user_filter
+            )
+            where_parts.append(f"({user_conditions})")
+            params.extend(f"%{u.lower().replace('*', '%')}%" for u in user_filter)
+
+        # Event ID filter — matches extra.event_id JSON field
+        if event_id_filter:
+            eid_placeholders = ", ".join("?" for _ in event_id_filter)
+            where_parts.append(
+                f"CAST(COALESCE(json_extract_string(extra, '$.event_id'), '') AS VARCHAR) IN ({eid_placeholders})"
+            )
+            params.extend(event_id_filter)
+
+        # Rule filter — matches extra.rule_name JSON field
+        if rule_filter:
+            rule_conditions = " OR ".join(
+                "LOWER(COALESCE(json_extract_string(extra, '$.rule_name'), '')) LIKE ?"
+                for _ in rule_filter
+            )
+            where_parts.append(f"({rule_conditions})")
+            params.extend(f"%{r.lower().replace('*', '%')}%" for r in rule_filter)
+
         where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
         total = con.execute(
             f"SELECT COUNT(*) FROM timeline_events {where_sql}", params
         ).fetchone()[0]
 
+        sort_col = _VALID_SORT_COLS.get(sort_by, "event_dt")
         rows = con.execute(
             f"""
             SELECT row_id, host, job_id, event_dt, message, timestamp_desc,
                    source, source_short, extra
             FROM timeline_events {where_sql}
-            ORDER BY event_dt ASC NULLS LAST, row_id ASC
+            ORDER BY {sort_col} {sort_dir} NULLS LAST, row_id ASC
             LIMIT ? OFFSET ?
             """,
             params + [limit, offset],
@@ -808,8 +868,9 @@ def _query_super_timeline_duckdb(
 
         results = []
         for row in rows:
-            _, host, job_id, event_dt, message, ts_desc, source_val, source_short, extra_json = row
+            row_id, host, job_id, event_dt, message, ts_desc, source_val, source_short, extra_json = row
             entry: dict = {
+                "event_seq": row_id,
                 "host": host,
                 "job_id": job_id,
                 "datetime": event_dt.isoformat() if event_dt else None,
@@ -817,23 +878,207 @@ def _query_super_timeline_duckdb(
                 "timestamp_desc": ts_desc,
                 "source": source_val,
                 "source_short": source_short,
+                # Promoted fields — filled from extra if present
+                "user": None,
+                "event_id": None,
+                "rule_name": None,
+                "display_name": None,
+                "inode": None,
+                "parser": None,
+                "tag": None,
             }
             if extra_json:
                 try:
-                    entry.update(
-                        _json.loads(extra_json) if isinstance(extra_json, str) else extra_json
-                    )
+                    extra = _json.loads(extra_json) if isinstance(extra_json, str) else extra_json
+                    entry.update(extra)
                 except Exception:
                     pass
             results.append(entry)
+
+        total_pages = (total + limit - 1) // limit if limit > 0 else 0
 
         return SuperTimelineResponse(
             data=results,
             total=total,
             page=page,
             limit=limit,
+            total_pages=total_pages,
             hosts=all_hosts,
             source_shorts=all_source_shorts,
         )
     finally:
         con.close()
+
+
+def _export_super_timeline_duckdb(
+    duckdb_path: Path,
+    fmt: str,
+    q: str,
+    host_filter: list[str],
+    source_filter: list[str],
+    date_from: str,
+    date_to: str,
+) -> tuple[bytes, str, str]:
+    """Export all matching super timeline rows as CSV or JSONL.
+
+    Returns (content_bytes, media_type, file_extension).
+    """
+    import csv
+    import io
+    import json as _json
+    import duckdb
+
+    con = duckdb.connect(str(duckdb_path), read_only=True)
+    try:
+        where_parts: list[str] = []
+        params: list = []
+
+        if q:
+            q_like = f"%{q.lower()}%"
+            where_parts.append(
+                "(LOWER(message) LIKE ? OR LOWER(source) LIKE ?"
+                " OR LOWER(timestamp_desc) LIKE ? OR LOWER(CAST(extra AS VARCHAR)) LIKE ?)"
+            )
+            params.extend([q_like, q_like, q_like, q_like])
+        if host_filter:
+            placeholders = ", ".join("?" for _ in host_filter)
+            where_parts.append(f"host IN ({placeholders})")
+            params.extend(host_filter)
+        if source_filter:
+            placeholders = ", ".join("?" for _ in source_filter)
+            where_parts.append(f"UPPER(source_short) IN ({placeholders})")
+            params.extend(source_filter)
+        if date_from:
+            where_parts.append("event_dt >= ?")
+            params.append(date_from)
+        if date_to:
+            where_parts.append("event_dt <= ?")
+            params.append(date_to)
+
+        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
+
+        rows = con.execute(
+            f"""
+            SELECT row_id, host, job_id, event_dt, message, timestamp_desc,
+                   source, source_short, extra
+            FROM timeline_events {where_sql}
+            ORDER BY event_dt ASC NULLS LAST, row_id ASC
+            """,
+            params,
+        ).fetchall()
+    finally:
+        con.close()
+
+    FIELDS = ["#", "datetime", "host", "source_short", "source", "timestamp_desc",
+              "event_id", "rule_name", "user", "display_name", "message", "job_id"]
+
+    if fmt == "jsonl":
+        buf = io.StringIO()
+        for row in rows:
+            row_id, host, job_id, event_dt, message, ts_desc, source_val, source_short, extra_json = row
+            entry: dict = {
+                "#": row_id,
+                "datetime": event_dt.isoformat() if event_dt else None,
+                "host": host,
+                "source_short": source_short,
+                "source": source_val,
+                "timestamp_desc": ts_desc,
+                "event_id": None,
+                "rule_name": None,
+                "user": None,
+                "display_name": None,
+                "message": message,
+                "job_id": job_id,
+            }
+            if extra_json:
+                try:
+                    extra = _json.loads(extra_json) if isinstance(extra_json, str) else extra_json
+                    for k in ("event_id", "rule_name", "user", "display_name"):
+                        if k in extra:
+                            entry[k] = extra[k]
+                except Exception:
+                    pass
+            buf.write(_json.dumps(entry) + "\n")
+        return buf.getvalue().encode(), "application/x-ndjson", "jsonl"
+
+    # CSV
+    buf_csv = io.StringIO()
+    writer = csv.DictWriter(buf_csv, fieldnames=FIELDS, extrasaction="ignore", lineterminator="\n")
+    writer.writeheader()
+    for row in rows:
+        row_id, host, job_id, event_dt, message, ts_desc, source_val, source_short, extra_json = row
+        entry = {
+            "#": row_id,
+            "datetime": event_dt.isoformat() if event_dt else "",
+            "host": host or "",
+            "source_short": source_short or "",
+            "source": source_val or "",
+            "timestamp_desc": ts_desc or "",
+            "event_id": "",
+            "rule_name": "",
+            "user": "",
+            "display_name": "",
+            "message": message or "",
+            "job_id": job_id or "",
+        }
+        if extra_json:
+            try:
+                extra = _json.loads(extra_json) if isinstance(extra_json, str) else extra_json
+                for k in ("event_id", "rule_name", "user", "display_name"):
+                    if k in extra and extra[k] is not None:
+                        entry[k] = str(extra[k])
+            except Exception:
+                pass
+        writer.writerow(entry)
+    return buf_csv.getvalue().encode(), "text/csv", "csv"
+
+
+@router.get("/super-timeline/{incident_id}/export")
+async def export_super_timeline(
+    incident_id: str,
+    format: str = Query(default="csv", description="Export format: csv or jsonl"),
+    q: str = Query(default=""),
+    hosts: str = Query(default=""),
+    source: str = Query(default=""),
+    date_from: str = Query(default=""),
+    date_to: str = Query(default=""),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Response:
+    """Export the super timeline as CSV or JSONL with current filters applied."""
+    from app.crud.super_timeline import get_super_timeline_by_incident
+
+    fmt = "jsonl" if format.lower() == "jsonl" else "csv"
+
+    suptl = await get_super_timeline_by_incident(db, incident_id)
+    if not suptl or suptl.status != "DONE":
+        raise HTTPException(status_code=404, detail="Super timeline not built yet")
+    if not suptl.duckdb_path:
+        raise HTTPException(status_code=404, detail="Super timeline DuckDB path not set")
+
+    duckdb_path = Path(suptl.duckdb_path)
+    if not duckdb_path.exists():
+        raise HTTPException(status_code=404, detail="Super timeline DuckDB file not found on disk")
+
+    host_filter = [h.strip() for h in hosts.split(",") if h.strip()] if hosts else []
+    source_filter = [s.strip().upper() for s in source.split(",") if s.strip()] if source else []
+
+    content, media_type, ext = await asyncio.to_thread(
+        functools.partial(
+            _export_super_timeline_duckdb,
+            duckdb_path,
+            fmt,
+            q,
+            host_filter,
+            source_filter,
+            date_from.strip(),
+            date_to.strip(),
+        )
+    )
+
+    filename = f"super-timeline-{incident_id}.{ext}"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

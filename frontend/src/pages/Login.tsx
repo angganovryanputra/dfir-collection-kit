@@ -347,6 +347,16 @@ export default function Login() {
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const [loginSuccess, setLoginSuccess] = useState(false);
+  const [loginSuccessData, setLoginSuccessData] = useState<{
+    username: string;
+    role: string;
+    clientIp: string | null;
+    tokenTTLMinutes: number | null;
+    redirectTo: string;
+  } | null>(null);
+  const [redirectCountdown, setRedirectCountdown] = useState(3);
+
   const [isBooting, setIsBooting] = useState(true);
   const [bootMessages, setBootMessages] = useState<string[]>([]);
   const [bootComplete, setBootComplete] = useState(false);
@@ -555,6 +565,22 @@ export default function Login() {
     authContextRef.current.connectionLabel = connectionLabel;
   }, [connectionLabel]);
 
+  // Redirect countdown after successful login
+  useEffect(() => {
+    if (!loginSuccess || !loginSuccessData) return;
+    const timer = setInterval(() => {
+      setRedirectCountdown((c) => {
+        if (c <= 1) {
+          clearInterval(timer);
+          navigate(loginSuccessData.redirectTo, { replace: true });
+          return 0;
+        }
+        return c - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [loginSuccess, loginSuccessData, navigate]);
+
   useEffect(() => {
     bootContextRef.current.clientIp = clientIp;
     authContextRef.current.clientIp = clientIp;
@@ -717,12 +743,22 @@ export default function Login() {
         }
 
         await wait(350, 1, 0);
-        // Redirect back to the page the user was trying to access, or dashboard
         const stateFrom = (location.state as { from?: string } | null)?.from;
         const storedFrom = localStorage.getItem("dfir_redirect_after_login");
         localStorage.removeItem("dfir_redirect_after_login");
         const redirectTo = stateFrom ?? storedFrom ?? "/dashboard";
-        navigate(redirectTo, { replace: true });
+        // Show ACCESS GRANTED screen — countdown effect handles redirect
+        if (isMountedRef.current) {
+          setLoginSuccessData({
+            username: response.username ?? username,
+            role: response.role ?? authContextRef.current.role ?? "",
+            clientIp: authContextRef.current.clientIp,
+            tokenTTLMinutes: authContextRef.current.tokenTTLMinutes,
+            redirectTo,
+          });
+          setRedirectCountdown(3);
+          setLoginSuccess(true);
+        }
       } catch (error) {
         localStorage.removeItem("dfir_auth");
         const parsed = parseErrorMessage(error);
@@ -746,6 +782,105 @@ export default function Login() {
 
     execute();
   };
+
+  // Success screen — shown after auth, before redirect
+  if (loginSuccess && loginSuccessData) {
+    const roleColors: Record<string, string> = {
+      admin:    "text-red-400",
+      operator: "text-primary",
+      viewer:   "text-blue-400",
+    };
+    const roleColor = roleColors[loginSuccessData.role] ?? "text-primary";
+    return (
+      <div className="min-h-screen bg-background flex flex-col">
+        <WarningBanner variant="critical" className="border-x-0 border-t-0">
+          RESTRICTED SYSTEM — AUTHORIZED PERSONNEL ONLY — ALL ACCESS IS LOGGED AND MONITORED
+        </WarningBanner>
+        <div className="flex-1 flex items-center justify-center p-8">
+          <div className="w-full max-w-lg space-y-6">
+            {/* ACCESS GRANTED header */}
+            <div className="border-2 border-primary bg-primary/5 p-8 text-center space-y-4 relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-8 h-8 border-t-2 border-l-2 border-primary" />
+              <div className="absolute top-0 right-0 w-8 h-8 border-t-2 border-r-2 border-primary" />
+              <div className="absolute bottom-0 left-0 w-8 h-8 border-b-2 border-l-2 border-primary" />
+              <div className="absolute bottom-0 right-0 w-8 h-8 border-b-2 border-r-2 border-primary" />
+              <div className="flex justify-center">
+                <div className="relative">
+                  <Shield className="w-16 h-16 text-primary" />
+                  <div className="absolute inset-0 w-16 h-16 border-2 border-primary/30 animate-ping" />
+                </div>
+              </div>
+              <div>
+                <h1 className="font-mono text-3xl font-bold text-primary tracking-widest">
+                  ACCESS GRANTED
+                </h1>
+                <p className="font-mono text-xs text-muted-foreground mt-1 tracking-wider">
+                  AUTHENTICATION SUCCESSFUL — SESSION ESTABLISHED
+                </p>
+              </div>
+            </div>
+
+            {/* Operator info */}
+            <div className="border border-primary/30 bg-card p-4 space-y-3 font-mono text-sm">
+              <div className="flex items-center gap-2 pb-3 border-b border-border">
+                <Terminal className="w-4 h-4 text-primary" />
+                <span className="text-xs font-bold tracking-wider">SESSION DETAILS</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <span className="text-muted-foreground text-xs uppercase tracking-wider">OPERATOR</span>
+                  <div className="text-foreground font-bold">{loginSuccessData.username.toUpperCase()}</div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground text-xs uppercase tracking-wider">CLEARANCE</span>
+                  <div className={`font-bold uppercase ${roleColor}`}>{loginSuccessData.role}</div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground text-xs uppercase tracking-wider">CLIENT IP</span>
+                  <div className="text-foreground">{loginSuccessData.clientIp ?? "—"}</div>
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground text-xs uppercase tracking-wider">SESSION TTL</span>
+                  <div className="text-foreground">
+                    {loginSuccessData.tokenTTLMinutes != null ? `${loginSuccessData.tokenTTLMinutes} MIN` : "—"}
+                  </div>
+                </div>
+              </div>
+              <div className="pt-2 border-t border-border space-y-1">
+                <span className="text-muted-foreground text-xs uppercase tracking-wider">AUTH TIMESTAMP</span>
+                <div className="text-foreground text-xs">{new Date().toISOString()}</div>
+              </div>
+            </div>
+
+            {/* Redirect countdown */}
+            <div className="border border-border bg-card/50 p-4 space-y-3">
+              <div className="flex items-center justify-between font-mono text-xs">
+                <span className="text-muted-foreground">REDIRECTING TO COMMAND CENTER</span>
+                <span className="text-primary font-bold">{redirectCountdown}s</span>
+              </div>
+              <div className="h-1 bg-secondary overflow-hidden">
+                <div
+                  className="h-full bg-primary transition-all duration-1000 ease-linear"
+                  style={{ width: `${((3 - redirectCountdown) / 3) * 100}%` }}
+                />
+              </div>
+              <div className="font-mono text-xs text-muted-foreground truncate">
+                → {loginSuccessData.redirectTo}
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="border-t border-border bg-secondary px-4 py-2 flex items-center justify-between font-mono text-xs text-muted-foreground">
+          <span className="flex items-center gap-2">
+            <span className="w-2 h-2 bg-primary rounded-full animate-pulse" />
+            SESSION ACTIVE
+          </span>
+          <span>{loginSuccessData.username.toUpperCase()} @ {loginSuccessData.role.toUpperCase()}</span>
+          <span>{new Date().toISOString()}</span>
+        </div>
+      </div>
+    );
+  }
 
   // Boot screen
   if (isBooting) {

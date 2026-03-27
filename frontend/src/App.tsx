@@ -24,6 +24,10 @@ import AttackChains from "./pages/AttackChains";
 import IOCMatches from "./pages/IOCMatches";
 import YaraMatches from "./pages/YaraMatches";
 import SuperTimeline from "./pages/SuperTimeline";
+import IncidentHub from "./pages/IncidentHub";
+import IncidentReport from "./pages/IncidentReport";
+import Collectors from "./pages/Collectors";
+import UserManagement from "./pages/UserManagement";
 
 const queryClient = new QueryClient();
 
@@ -89,20 +93,24 @@ const App = () => {
                 {/* Protected routes — redirect to /login if not authenticated */}
                 <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
                 <Route path="/incidents/create" element={<ProtectedRoute><CreateIncident /></ProtectedRoute>} />
+                <Route path="/incidents/:id" element={<ProtectedRoute><IncidentHub /></ProtectedRoute>} />
                 <Route path="/incidents/:id/setup" element={<ProtectedRoute><CollectionSetup /></ProtectedRoute>} />
                 <Route path="/incidents/:id/collect" element={<ProtectedRoute><CollectionExecution /></ProtectedRoute>} />
                 <Route path="/evidence" element={<ProtectedRoute><EvidenceVault /></ProtectedRoute>} />
                 <Route path="/evidence/:id" element={<ProtectedRoute><EvidenceVault /></ProtectedRoute>} />
                 <Route path="/chain-of-custody" element={<ProtectedRoute><ChainOfCustody /></ProtectedRoute>} />
+                <Route path="/collectors" element={<ProtectedRoute><Collectors /></ProtectedRoute>} />
                 <Route path="/devices" element={<ProtectedRoute><Devices /></ProtectedRoute>} />
                 <Route path="/incident-templates" element={<ProtectedRoute><IncidentTemplates /></ProtectedRoute>} />
                 <Route path="/admin/settings" element={<ProtectedRoute><AdminSettings /></ProtectedRoute>} />
+                <Route path="/admin/users" element={<ProtectedRoute><UserManagement /></ProtectedRoute>} />
                 <Route path="/incidents/:id/processing" element={<ProtectedRoute><ProcessingStatus /></ProtectedRoute>} />
                 <Route path="/incidents/:id/sigma-hits" element={<ProtectedRoute><SigmaHits /></ProtectedRoute>} />
                 <Route path="/incidents/:id/attack-chains" element={<ProtectedRoute><AttackChains /></ProtectedRoute>} />
                 <Route path="/incidents/:id/ioc-matches" element={<ProtectedRoute><IOCMatches /></ProtectedRoute>} />
                 <Route path="/incidents/:id/yara-matches" element={<ProtectedRoute><YaraMatches /></ProtectedRoute>} />
                 <Route path="/incidents/:id/super-timeline" element={<ProtectedRoute><SuperTimeline /></ProtectedRoute>} />
+                <Route path="/incidents/:id/report" element={<ProtectedRoute><IncidentReport /></ProtectedRoute>} />
 
                 <Route path="*" element={<NotFound />} />
               </Routes>
