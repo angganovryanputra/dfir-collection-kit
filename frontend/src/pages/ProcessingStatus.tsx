@@ -6,8 +6,15 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { KeyValueRow } from "@/components/common/KeyValueRow";
-import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug, Layers, ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug, Layers, ChevronDown, ChevronUp, Info } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { getStoredRole } from "@/lib/auth";
+
+interface ToolsStatus {
+  ez_tools_path: string | null;
+  hayabusa_path: string | null;
+  chainsaw_path: string | null;
+}
 
 interface ProcessingJobOut {
     id: string;
@@ -26,21 +33,29 @@ const PHASES = [
         id: "parsing",
         label: "PHASE 1: ARTIFACT PARSING",
         desc: "EZ Tools parsing EVTX, MFT, Registry, Prefetch, LNK",
+        toolKey: "ez_tools_path" as keyof ToolsStatus,
+        toolName: "EZ Tools",
     },
     {
         id: "sigma",
         label: "PHASE 2: SIGMA DETECTION",
         desc: "Hayabusa + Chainsaw hunting Sigma rules against event logs",
+        toolKey: "hayabusa_path" as keyof ToolsStatus,
+        toolName: "Hayabusa / Chainsaw",
     },
     {
         id: "timeline",
         label: "PHASE 3: TIMELINE BUILD",
-        desc: "Merging all sources into Timesketch-compatible JSONL",
+        desc: "Merging all parsed sources into Timesketch-compatible JSONL",
+        toolKey: null,
+        toolName: null,
     },
     {
         id: "analytics",
         label: "PHASE 4: ADVANCED ANALYTICS",
         desc: "ATT&CK chain reconstruction, IOC matching, YARA scanning",
+        toolKey: null,
+        toolName: null,
     },
 ];
 
@@ -73,6 +88,14 @@ export default function ProcessingStatus() {
             return status === "RUNNING" || status === "PENDING" ? 2000 : false;
         },
         retry: false,
+    });
+
+    const role = getStoredRole();
+    const { data: toolsStatus } = useQuery<ToolsStatus>({
+        queryKey: ["settings-tools"],
+        queryFn: () => apiGet<ToolsStatus>("/settings"),
+        enabled: role === "admin",
+        staleTime: 5 * 60 * 1000,
     });
 
     const isDone = job?.status === "DONE";
@@ -159,6 +182,9 @@ export default function ProcessingStatus() {
                             const st = job
                                 ? phaseStatus(job.phase, job.status, p.id)
                                 : "pending";
+                            const toolMissing = p.toolKey && toolsStatus
+                                ? !toolsStatus[p.toolKey]
+                                : false;
                             return (
                                 <div
                                     key={p.id}
@@ -183,13 +209,19 @@ export default function ProcessingStatus() {
                                             <div className="w-4 h-4 rounded-full border border-muted-foreground/40" />
                                         )}
                                     </div>
-                                    <div>
+                                    <div className="flex-1 min-w-0">
                                         <div className="font-bold uppercase tracking-wider text-xs">
                                             {p.label}
                                         </div>
                                         <div className="text-muted-foreground text-xs mt-0.5">
                                             {p.desc}
                                         </div>
+                                        {toolMissing && (
+                                            <div className="flex items-center gap-1 mt-1 text-yellow-500/80 text-xs">
+                                                <Info className="w-3 h-3 shrink-0" />
+                                                <span>{p.toolName} not configured — phase will complete with 0 results</span>
+                                            </div>
+                                        )}
                                     </div>
                                     <div className="ml-auto shrink-0 text-xs text-muted-foreground uppercase">
                                         {st}

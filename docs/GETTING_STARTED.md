@@ -27,7 +27,52 @@ This guide covers everything from first deployment to running your first collect
 
 ---
 
-## Docker Quick Start
+## Docker Quick Start (Recommended)
+
+### One-Command Setup
+
+The fastest way to get DFIR Rapid Collection Kit running is with a single command:
+
+```bash
+git clone <repository-url>
+cd dfir-collection-kit
+make setup
+```
+
+This command:
+1. Generates cryptographically secure secrets (`SECRET_KEY`, `AGENT_SHARED_SECRET`)
+2. Generates a self-signed TLS certificate
+3. Creates and starts all Docker services (`docker compose up -d --build`)
+4. Waits for services to be healthy
+5. Applies database migrations
+6. Seeds the default admin account with a **random password**
+
+**After `make setup` completes**, the admin password will be printed to the terminal. Save it somewhere safe. The password is also stored in `.env` as `DFIR_DEFAULT_ADMIN_PASSWORD`.
+
+### Step 1 — Access the Application
+
+Open your browser and navigate to:
+
+| Service | URL |
+|---------|-----|
+| **Frontend** | http://localhost:5173 |
+| **Backend API** | http://localhost:8000 |
+| **Interactive API Docs** | http://localhost:8000/docs |
+
+### Step 2 — Login
+
+```
+Username: admin
+Password: <the password printed after 'make setup'>
+```
+
+**Change the admin password immediately after first login.** This account has full administrative access.
+
+---
+
+## Manual Setup (Fallback)
+
+If you prefer to set up step-by-step instead of using `make setup`:
 
 ### Step 1 — Clone
 
@@ -48,11 +93,11 @@ Open `.env` and set at minimum these three required values:
 # JWT signing key — required, backend refuses to start without it
 SECRET_KEY=<generate-below>
 
-# Agent shared secret — must match agent AGENT_SHARED_SECRET env var
+# Agent shared secret — must match agent DFIR_AGENT_SECRET env var
 AGENT_SHARED_SECRET=<generate-below>
 
-# Admin account password (default: admin123!)
-DFIR_DEFAULT_ADMIN_PASSWORD=admin123!
+# Admin account password (leave blank for auto-generation, or set manually)
+DFIR_DEFAULT_ADMIN_PASSWORD=<your-secure-password>
 ```
 
 **Generate secrets:**
@@ -89,10 +134,8 @@ The database is initialized and seeded automatically on first launch.
 
 ```
 Username: admin
-Password: admin123!
+Password: <value of DFIR_DEFAULT_ADMIN_PASSWORD from .env>
 ```
-
-_(or whatever you set in `DFIR_DEFAULT_ADMIN_PASSWORD`)_
 
 **Change the admin password immediately after first login.** This account has full administrative access. Create separate `operator` and `viewer` accounts for your team from **Admin → Users**.
 
@@ -177,9 +220,8 @@ cd agent
 go build -o dfir-agent ./cmd/agent/
 
 # Run with env vars (all agent vars use DFIR_ prefix)
-DFIR_BACKEND_URL=http://localhost:8000 \
+DFIR_BACKEND_URL=http://localhost:8000/api/v1 \
 DFIR_AGENT_SECRET=your-secret \
-DFIR_AGENT_ID=DEV-WORKSTATION \
 ./dfir-agent
 ```
 
@@ -194,14 +236,14 @@ All variables can be set in the root `.env` file (Docker) or `backend/.env` (loc
 | Variable | Description |
 |----------|-------------|
 | `SECRET_KEY` | JWT signing key. Backend refuses to start if weak or missing. |
-| `AGENT_SHARED_SECRET` | Agent authentication token. Must match agent config. |
+| `AGENT_SHARED_SECRET` | Agent authentication token. Must match agent `DFIR_AGENT_SECRET`. |
 | `DATABASE_URL` | Async PostgreSQL URL: `postgresql+asyncpg://user:pass@host/db` |
 
 ### Important
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DFIR_DEFAULT_ADMIN_PASSWORD` | `admin123!` | Admin password set on first seed |
+| `DFIR_DEFAULT_ADMIN_PASSWORD` | (auto-generated) | Admin password set on first seed |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `60` | JWT session duration in minutes |
 | `EVIDENCE_STORAGE_PATH` | `/vault/evidence` | Where evidence ZIPs are stored |
 | `REQUIRE_AUTH` | `true` | Set `false` only for local loopback testing |
@@ -226,11 +268,25 @@ Forensics tools are **not required** to run the platform — they are only neede
 
 Before running a collection, register the Go agent on the target endpoint:
 
-1. Build the agent binary for the target OS (see Agent Deployment in README)
-2. Run the agent with `BACKEND_URL`, `AGENT_SHARED_SECRET`, and `AGENT_ID` set
-3. The agent self-registers on first launch — confirm in **Devices** page
+1. Build the agent binary for the target OS using `make agent-windows`, `make agent-linux`, or `make agent-all`
+2. Deploy the binary to the target endpoint
+3. Set environment variables: `DFIR_BACKEND_URL`, `DFIR_AGENT_SECRET` (matching backend), and optionally `DFIR_AGENT_ID`, `DFIR_HOSTNAME`, `DFIR_IP_ADDRESS`
+4. Run the agent: `./dfir-agent` (Windows) or `./dfir-agent-linux` (Linux)
+5. The agent self-registers on first launch — confirm it appears in the **Devices** page of the UI
 
-### 2. Create an Incident
+For detailed agent deployment instructions, see `docs/AGENT_DEPLOYMENT.md`.
+
+### 2. Load Demo Data (Optional)
+
+To explore the UI with demo incidents and timelines, run:
+
+```bash
+make seed-demo
+```
+
+This loads sample incidents, devices, and super timeline data for testing.
+
+### 3. Create an Incident
 
 1. Click **Create Incident** in the sidebar
 2. Fill in:
@@ -240,7 +296,7 @@ Before running a collection, register the Go agent on the target endpoint:
 3. Optionally select an **Incident Template** to pre-fill checklists and defaults
 4. Click **Create Incident**
 
-### 3. Configure Collection Modules
+### 4. Configure Collection Modules
 
 On the Collection Setup page:
 
@@ -250,33 +306,44 @@ On the Collection Setup page:
 
 Click **Start Collection** when ready.
 
-### 4. Monitor Collection
+### 5. Monitor Collection
 
-The Collection Execution page shows real-time logs from the agent. The agent:
-1. Polls for the job instruction (with OPSEC jitter)
-2. Executes modules in parallel (default: 4 concurrent)
-3. Creates a ZIP and uploads to the backend
-4. Backend extracts, hashes, appends chain-of-custody, and locks the folder
+The Collection Execution page shows real-time logs from the agent. The agent executes in **three phases**:
+
+1. **ARTIFACT COLLECTION**: Modules run in parallel (default 4 concurrent). Status shows `"collecting"` or `"collecting (5/10)"` with progress bar.
+2. **LOCAL PARSING**: After collection, the agent parses artifacts locally (EVTX → JSONL, Prefetch/LNK → CSV, Browser History → CSV). Status shows `"parsing"`.
+3. **EVIDENCE UPLOAD**: Agent zips all collected and parsed data, then uploads to the backend. Backend extracts, hashes, and locks the folder. Status shows `"uploading"` then `"complete"`.
 
 Collection status updates automatically every ~1.2 seconds.
 
-### 5. Run the Forensics Pipeline
+### 6. Explore the Incident Hub
+
+Once collection completes, navigate to the **Incident Hub** (click on the incident title or icon):
+
+- **Metadata**: Incident type, operator, target hosts, collection status
+- **Quick Actions Grid**: 9 action cards for common tasks (view evidence, check sigma hits, etc.)
+- **Analysis Progress**: Timeline showing pipeline phases (collecting → parsing → sigma hunt → timeline merge)
+- **Lateral Movement Summary**: High-level detections of lateral movement between hosts
+
+### 7. Run the Forensics Pipeline
 
 After collection completes:
 - **Auto**: If `auto_process = true` in System Settings, the pipeline triggers automatically
 - **Manual**: Navigate to **Processing** for the incident and click **Trigger Pipeline**
 
 Monitor pipeline phases:
-1. `parsing` — EZTools parsing EVTX, registry, prefetch, etc.
-2. `sigma` — Hayabusa + Chainsaw threat hunting
-3. `timeline` — CSV merge and DuckDB indexing
+1. `PHASE 1 — ARTIFACT PARSING` — EZTools parsing EVTX, registry, prefetch, etc.
+2. `PHASE 2 — SIGMA DETECTION` — Hayabusa + Chainsaw threat hunting
+3. `PHASE 3 — TIMELINE BUILD` — CSV merge and DuckDB indexing
+4. `PHASE 4 — ADVANCED ANALYTICS` — ATT&CK chain, IOC matching, YARA
 
-### 6. Analyze Results
+### 8. Analyze Results
 
-Once the pipeline completes:
+Once the pipeline completes, explore the evidence:
 
 | Page | What You Find |
 |------|---------------|
+| **Super Timeline** | Full-text search across merged timeline with date range, source filter, and CSV/JSONL export |
 | **Sigma Hits** | Sigma rule detections sorted by severity (critical → informational) |
 | **IOC Matches** | Timeline events matching known-bad IPs, domains, hashes |
 | **YARA Matches** | Files matching YARA rules |
@@ -284,9 +351,9 @@ Once the pipeline completes:
 | **Evidence Vault** | Raw collected files; download individual artifacts or full ZIP export |
 | **Chain of Custody** | Cryptographically verified event log; export as CSV |
 
-### 7. Generate Report & Close
+### 9. Generate Report & Close
 
-1. Click **Generate HTML Report** on the Processing page — produces a self-contained HTML report
+1. Click **Generate HTML Report** on the incident detail page — produces a self-contained HTML report with all findings
 2. When the investigation concludes, set incident status to **CLOSED**
 3. Closed incidents are immutable — no further collection or updates
 
@@ -341,7 +408,8 @@ alembic upgrade head
       → 20260303_add_concurrency_limit
         → 20260401_processing_pipeline
           → 20260402_processing_settings
-            → 20260403_phase2_analytics  ← current HEAD
+            → 20260403_phase2_analytics
+              → 20260501_super_timeline  ← current HEAD
 ```
 
 > Do not use `python -m app.seed_run` to create tables in production — use Alembic migrations.
@@ -363,8 +431,8 @@ docker compose logs backend | tail -30
 ### Cannot log in (401)
 
 1. Verify seed ran: `docker compose logs backend | grep -i seed`
-2. Check you're using the correct password (default: `admin123!`)
-3. If you changed `DFIR_DEFAULT_ADMIN_PASSWORD`, use that value instead
+2. Check you're using the correct password (from `.env` `DFIR_DEFAULT_ADMIN_PASSWORD`)
+3. If you used `make setup`, check the password that was printed to the terminal
 4. Clear browser localStorage and try again
 
 ### Login blocked (429)
@@ -388,11 +456,13 @@ The default upload limit is 10 GB. Increase `max_file_size_gb` in Admin Settings
 
 ### Agent authentication fails (401)
 
-Verify `AGENT_SHARED_SECRET` matches exactly between the backend and the agent:
+Verify `DFIR_AGENT_SECRET` matches exactly between the backend and the agent:
 
 ```bash
 docker compose exec backend env | grep AGENT_SHARED_SECRET
 ```
+
+The agent must also be able to reach the backend on the configured `DFIR_BACKEND_URL`.
 
 ### Ports already in use
 
@@ -476,6 +546,7 @@ docker run --rm -v dfir_evidence:/data -v $(pwd):/backup alpine \
 2. **Set up Incident Templates** — pre-fill checklists for your common incident types
 3. **Configure tool paths** — Admin → System Settings → Verify Tools (for automated parsing)
 4. **Enable auto_process** — if you want the pipeline to trigger automatically after each collection
+5. **Deploy agents** — See `docs/AGENT_DEPLOYMENT.md` for full instructions
 
 ### For Developers
 
@@ -483,6 +554,7 @@ docker run --rm -v dfir_evidence:/data -v $(pwd):/backup alpine \
 2. **Read the audit report** — `AUDIT_REPORT.md` for known issues and decisions
 3. **Run tests** — `DFIR_TEST_DATABASE_URL=... pytest` in backend directory
 4. **API documentation** — http://localhost:8000/docs (interactive, auto-generated)
+5. **Agent deployment guide** — `docs/AGENT_DEPLOYMENT.md` for Go agent details
 
 ### For Security Teams
 
@@ -490,3 +562,4 @@ docker run --rm -v dfir_evidence:/data -v $(pwd):/backup alpine \
 2. **Set `ALLOWED_ORIGINS`** to your actual frontend domain in production
 3. **Configure log retention** in Admin Settings to match your policy
 4. **Review security notes** in `README.md` before internet-facing deployment
+5. **Rotate `SECRET_KEY` and `AGENT_SHARED_SECRET`** regularly (restart required)

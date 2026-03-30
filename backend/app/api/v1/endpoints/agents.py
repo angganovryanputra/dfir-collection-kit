@@ -256,11 +256,15 @@ async def update_job_status_endpoint(
         status_upper = payload.status.upper()
         if status_upper in {"COMPLETE", "COMPLETED", "COLLECTION_COMPLETE"}:
             incident_update["status"] = "COLLECTION_COMPLETE"
-            incident_update["collection_phase"] = "hashing"
+            incident_update["collection_phase"] = "uploading"
         elif status_upper in {"FAILED", "ERROR", "CANCELLED", "CANCELED"}:
             incident_update["status"] = "COLLECTION_FAILED"
+        elif status_upper == "PARSING":
+            incident_update["status"] = "COLLECTION_IN_PROGRESS"
+            incident_update["collection_phase"] = "parsing"
         else:
             incident_update["status"] = "COLLECTION_IN_PROGRESS"
+            incident_update["collection_phase"] = "collecting"
         if incident_update:
             current_incident = await get_incident(db, job.incident_id)
             if current_incident and current_incident.status != "CLOSED":

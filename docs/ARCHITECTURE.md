@@ -72,9 +72,11 @@ frontend/
 │   ├── components/
 │   │   ├── layout/       # AppLayout, Sidebar
 │   │   ├── ui/           # shadcn/ui components
-│   │   ├── common/        # Shared components
+│   │   ├── common/       # Shared components
 │   │   └── *.tsx         # Feature components
-│   ├── pages/            # Route pages
+│   ├── pages/            # Route pages (Dashboard, CreateIncident, CollectionSetup,
+│   │                     # CollectionExecution, IncidentHub, ProcessingStatus,
+│   │                     # SigmaHits, IOCMatches, YaraMatches, SuperTimeline, etc.)
 │   ├── hooks/            # React hooks
 │   ├── lib/              # Utilities, API client
 │   ├── types/            # TypeScript types
@@ -93,6 +95,7 @@ frontend/
 **AppSidebar**: Navigation menu with incident/collector stats
 **WarningBanner**: Critical alerts for collection in progress
 **TacticalPanel**: Consistent panel styling for DFIR aesthetic
+**IncidentHub**: Per-incident command center with metadata, quick actions, analysis progress, lateral movement summary
 
 ### API Client Pattern
 
@@ -293,12 +296,55 @@ sequenceDiagram
         Agent->>Backend: GET /agents/{id}/jobs/next
         Backend-->>Agent: JobInstruction or 404
         alt Job available
-            Agent->>Agent: Execute collection modules
+            Agent->>Agent: Phase 1: Execute collection modules (parallel)
+            Agent->>Agent: Phase 2: Parse artifacts locally (EVTX, Prefetch, LNK, Browser)
             Agent->>Backend: POST /agents/{id}/jobs/{job_id}/upload
-            Note over Agent,Backend: Upload evidence ZIP
+            Note over Agent,Backend: Upload evidence ZIP (Phase 3)
         end
     end
 ```
+
+### Agent Execution Phases
+
+The agent executes collections in three distinct phases:
+
+**Phase 1 — Artifact Collection**
+- Executes all selected modules in parallel (goroutine pool, default 4 concurrent workers)
+- Modules run independent of each other; failure of one does not stop others
+- Status sent to backend: `"collecting"` or `"collecting (N/M)"` for progress
+- Output files placed in workdir under module-specific paths
+
+**Phase 2 — Local Parsing**
+- After all modules complete, the `parsers` package processes collected artifacts
+- Converts binary/structured data to more useful formats:
+  - EVTX logs → JSONL via `wevtutil.exe` (Windows only)
+  - Prefetch files → CSV (binary parser with MAM decompression support)
+  - LNK shell links → CSV (binary parser)
+  - Browser History (Chrome/Edge/Firefox) → CSV (pure-Go SQLite parser)
+- Parsed output placed in `workdir/parsed/` subdirectories
+- Status sent to backend: `"parsing"`
+- Parsing failures do not prevent upload; partial results are still collected
+
+**Phase 3 — ZIP + Upload**
+- Agent compresses entire workdir (including parsed/ subdirectory) into `collection.zip`
+- Uploads ZIP to `/agents/{id}/jobs/{job_id}/upload` endpoint
+- Status sent to backend: `"uploading"` then `"complete"`
+- Backend receives, extracts, hashes, appends chain-of-custody, and locks folder
+
+### Parser Package
+
+The `agent/internal/parsers/` package provides on-device evidence processing:
+
+- **EVTX Parser**: Uses Windows `wevtutil.exe` to convert event logs to JSONL
+- **Prefetch Parser**: Binary parser for Windows Prefetch files; supports MAM version 8 decompression
+- **LNK Parser**: Binary parser for Shell Link (.lnk) files; outputs to CSV
+- **Browser History Parser**: Pure-Go SQLite implementation for Chrome, Firefox, and Edge history databases
+
+Benefits of on-device parsing:
+- Reduces network bandwidth (parsed formats are smaller)
+- Enables offline collection (parsing happens before upload)
+- Increases agent speed (parsing in parallel with next job polling)
+- Provides intermediate formats for backend pipeline
 
 ### JobInstruction Schema
 
@@ -306,8 +352,8 @@ sequenceDiagram
 {
   "job_id": "JOB-2025-0001",
   "incident_id": "INC-2025-0142",
-  "os": "windows/amd64",
-  "work_dir": "/vault/evidence/INC-2025-0142/JOB-2025-0001",
+  "os": "windows",
+  "work_dir": "/tmp/dfir-collection-12345",
   "modules": [
     {
       "module_id": "windows_eventlog_security",
@@ -321,11 +367,12 @@ sequenceDiagram
     }
   ],
   "collection_timeout_min": 60,
+  "concurrency_limit": 4,
   "retry_attempts": 3
 }
 ```
 
-The backend may include `collection_timeout_min` and `retry_attempts` to bound overall collection time and guide agent-side retry behavior.
+The backend may include `collection_timeout_min`, `concurrency_limit`, and `retry_attempts` to bound overall collection time, control worker pool size, and guide agent-side retry behavior.
 
 ### Module Registry
 
@@ -333,21 +380,57 @@ The backend may include `collection_timeout_min` and `retry_attempts` to bound o
 MODULE_REGISTRY = {
     "windows_eventlog_security": {
         "os": "windows",
+        "category": "logs",
         "output_relpath": "logs/windows/security.evtx",
-        "params": {"time_window": "7d"},
     },
     "windows_process_list": {
         "os": "windows",
+        "category": "volatile",
         "output_relpath": "volatile/windows/process_list.csv",
-        "params": {},
     },
     "linux_journalctl": {
         "os": "linux",
+        "category": "logs",
         "output_relpath": "logs/linux/journalctl.log",
-        "params": {"time_window": "7d"},
     },
 }
 ```
+
+**Important:** The Python `MODULE_REGISTRY` in `backend/app/core/modules.py` must be kept in sync manually with the Go module implementations in `agent/internal/modules/`. There is no automatic synchronization mechanism.
+
+### Super Timeline Feature
+
+The Super Timeline feature enables cross-host evidence correlation and threat detection:
+
+**Models** (`backend/app/models/super_timeline.py`):
+- `SuperTimeline`: Stores individual parsed timeline events with DuckDB persistence
+- `LateralMovement`: Detects and tracks lateral movement between hosts based on timeline correlation
+
+**Service** (`backend/app/services/super_timeline_service.py`):
+- Merges per-host `timeline.jsonl` files into a unified DuckDB database
+- Automatically triggered after forensics pipeline completes
+- Supports full-text search, filtering by source and date range
+
+**Query Endpoint** (`GET /api/v1/evidence/super-timeline/{incident_id}`):
+- Supports filters: `q` (full-text search), `source`, `date_from`, `date_to`, `hosts`, `sort_by`, `sort_dir`
+- Returns paginated results with `total_pages` and `source_shorts` for display
+- Whitelist of sortable columns prevents injection
+
+**Export Endpoint** (`GET /api/v1/evidence/super-timeline/{incident_id}/export`):
+- Formats: `csv` or `jsonl`
+- Downloads all matching rows as a single file
+
+**Frontend Page** (`frontend/src/pages/SuperTimeline.tsx`):
+- Filter panel (quick filters, source chips, date range picker)
+- Highlight search terms in results
+- Column visibility toggle (persisted to localStorage)
+- Export dropdown (CSV/JSONL)
+- Responsive table with sorting and pagination
+
+**Lateral Movement Detection**:
+- Identifies connections between hosts in the timeline
+- Surfaces suspicious patterns (e.g., A → B → C lateral movement chains)
+- Displayed in Incident Hub and detailed analysis pages
 
 ## Docker Architecture
 
@@ -359,7 +442,10 @@ services:
     ports: [5432:5432]
     volumes: [dfir_postgres:/var/lib/postgresql/data]
 
-  backend:          # FastAPI + uvicorn
+  redis:           # Redis 7
+    ports: [6379:6379]
+
+  backend:         # FastAPI + uvicorn
     build: ./backend
     ports: [8000:8000]
     environment:
@@ -370,11 +456,18 @@ services:
       db:
         condition: service_healthy
 
-  frontend:         # Vite dev server (or production build)
+  celery_worker:   # Celery background tasks
+    build: ./backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://...
+    volumes: [dfir_evidence:/vault/evidence]
+    depends_on:
+      - backend
+      - redis
+
+  frontend:        # Nginx + React build
     build: ./frontend
     ports: [5173:5173]
-    environment:
-      VITE_API_BASE_URL: http://backend:8000/api/v1
     depends_on:
       backend:
         condition: service_healthy
@@ -383,24 +476,24 @@ services:
 ### Network Topology
 
 ```
-┌────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────┐
 │                Host Machine                    │
-│                                                  │
-│  ┌────────────────────────────────────────────┐  │
-│  │         docker0 (Bridge Network)        │  │
-│  │                                        │  │
-│  │  ┌──────────┐ ┌──────────┐ ┌─────────┐│  │
-│  │  │   db     │ │ backend  │ │frontend ││  │
-│  │  │ :5432    │ │ :8000    │ │ :5173   ││  │
-│  │  └──────────┘ └──────────┘ └─────────┘│  │
-│  └────────────────────────────────────────────┘  │
-│                                                  │
-│  ┌────────────────────────────────────────────┐  │
-│  │   Volumes (Named)                     │  │
-│  │   dfir_postgres: /var/lib/...       │  │
-│  │   dfir_evidence: /vault/evidence      │  │
-│  └────────────────────────────────────────────┘  │
-└────────────────────────────────────────────────────┘
+│                                                │
+│  ┌────────────────────────────────────────────┐│
+│  │         docker0 (Bridge Network)           ││
+│  │                                            ││
+│  │  ┌──────────┐ ┌──────────┐ ┌─────────┐   ││
+│  │  │   db     │ │ backend  │ │frontend ││   ││
+│  │  │ :5432    │ │ :8000    │ │ :5173   ││   ││
+│  │  └──────────┘ └──────────┘ └─────────┘   ││
+│  └────────────────────────────────────────────┘│
+│                                                │
+│  ┌────────────────────────────────────────────┐│
+│  │   Volumes (Named)                          ││
+│  │   dfir_postgres: /var/lib/...              ││
+│  │   dfir_evidence: /vault/evidence           ││
+│  └────────────────────────────────────────────┘│
+└────────────────────────────────────────────────┘
 
 Access:
 - Frontend: http://localhost:5173
@@ -477,7 +570,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-python -m app.seed_run.py
+python -m app.seed_run
 uvicorn app.main:app --reload --port 8000
 
 # Frontend

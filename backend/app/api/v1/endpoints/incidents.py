@@ -40,10 +40,9 @@ _VALID_TRANSITIONS: dict[str, set[str]] = {
 }
 
 PHASE_STEPS = [
-    ("volatile", "Volatile Data"),
-    ("persistence", "Persistence Mechanisms"),
-    ("logs", "System Logs"),
-    ("hashing", "Evidence Hashing"),
+    ("collecting", "Artifact Collection"),
+    ("parsing", "Local Parsing"),
+    ("uploading", "Evidence Upload"),
 ]
 
 

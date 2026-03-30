@@ -1,0 +1,21 @@
+# docker-compose.override.yml.example
+#
+# For local development: exposes backend and frontend ports directly
+# so you can use http://localhost:8000 and http://localhost:5173
+# without going through nginx (useful for debugging).
+#
+# USAGE:
+#   cp docker-compose.override.yml.example docker-compose.override.yml
+#   docker compose up -d
+#
+# The override file is automatically merged by docker compose.
+# DELETE IT (or don't copy it) for production deployments.
+
+services:
+  backend:
+    ports:
+      - "127.0.0.1:8000:8000"
+
+  frontend:
+    ports:
+      - "127.0.0.1:5173:80"

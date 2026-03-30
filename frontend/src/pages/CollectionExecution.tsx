@@ -88,24 +88,17 @@ type EvidenceItemResponse = {
   collected_at: string;
 };
 
-const PHASE_NAME_MAP: Record<string, string> = {
-  volatile: "Volatile Data",
-  persistence: "Persistence Mechanisms",
-  logs: "System Logs",
-  hashing: "Evidence Hashing",
-};
+// Agent phases: collecting → parsing → uploading (matches executor.go status strings)
+const PHASES: { id: string; name: string }[] = [
+  { id: "collecting", name: "ARTIFACT COLLECTION" },
+  { id: "parsing",    name: "LOCAL PARSING" },
+  { id: "uploading",  name: "EVIDENCE UPLOAD" },
+];
 
-const PHASE_IDS = Object.keys(PHASE_NAME_MAP);
-
-const derivePhaseFromStatus = (status: string) => {
-  const match = status.match(/collecting\s*\((\d+)\/(\d+)\)/i);
-  if (!match) return null;
-  const current = Number(match[1]);
-  const total = Number(match[2]);
-  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0) return null;
-  const ratio = Math.min(1, Math.max(0, current / total));
-  const index = Math.min(PHASE_IDS.length - 1, Math.floor(ratio * PHASE_IDS.length));
-  return PHASE_IDS[index] ?? null;
+const resolveActivePhaseId = (backendPhase: string | null): string => {
+  if (backendPhase === "parsing")   return "parsing";
+  if (backendPhase === "uploading") return "uploading";
+  return "collecting";
 };
 
 export default function CollectionExecution() {
@@ -119,11 +112,7 @@ export default function CollectionExecution() {
       : null;
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [phases, setPhases] = useState<CollectionPhase[]>(
-    Object.entries(PHASE_NAME_MAP).map(([id, name]) => ({
-      id,
-      name,
-      status: "pending",
-    }))
+    PHASES.map(({ id, name }) => ({ id, name, status: "pending" }))
   );
   const [isComplete, setIsComplete] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
@@ -223,25 +212,9 @@ export default function CollectionExecution() {
           }
           return 0;
         });
-        const derivedPhase = derivePhaseFromStatus(status.status);
-        const phaseId = status.phase ?? derivedPhase ?? "volatile";
-        setPhases((prev) =>
-          prev.map((phase) => {
-            if (status.progress >= 100) {
-              return { ...phase, status: "complete", progress: 100 };
-            }
-            if (phase.id === phaseId) {
-              return { ...phase, status: "active", progress: status.progress };
-            }
-            if (phase.status === "active") {
-              return { ...phase, status: "complete", progress: 100 };
-            }
-            return phase;
-          })
-        );
         if (status.status === "COLLECTION_COMPLETE") {
           setIsComplete(true);
-          setCompletionMessage("Collection completed. Chain-of-custody updated.");
+          setCompletionMessage("Collection complete. Evidence locked and chain-of-custody updated.");
           setPhases((prev) =>
             prev.map((phase) => ({ ...phase, status: "complete", progress: 100 }))
           );
@@ -253,10 +226,29 @@ export default function CollectionExecution() {
           setIsComplete(false);
           setErrorMessage("Collection failed. Review logs for details.");
           setCompletionMessage(null);
+          setPhases((prev) =>
+            prev.map((phase) =>
+              phase.status === "active" ? { ...phase, status: "error" } : phase
+            )
+          );
           if (pollerRef.current) {
             clearInterval(pollerRef.current);
             pollerRef.current = null;
           }
+        } else {
+          const activePhaseId = resolveActivePhaseId(status.phase);
+          setPhases((prev) =>
+            prev.map((phase) => {
+              const phaseIdx  = PHASES.findIndex((p) => p.id === phase.id);
+              const activeIdx = PHASES.findIndex((p) => p.id === activePhaseId);
+              if (phaseIdx < activeIdx)    return { ...phase, status: "complete", progress: 100 };
+              if (phase.id === activePhaseId) {
+                const prog = phase.id === "collecting" ? status.progress : undefined;
+                return { ...phase, status: "active", progress: prog };
+              }
+              return { ...phase, status: "pending", progress: undefined };
+            })
+          );
         }
       } catch {
         setErrorMessage("Unable to poll collection status.");
@@ -342,7 +334,13 @@ export default function CollectionExecution() {
             <Shield className="w-6 h-6 text-primary animate-pulse-glow" />
             <div>
               <h1 className="font-mono text-lg font-bold tracking-wider text-foreground">
-                COLLECTION IN PROGRESS
+                {isComplete
+                  ? "COLLECTION COMPLETE"
+                  : phases.find((p) => p.status === "active")?.id === "parsing"
+                  ? "PARSING ARTIFACTS"
+                  : phases.find((p) => p.status === "active")?.id === "uploading"
+                  ? "UPLOADING EVIDENCE"
+                  : "COLLECTION IN PROGRESS"}
               </h1>
                 <p className="font-mono text-xs text-muted-foreground">
                   INCIDENT: {incident?.id ?? incidentId ?? "PENDING"}
@@ -362,7 +360,11 @@ export default function CollectionExecution() {
               </div>
               <StatusIndicator
                 status={isComplete ? "verified" : "active"}
-                label={isStarting ? "INITIALIZING" : isComplete ? "COMPLETE" : "COLLECTING"}
+                label={
+                  isStarting ? "INITIALIZING"
+                  : isComplete ? "COMPLETE"
+                  : (phases.find((p) => p.status === "active")?.id ?? "collecting").toUpperCase()
+                }
                 pulse={!isComplete}
               />
             </div>
@@ -388,6 +390,10 @@ export default function CollectionExecution() {
             <AlertTriangle className="inline w-4 h-4 mr-2" />
             {isStarting
               ? "INITIALIZING COLLECTION ENGINE — STAND BY"
+              : phases.find((p) => p.status === "active")?.id === "parsing"
+              ? "AGENT PARSING ARTIFACTS LOCALLY — DO NOT TERMINATE AGENT PROCESS"
+              : phases.find((p) => p.status === "active")?.id === "uploading"
+              ? "UPLOADING EVIDENCE TO SERVER — DO NOT DISCONNECT NETWORK"
               : "DO NOT SHUT DOWN OR RESTART TARGET SYSTEM — COLLECTION IN PROGRESS"}
           </WarningBanner>
         )}

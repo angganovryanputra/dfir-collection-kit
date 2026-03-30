@@ -20,6 +20,12 @@ import type { Incident, Collector } from "@/types/dfir";
 import { apiGet } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
 
+interface SystemSettingsPartial {
+  ez_tools_path: string | null;
+  hayabusa_path: string | null;
+  chainsaw_path: string | null;
+}
+
 interface IncidentResponse {
   id: string;
   type: Incident["type"];
@@ -103,6 +109,18 @@ export default function Dashboard() {
     queryFn: () => apiGet<DiagnosticsResponse>("/status/diagnostics"),
     enabled: getStoredRole() !== "viewer",
   });
+
+  const role = getStoredRole();
+  const settingsQuery = useQuery<SystemSettingsPartial>({
+    queryKey: ["settings-tools"],
+    queryFn: () => apiGet<SystemSettingsPartial>("/settings"),
+    enabled: role === "admin",
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const toolsConfigured = !settingsQuery.data
+    ? true // can't check → don't show warning
+    : Boolean(settingsQuery.data.ez_tools_path || settingsQuery.data.hayabusa_path);
 
   useEffect(() => {
     const err = incidentsQuery.error ?? collectorsQuery.error ?? evidenceQuery.error;
@@ -217,6 +235,23 @@ export default function Dashboard() {
       }
     >
       <div className="p-6">
+        {!toolsConfigured && (
+          <div className="mb-4 border border-yellow-500/40 bg-yellow-500/10 p-3 font-mono text-xs text-yellow-400 flex items-center justify-between gap-4">
+            <span>
+              FORENSICS TOOLS NOT CONFIGURED — artifact parsing (EZ Tools) and threat hunting
+              (Hayabusa/Chainsaw) are unavailable. Timeline and Sigma hits will be empty after
+              processing.
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="shrink-0 text-yellow-400 border border-yellow-500/40 hover:bg-yellow-500/10"
+              onClick={() => navigate("/admin/settings")}
+            >
+              CONFIGURE
+            </Button>
+          </div>
+        )}
         {errorMessage && (
           <div className="mb-4 border border-destructive/40 bg-destructive/10 p-3 font-mono text-xs text-destructive">
             {errorMessage}
