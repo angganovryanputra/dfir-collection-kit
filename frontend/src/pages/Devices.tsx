@@ -420,7 +420,11 @@ export default function Devices() {
             </TableHeaderRow>
 
             {/* Rows */}
-            {paginatedItems.length === 0 ? (
+            {devicesQuery.isLoading ? (
+              <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground animate-pulse">
+                LOADING DEVICES...
+              </div>
+            ) : paginatedItems.length === 0 ? (
               <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">
                 No devices available.
               </div>

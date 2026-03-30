@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -5,7 +6,7 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { KeyValueRow } from "@/components/common/KeyValueRow";
-import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug, Layers } from "lucide-react";
+import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug, Layers, ChevronDown, ChevronUp } from "lucide-react";
 import { apiGet } from "@/lib/api";
 
 interface ProcessingJobOut {
@@ -62,6 +63,7 @@ function phaseStatus(
 export default function ProcessingStatus() {
     const navigate = useNavigate();
     const { id: incidentId } = useParams<{ id: string }>();
+    const [errorExpanded, setErrorExpanded] = useState(false);
 
     const { data: job, isLoading, error } = useQuery<ProcessingJobOut>({
         queryKey: ["processing-status", incidentId],
@@ -131,8 +133,19 @@ export default function ProcessingStatus() {
                                 />
                             </div>
                             {isFailed && job.error_message && (
-                                <div className="mt-3 p-3 border border-destructive/40 bg-destructive/10 text-destructive text-xs">
-                                    ERROR: {job.error_message}
+                                <div className="mt-3 border border-destructive/40 bg-destructive/10 text-destructive text-xs">
+                                    <button
+                                        className="w-full flex items-center justify-between px-3 py-2 hover:bg-destructive/10 transition-colors"
+                                        onClick={() => setErrorExpanded((v) => !v)}
+                                    >
+                                        <span className="font-bold uppercase tracking-wider">ERROR DETAILS</span>
+                                        {errorExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                                    </button>
+                                    {errorExpanded && (
+                                        <div className="px-3 pb-3 font-mono text-xs whitespace-pre-wrap break-words border-t border-destructive/30 pt-2">
+                                            {job.error_message}
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>

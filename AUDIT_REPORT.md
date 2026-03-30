@@ -15,8 +15,29 @@ All **critical** and **high** severity findings have been remediated across 9 re
 | Critical | 17 | 17 | 0 |
 | High | 20 | 20 | 0 |
 | Medium | 22 | 22 | 0 |
-| Low | 14 | 5 | 9 |
-| **Total** | **73** | **64** | **9** |
+| Low | 14 | 14 | 0 |
+| **Total** | **73** | **73** | **0** |
+
+**Session 2026-03-27 additions (post-audit refinements):**
+- C-NEW1: `_VALID_TRANSITIONS` backward transitions removed (ACTIVE→PENDING, COLLECTION_COMPLETE→ACTIVE)
+- C-NEW2: `AGENT_SHARED_SECRET` empty → RuntimeError at startup
+- C-NEW3: `_validate_identifier` length cap (256 chars)
+- C-NEW4: `severity` param whitelist in sigma-hits endpoints
+- H-NEW1: `ProcessingStatus` collapsible error_message panel
+- H-NEW2: `CollectionExecution` polling 1200ms → 3000ms
+- H-NEW3: `Dashboard` network vs server error classification
+- M-NEW1: CSP + Permissions-Policy headers in `SecurityHeadersMiddleware`
+- M-NEW2: CORS restricted to explicit methods + headers
+- M-NEW3: nginx.conf CSP + Permissions-Policy headers
+- M-NEW4: CRUD safety limits (device/incident/folder/item: 1000/1000/1000/5000)
+- M-NEW5: Audit log for timeline download (`processing.py`)
+- M-NEW6: Audit log + all_ok status for verify-tools (`settings.py`)
+- M-NEW7: Evidence storage path writability check in settings PUT
+- M-NEW8: Evidence export mutual exclusivity (incident_id XOR evidence_id)
+- M-NEW9: SigmaHits, IOCMatches, YaraMatches error state display
+- M-NEW10: Devices table loading skeleton
+- L-NEW1: Celery worker healthcheck added to docker-compose.yml
+- L-NEW2: Frontend healthcheck wget → curl
 
 ---
 

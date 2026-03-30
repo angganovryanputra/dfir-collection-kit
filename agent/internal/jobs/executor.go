@@ -16,6 +16,7 @@ import (
 	"github.com/dfir/agent/internal/config"
 	"github.com/dfir/agent/internal/logging"
 	"github.com/dfir/agent/internal/modules"
+	"github.com/dfir/agent/internal/parsers"
 	"github.com/dfir/agent/internal/storage"
 )
 
@@ -305,6 +306,17 @@ func (e *Executor) Run(
 		logJob.Warning("Partial collection: %d/%d modules failed: %s",
 			len(failedModules), totalModules, strings.Join(failedModules, ", "))
 	}
+
+	// Phase 2: Parse collected artifacts
+	logJob.Info("Starting artifact parsing phase")
+	if e.apiClient != nil {
+		_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+			Status:  "parsing",
+			Message: "Parsing collected artifacts",
+			LogTail: []string{"Parsing collected artifacts"},
+		})
+	}
+	parsers.RunAll(ctx, workDir)
 
 	// Build and upload evidence ZIP
 	logJob.Info("All modules processed, starting ZIP creation")

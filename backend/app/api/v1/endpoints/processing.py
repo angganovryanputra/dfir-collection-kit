@@ -28,6 +28,7 @@ from app.crud.super_timeline import (
     list_lateral_movements,
 )
 from app.models.user import User
+from app.services.audit_log_service import safe_record_event
 from app.schemas.analytics import (
     AttackChainOut,
     IOCIndicatorCreate,
@@ -122,6 +123,11 @@ async def get_sigma_hits_for_job(
     _: User = Depends(get_current_user),
 ) -> SigmaHitListOut:
     """List Sigma detection hits for a specific evidence job."""
+    _ALLOWED_SEVERITIES = {"critical", "high", "medium", "low", "informational"}
+    if severity is not None and severity.lower() not in _ALLOWED_SEVERITIES:
+        raise HTTPException(status_code=400, detail=f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}")
+    if severity is not None:
+        severity = severity.lower()
     proc_job = await get_processing_job_by_evidence_job_id(db, job_id)
     if not proc_job:
         raise HTTPException(status_code=404, detail="No processing job found for this evidence job")
@@ -159,6 +165,11 @@ async def get_sigma_hits_for_incident(
     _: User = Depends(get_current_user),
 ) -> SigmaHitListOut:
     """List all Sigma detection hits for an incident."""
+    _ALLOWED_SEVERITIES = {"critical", "high", "medium", "low", "informational"}
+    if severity is not None and severity.lower() not in _ALLOWED_SEVERITIES:
+        raise HTTPException(status_code=400, detail=f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}")
+    if severity is not None:
+        severity = severity.lower()
     hits, total = await list_sigma_hits(db, incident_id, severity, limit, offset)
     severity_counts = await count_sigma_hits_by_severity(db, incident_id)
 
@@ -173,7 +184,7 @@ async def get_sigma_hits_for_incident(
 async def download_timeline(
     job_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> FileResponse:
     """Download the Timesketch JSONL timeline for a completed evidence job."""
     from app.crud.job import get_job
@@ -195,6 +206,20 @@ async def download_timeline(
     )
     if not timeline_path.exists():
         raise HTTPException(status_code=404, detail="timeline.jsonl not found on disk")
+
+    await safe_record_event(
+        db,
+        event_type="timeline_downloaded",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="backend",
+        action="download timeline",
+        target_type="job",
+        target_id=job_id,
+        status="success",
+        message="Timeline JSONL downloaded",
+        metadata={"incident_id": job.incident_id, "job_id": job_id},
+    )
 
     return FileResponse(
         path=str(timeline_path),

@@ -143,6 +143,14 @@ export default function SigmaHits() {
                     </div>
                 </TacticalPanel>
 
+                {/* Error state */}
+                {error && (
+                    <div className="flex items-center gap-3 px-4 py-3 border border-destructive/40 bg-destructive/10 text-destructive font-mono text-sm">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        <span>Failed to load Sigma hits: {error instanceof Error ? error.message : "Unknown error"}</span>
+                    </div>
+                )}
+
                 {/* Hits Table */}
                 <TacticalPanel
                     title="RULE MATCHES"

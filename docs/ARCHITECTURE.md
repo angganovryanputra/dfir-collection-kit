@@ -97,18 +97,13 @@ frontend/
 ### API Client Pattern
 
 ```typescript
-// lib/api.ts
-import { API_BASE_URL } from "./vite-env";
+// Use helpers from src/lib/api.ts — they inject the Bearer token automatically
+// and redirect to /login on 401. Auth token is stored in localStorage["dfir_auth"]
+// as { token: string }; role and username are decoded from the JWT payload.
+import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 
-const apiGet = async <T>(path: string): Promise<T> => {
-  const token = localStorage.getItem("dfir_auth");
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
-  // ... error handling
-};
+const incident = await apiGet<IncidentOut>(`/incidents/${id}`);
+await apiPost("/incidents", payload);
 ```
 
 ## Backend Architecture
@@ -127,22 +122,25 @@ backend/
 │   │       ├── api.py      # Router aggregation
 │   │       └── endpoints/  # Route handlers
 │   │           ├── agents.py
+│   │           ├── audit_logs.py
 │   │           ├── auth.py
 │   │           ├── chain_of_custody.py
+│   │           ├── collectors.py
 │   │           ├── devices.py
-│   │           ├── evidence.py
+│   │           ├── evidence.py      # Evidence vault + super-timeline query/export
 │   │           ├── incidents.py
 │   │           ├── jobs.py
+│   │           ├── processing.py    # Forensics pipeline trigger, sigma/yara/ioc/attack-chains
 │   │           ├── settings.py
-│   │           ├── status.py
+│   │           ├── status.py        # /health (public) + /diagnostics (admin+)
 │   │           ├── templates.py
 │   │           └── users.py
 │   ├── core/
 │   │   ├── config.py       # Environment settings
-│   │   ├── deps.py         # FastAPI dependencies
-│   │   ├── security.py     # JWT, hashing
+│   │   ├── deps.py         # FastAPI dependencies (require_roles factory)
+│   │   ├── security.py     # JWT, hashing, HMAC export signatures
 │   │   ├── evidence_files.py # File operations
-│   │   └── modules.py      # Module registry
+│   │   └── modules.py      # Module registry + collection profiles
 │   ├── crud/                # Database operations
 │   │   ├── chain_of_custody.py
 │   │   ├── device.py
@@ -150,19 +148,23 @@ backend/
 │   │   ├── evidence_export.py
 │   │   ├── incident.py
 │   │   ├── job.py
+│   │   ├── super_timeline.py
 │   │   ├── template.py
 │   │   └── user.py
 │   ├── db/
 │   │   ├── base.py         # SQLAlchemy Base
 │   │   └── session.py      # AsyncSession factory
 │   ├── models/              # ORM models
+│   │   ├── audit_log.py
 │   │   ├── chain_of_custody.py
 │   │   ├── collector.py
 │   │   ├── device.py
 │   │   ├── evidence.py
 │   │   ├── incident.py
 │   │   ├── job.py
+│   │   ├── processing.py    # ProcessingJob, SigmaHit, YaraMatch, IOCMatch, AttackChain
 │   │   ├── settings.py
+│   │   ├── super_timeline.py # SuperTimeline, LateralMovement
 │   │   ├── template.py
 │   │   └── user.py
 │   ├── schemas/             # Pydantic models
@@ -171,13 +173,19 @@ backend/
 │   │   ├── device.py
 │   │   ├── evidence.py
 │   │   ├── job.py
-│   │   ├── settings.py
+│   │   ├── settings.py      # SystemSettingsApiOut masks timesketch_token as "***"
 │   │   ├── status.py
 │   │   ├── template.py
 │   │   └── user.py
-│   ├── seed.py              # Seed data
+│   ├── services/
+│   │   ├── audit_log_service.py      # Hash-chained API event log
+│   │   ├── report_service.py         # Incident report generation
+│   │   ├── super_timeline_service.py # Cross-host timeline merge → DuckDB
+│   │   └── system_settings_service.py # Settings cache (60s TTL)
+│   ├── seed.py              # Seed data (no hardcoded passwords)
 │   ├── seed_run.py          # DB initialization
-│   └── main.py             # FastAPI app
+│   ├── worker.py            # Celery app + task definitions
+│   └── main.py             # FastAPI app (security middleware, CORS, startup checks)
 ├── requirements.txt
 ├── Dockerfile
 └── alembic.ini
@@ -268,7 +276,7 @@ Any tampering with a CoC entry will cause verification to fail.
 - `POST /api/v1/chain-of-custody` (operator/admin create entry)
 - `GET /api/v1/chain-of-custody/export` (CSV export, optional `incident_id`)
 
-## Agent Architecture (Go - Future)
+## Agent Architecture (Go)
 
 ### Agent Workflow
 
@@ -410,9 +418,9 @@ Access:
    - Token storage in `localStorage` (httpOnly cookies recommended for production)
 
 2. **Agent Authentication**:
-   - Shared secret via `X-Agent-Token` header
+   - Shared secret via `X-Agent-Token` header (compared with `hmac.compare_digest`)
    - Required for job polling, status updates, and uploads
-   - Rejects requests if secret not configured (503)
+   - Empty `AGENT_SHARED_SECRET` causes backend startup failure (RuntimeError)
 
 ### Authorization
 
@@ -424,12 +432,31 @@ Role-based access control (RBAC):
 | Operator   | CRU      | CRU       | CRU     | CR       | Read     | -     |
 | Viewer     | Read     | Read      | Read    | Read     | Read     | -     |
 
+### Security Headers
+
+`SecurityHeadersMiddleware` in `main.py` adds the following headers to every response:
+
+| Header | Value |
+|--------|-------|
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY` |
+| `X-XSS-Protection` | `1; mode=block` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `X-Permitted-Cross-Domain-Policies` | `none` |
+| `Permissions-Policy` | `geolocation=(), camera=(), microphone=()` |
+| `Content-Security-Policy` | `default-src 'none'; frame-ancestors 'none'` |
+
+CORS is restricted to explicit method and header whitelists (no wildcards).
+
+The Nginx frontend container adds a broader CSP suitable for the SPA (`script-src 'self' 'unsafe-inline'`, `connect-src 'self' ...`).
+
 ### Input Validation
 
 - Pydantic schemas for all request/response bodies
 - Path traversal prevention in evidence storage
 - File upload size limits (`MAX_UPLOAD_SIZE_MB`)
-- Identifier validation (alphanumeric, underscore, dash, dot)
+- Identifier validation (alphanumeric, underscore, dash, dot; max 256 chars)
+- `severity` query param whitelisted against `_ALLOWED_SEVERITIES` set in `processing.py`
 
 ### Evidence Integrity
 

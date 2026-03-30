@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user, get_db, require_roles
 from app.crud.settings import get_settings, upsert_settings
 from app.models.user import User
+from app.services.audit_log_service import safe_record_event
 from app.schemas.settings import SystemSettingsApiOut, SystemSettingsCreate, SystemSettingsOut
 from app.services.audit_log_service import safe_record_event
 from app.crud.audit_log import prune_old_entries
@@ -33,8 +34,11 @@ async def put_system_settings(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> SystemSettingsApiOut:
-    if not Path(payload.evidence_storage_path.strip()).is_absolute():
+    storage_path = Path(payload.evidence_storage_path.strip())
+    if not storage_path.is_absolute():
         raise HTTPException(status_code=400, detail="evidence_storage_path must be an absolute path")
+    if storage_path.exists() and not os.access(storage_path, os.W_OK):
+        raise HTTPException(status_code=400, detail="evidence_storage_path exists but is not writable")
     if payload.max_file_size_gb <= 0:
         raise HTTPException(status_code=400, detail="max_file_size_gb must be greater than 0")
     if payload.collection_timeout_min <= 0:
@@ -87,6 +91,7 @@ async def put_system_settings(
 @router.post("/verify-tools", dependencies=[Depends(require_roles("admin"))])
 async def verify_tools_endpoint(
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """Check whether each configured forensics tool path exists on the server."""
     settings = await get_runtime_settings(db)
@@ -109,10 +114,25 @@ async def verify_tools_endpoint(
             return {"ok": False, "status": "not_found", "path": path}
         return {"ok": True, "status": "ok", "path": path}
 
-    return {
+    result = {
         "ez_tools": _check_dir(settings.ez_tools_path),
         "chainsaw": _check_exe(settings.chainsaw_path),
         "hayabusa": _check_exe(settings.hayabusa_path),
         "sigma_rules": _check_dir(settings.sigma_rules_path),
         "yara_rules": _check_dir(settings.yara_rules_path),
     }
+    all_ok = all(v["ok"] for v in result.values())
+    await safe_record_event(
+        db,
+        event_type="tools_verified",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="backend",
+        action="verify forensics tools",
+        target_type="settings",
+        target_id="system",
+        status="success" if all_ok else "failure",
+        message="Forensics tool verification completed",
+        metadata={"results": {k: v["status"] for k, v in result.items()}},
+    )
+    return result

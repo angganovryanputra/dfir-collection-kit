@@ -100,8 +100,12 @@ Three roles with decreasing permissions: `admin` > `operator` > `viewer`. `requi
 
 **Security hardening** (`app/main.py`):
 - `_INSECURE_DEFAULTS` check — RuntimeError at startup if `SECRET_KEY` is a known weak value
-- `SecurityHeadersMiddleware` — adds X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy on every response
-- In-memory sliding window IP rate limiter on `POST /auth/login` (20 attempts/60s, returns 429 + Retry-After)
+- Empty `AGENT_SHARED_SECRET` — RuntimeError at startup (not just a warning)
+- `SecurityHeadersMiddleware` — adds X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy, X-Permitted-Cross-Domain-Policies, Permissions-Policy, Content-Security-Policy on every response
+- CORS `allow_methods` and `allow_headers` are explicit whitelists (not wildcards): `["GET","POST","PATCH","PUT","DELETE","OPTIONS"]` and `["Authorization","Content-Type","Accept","X-Agent-Token"]`
+- In-memory sliding window IP rate limiter on `POST /auth/login` (20 attempts/60s, returns 429 + Retry-After); periodic sweep prevents unbounded memory growth
+
+**CRUD safety limits**: `list_devices`, `list_incidents`, `list_folders`, `list_items` all enforce a `limit` cap (default 1000/5000) to prevent accidental full-table scans.
 
 ### Module System
 

@@ -176,10 +176,10 @@ cd agent
 # Build for current platform
 go build -o dfir-agent ./cmd/agent/
 
-# Run with env vars
-BACKEND_URL=http://localhost:8000 \
-AGENT_SHARED_SECRET=your-secret \
-AGENT_ID=DEV-WORKSTATION \
+# Run with env vars (all agent vars use DFIR_ prefix)
+DFIR_BACKEND_URL=http://localhost:8000 \
+DFIR_AGENT_SECRET=your-secret \
+DFIR_AGENT_ID=DEV-WORKSTATION \
 ./dfir-agent
 ```
 

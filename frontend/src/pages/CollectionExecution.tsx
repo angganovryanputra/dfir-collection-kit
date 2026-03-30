@@ -265,7 +265,7 @@ export default function CollectionExecution() {
 
     if (incidentId) {
       pollStatus();
-      pollerRef.current = setInterval(pollStatus, 1200);
+      pollerRef.current = setInterval(pollStatus, 3000);
     }
 
     return () => {

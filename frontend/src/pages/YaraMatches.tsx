@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, ShieldCheck, Bug } from "lucide-react";
+import { ChevronLeft, ChevronRight, ShieldCheck, Bug, AlertTriangle } from "lucide-react";
 import { apiGet } from "@/lib/api";
 
 interface YaraMatchString {
@@ -88,6 +88,14 @@ export default function YaraMatches() {
             }
         >
             <div className="p-6 flex flex-col gap-6 max-w-5xl mx-auto w-full">
+                {/* Error state */}
+                {error && (
+                    <div className="flex items-center gap-3 px-4 py-3 border border-destructive/40 bg-destructive/10 text-destructive font-mono text-sm">
+                        <AlertTriangle className="w-4 h-4 shrink-0" />
+                        <span>Failed to load YARA matches: {error instanceof Error ? error.message : "Unknown error"}</span>
+                    </div>
+                )}
+
                 {/* Summary */}
                 <TacticalPanel title="YARA SCAN SUMMARY" status={total > 0 ? "offline" : "online"}>
                     <div className="flex items-center gap-6 font-mono text-sm pt-1">

@@ -137,129 +137,14 @@ async function apiGetOrNull<T>(path: string): Promise<T | null> {
     }
 }
 
-// ─── Lateral Movement Graph ───────────────────────────────────────────────────
+// ─── Lateral Movement Table ───────────────────────────────────────────────────
 
-const LM_TYPE_COLOR: Record<string, { stroke: string; label: string }> = {
-    account_pivot:    { stroke: "#ef4444", label: "Account Pivot" },
-    process_spread:   { stroke: "#f97316", label: "Process Spread" },
-    credential_reuse: { stroke: "#eab308", label: "Credential Reuse" },
+const LM_DT_LABEL: Record<string, { label: string; color: string }> = {
+    account_pivot:    { label: "ACCOUNT PIVOT",  color: "border-red-500/40 bg-red-500/10 text-red-400" },
+    process_spread:   { label: "PROCESS SPREAD", color: "border-orange-500/40 bg-orange-500/10 text-orange-400" },
+    credential_reuse: { label: "CRED REUSE",     color: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400" },
 };
 
-function LateralMovementGraph({ detections }: { detections: LateralMovementOut[] }) {
-    if (!detections.length) return null;
-
-    // Collect unique hosts and assign positions
-    const hosts = Array.from(new Set(
-        detections.flatMap((d) => [d.source_host, d.target_host])
-    ));
-    const W = 520, H = 180, PAD = 60, R = 20;
-    const count = hosts.length;
-    // Spread hosts evenly across the width
-    const positions: Record<string, { x: number; y: number }> = {};
-    hosts.forEach((h, i) => {
-        positions[h] = {
-            x: count === 1 ? W / 2 : PAD + (i * (W - 2 * PAD)) / Math.max(1, count - 1),
-            y: H / 2,
-        };
-    });
-
-    // Offset source/target nodes slightly to avoid overlap on same-row layout
-    const sources = new Set(detections.map((d) => d.source_host));
-    const targets = new Set(detections.map((d) => d.target_host));
-    hosts.forEach((h) => {
-        if (sources.has(h) && !targets.has(h)) positions[h].y = H * 0.38;
-        if (targets.has(h) && !sources.has(h)) positions[h].y = H * 0.62;
-    });
-
-    return (
-        <div className="border border-red-500/20 bg-red-500/3 rounded-sm p-3 space-y-2">
-            <div className="flex items-center justify-between">
-                <span className="font-mono text-[10px] text-red-400/70 uppercase tracking-wider">LATERAL MOVEMENT GRAPH</span>
-                <div className="flex items-center gap-3">
-                    {Object.entries(LM_TYPE_COLOR).map(([k, v]) => (
-                        <span key={k} className="flex items-center gap-1 font-mono text-[10px] text-muted-foreground">
-                            <span className="w-3 h-0.5 inline-block rounded" style={{ backgroundColor: v.stroke }} />
-                            {v.label}
-                        </span>
-                    ))}
-                </div>
-            </div>
-            <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: 180 }}>
-                <defs>
-                    {Object.entries(LM_TYPE_COLOR).map(([k, v]) => (
-                        <marker key={k} id={`arrow-${k}`} markerWidth="8" markerHeight="8"
-                            refX="7" refY="3" orient="auto">
-                            <path d="M0,0 L0,6 L8,3 z" fill={v.stroke} opacity="0.8" />
-                        </marker>
-                    ))}
-                </defs>
-
-                {/* Edges */}
-                {detections.map((d, i) => {
-                    const s = positions[d.source_host];
-                    const t = positions[d.target_host];
-                    if (!s || !t) return null;
-                    const color = LM_TYPE_COLOR[d.detection_type] ?? LM_TYPE_COLOR.account_pivot;
-                    const dx = t.x - s.x, dy = t.y - s.y;
-                    const len = Math.sqrt(dx * dx + dy * dy) || 1;
-                    const ux = dx / len, uy = dy / len;
-                    const x1 = s.x + ux * (R + 2), y1 = s.y + uy * (R + 2);
-                    const x2 = t.x - ux * (R + 8), y2 = t.y - uy * (R + 8);
-                    // Slight curve offset for parallel edges
-                    const cx = (x1 + x2) / 2 + uy * (i % 2 === 0 ? 20 : -20);
-                    const cy = (y1 + y2) / 2 - ux * (i % 2 === 0 ? 20 : -20);
-                    const conf = Math.round(d.confidence * 100);
-                    return (
-                        <g key={d.id}>
-                            <path
-                                d={`M${x1},${y1} Q${cx},${cy} ${x2},${y2}`}
-                                fill="none"
-                                stroke={color.stroke}
-                                strokeWidth={1 + d.confidence * 2}
-                                strokeOpacity={0.6}
-                                markerEnd={`url(#arrow-${d.detection_type})`}
-                            />
-                            <text
-                                x={(x1 + cx + x2) / 3}
-                                y={(y1 + cy + y2) / 3 - 4}
-                                textAnchor="middle"
-                                fontSize="9"
-                                fill={color.stroke}
-                                opacity="0.8"
-                                fontFamily="monospace"
-                            >
-                                {d.actor ? `${d.actor} · ${conf}%` : `${conf}%`}
-                            </text>
-                        </g>
-                    );
-                })}
-
-                {/* Nodes */}
-                {hosts.map((h) => {
-                    const p = positions[h];
-                    const isSrc = sources.has(h);
-                    const isTgt = targets.has(h);
-                    const fill = isSrc && isTgt ? "#7c3aed" : isSrc ? "#f97316" : "#ef4444";
-                    const label = h.length > 10 ? h.slice(0, 9) + "…" : h;
-                    return (
-                        <g key={h}>
-                            <circle cx={p.x} cy={p.y} r={R} fill={fill} fillOpacity="0.15"
-                                stroke={fill} strokeOpacity="0.6" strokeWidth="1.5" />
-                            <text x={p.x} y={p.y + 1} textAnchor="middle" dominantBaseline="middle"
-                                fontSize="9" fill={fill} fontFamily="monospace" fontWeight="bold">
-                                {label}
-                            </text>
-                            <text x={p.x} y={p.y + R + 12} textAnchor="middle"
-                                fontSize="8" fill="#6b7280" fontFamily="monospace">
-                                {isSrc && isTgt ? "SRC+TGT" : isSrc ? "SOURCE" : "TARGET"}
-                            </text>
-                        </g>
-                    );
-                })}
-            </svg>
-        </div>
-    );
-}
 
 // ─── Quick Action Card ────────────────────────────────────────────────────────
 
@@ -702,9 +587,40 @@ export default function IncidentHub() {
                     </div>
                 )}
 
-                {/* ── LM Network Graph ─────────────────────────────────────── */}
+                {/* ── LM Detections List ───────────────────────────────────── */}
                 {stDone && lmDetections && lmDetections.length > 0 && (
-                    <LateralMovementGraph detections={lmDetections} />
+                    <div className="border border-red-500/25 bg-red-500/5 rounded-sm overflow-hidden">
+                        <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-red-500/15">
+                            <Network className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                            <span className="font-mono text-xs font-bold text-red-400 uppercase tracking-wider">
+                                LATERAL MOVEMENT DETECTIONS
+                            </span>
+                            <span className="font-mono text-[10px] text-red-400/50 border border-red-500/20 px-1.5 py-0.5 rounded-sm">
+                                {lmDetections.length} DETECTION{lmDetections.length !== 1 ? "S" : ""}
+                            </span>
+                        </div>
+                        <div className="divide-y divide-red-500/10">
+                            {lmDetections.map((det) => {
+                                const meta = LM_DT_LABEL[det.detection_type];
+                                return (
+                                    <div key={det.id} className="flex items-center gap-3 px-4 py-2 font-mono text-xs flex-wrap">
+                                        <span className={`px-2 py-0.5 rounded-sm border text-[10px] font-bold shrink-0 ${meta?.color ?? "border-border/40 text-muted-foreground"}`}>
+                                            {meta?.label ?? det.detection_type.replace(/_/g, " ").toUpperCase()}
+                                        </span>
+                                        <span className="text-foreground font-bold">{det.source_host}</span>
+                                        <span className="text-muted-foreground">→</span>
+                                        <span className="text-red-400 font-bold">{det.target_host}</span>
+                                        {det.actor && (
+                                            <span className="text-muted-foreground">actor: <span className="text-foreground">{det.actor}</span></span>
+                                        )}
+                                        <span className="ml-auto text-muted-foreground/60">
+                                            {Math.round(det.confidence * 100)}% confidence
+                                        </span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
                 )}
 
                 {/* ── Quick Action Grid ────────────────────────────────────── */}

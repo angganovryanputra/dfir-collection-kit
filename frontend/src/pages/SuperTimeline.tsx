@@ -445,19 +445,21 @@ function EventHistogram({
 }) {
     const [hoveredHour, setHoveredHour] = useState<string | null>(null);
 
-    const hourCounts = new Map<string, number>();
-    for (const row of data) {
-        const dt = String(row["datetime"] ?? row["timestamp"] ?? "");
-        if (dt.length >= 13) {
-            const hour = dt.slice(0, 13); // e.g. "2026-01-15T07"
-            hourCounts.set(hour, (hourCounts.get(hour) ?? 0) + 1);
+    const { hourCounts, hours, maxCount } = useMemo(() => {
+        const hc = new Map<string, number>();
+        for (const row of data) {
+            const dt = String(row["datetime"] ?? row["timestamp"] ?? "");
+            if (dt.length >= 13) {
+                const hour = dt.slice(0, 13);
+                hc.set(hour, (hc.get(hour) ?? 0) + 1);
+            }
         }
-    }
+        const hrs = Array.from(hc.keys()).sort();
+        const max = hrs.length > 0 ? Math.max(...hc.values()) : 1;
+        return { hourCounts: hc, hours: hrs, maxCount: max };
+    }, [data]);
 
-    const hours = Array.from(hourCounts.keys()).sort();
     if (hours.length < 2) return null;
-
-    const maxCount = Math.max(...hourCounts.values());
     const BAR_W = 8;
     const GAP = 2;
     const HEIGHT = 40;
@@ -883,630 +885,6 @@ function SortableHeader({
     );
 }
 
-// ─── Entity Relationship Graph ────────────────────────────────────────────────
-
-type GNodeType = "host" | "user" | "process" | "ip" | "domain" | "alert";
-type GEdgeType = "logon" | "ran" | "executed" | "alert_edge" | "network" | "dns" | "lateral";
-
-interface GNode {
-    id: string;
-    type: GNodeType;
-    label: string;
-    x: number;
-    y: number;
-    vx: number;
-    vy: number;
-    pinned: boolean;
-    weight: number;
-}
-
-interface GEdge {
-    source: string;
-    target: string;
-    edgeType: GEdgeType;
-    weight: number;
-}
-
-const G_NODE_STYLES: Record<GNodeType, { r: number; fill: string; stroke: string; icon: string }> = {
-    host:    { r: 22, fill: "#0f2a3d", stroke: "#22d3ee", icon: "⬡" },
-    user:    { r: 16, fill: "#3b0d02", stroke: "#fb923c", icon: "◉" },
-    process: { r: 14, fill: "#1e0a40", stroke: "#a78bfa", icon: "▶" },
-    ip:      { r: 12, fill: "#0b1f2e", stroke: "#38bdf8", icon: "◎" },
-    domain:  { r: 12, fill: "#052e16", stroke: "#4ade80", icon: "⊙" },
-    alert:   { r: 18, fill: "#3b0000", stroke: "#f87171", icon: "⚠" },
-};
-
-const G_NODE_TYPE_LABELS: Record<GNodeType, string> = {
-    host: "HOST", user: "USER", process: "PROCESS", ip: "IP", domain: "DOMAIN", alert: "ALERT",
-};
-
-const G_EDGE_STYLES: Record<GEdgeType, { stroke: string; dash?: string; width: number }> = {
-    logon:      { stroke: "#60a5fa", width: 1.5 },
-    ran:        { stroke: "#a78bfa", dash: "4,2", width: 1 },
-    executed:   { stroke: "#fb923c", dash: "4,2", width: 1 },
-    alert_edge: { stroke: "#f87171", width: 2 },
-    network:    { stroke: "#22d3ee", dash: "2,3", width: 1 },
-    dns:        { stroke: "#4ade80", dash: "2,3", width: 1 },
-    lateral:    { stroke: "#ef4444", width: 3 },
-};
-
-const G_SYSTEM_USERS = new Set([
-    "system", "nt authority\\system", "nt authority\\local service",
-    "nt authority\\network service", "local service", "network service",
-    "-", "n/a", "anonymous", "guest", "", "null", "—",
-]);
-
-const G_MAX_NODES: Record<GNodeType, number> = {
-    host: 20, user: 15, process: 15, ip: 10, domain: 10, alert: 12,
-};
-
-function gIsPrivateIP(ip: string): boolean {
-    const p = ip.split(".").map(Number);
-    if (p.length !== 4) return true;
-    return p[0] === 10 || p[0] === 127 ||
-        (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
-        (p[0] === 192 && p[1] === 168) ||
-        (p[0] === 169 && p[1] === 254);
-}
-
-function buildEntityGraph(
-    events: Record<string, unknown>[],
-    lmDetections: LateralMovementDetection[],
-    w: number,
-    h: number,
-): { nodes: GNode[]; edges: GEdge[] } {
-    const cx = w / 2, cy = h / 2;
-    const nodeMap = new Map<string, GNode>();
-    const edgeMap = new Map<string, GEdge>();
-
-    const typeFreqs: Record<GNodeType, Map<string, number>> = {
-        host: new Map(), user: new Map(), process: new Map(),
-        ip: new Map(), domain: new Map(), alert: new Map(),
-    };
-
-    // Pass 1: count frequencies
-    for (const ev of events) {
-        const host = String(ev.host ?? ev.computer ?? "").trim();
-        if (host) typeFreqs.host.set(host, (typeFreqs.host.get(host) ?? 0) + 1);
-
-        const user = String(ev.user ?? "").trim();
-        if (user && !G_SYSTEM_USERS.has(user.toLowerCase())) {
-            typeFreqs.user.set(user, (typeFreqs.user.get(user) ?? 0) + 1);
-        }
-
-        const src = String(ev.source_short ?? "").toUpperCase();
-        const dn = String(ev.display_name ?? "").trim();
-        if (dn && (src === "PREFETCH" || src === "AMCACHE")) {
-            const parts = dn.split(/[/\\]/);
-            const name = parts[parts.length - 1] ?? dn;
-            typeFreqs.process.set(name, (typeFreqs.process.get(name) ?? 0) + 1);
-        }
-
-        if (src === "SIGMA" || src === "HAYABUSA") {
-            const rule = String(ev.rule_name ?? ev.event_id ?? "").trim();
-            if (rule) typeFreqs.alert.set(rule, (typeFreqs.alert.get(rule) ?? 0) + 1);
-        }
-
-        const msg = String(ev.message ?? ev.description ?? "");
-        for (const ioc of detectIOCs(msg)) {
-            if (ioc.type === "IPv4" && !gIsPrivateIP(ioc.value))
-                typeFreqs.ip.set(ioc.value, (typeFreqs.ip.get(ioc.value) ?? 0) + 1);
-            if (ioc.type === "Domain") {
-                const d = ioc.value.toLowerCase();
-                typeFreqs.domain.set(d, (typeFreqs.domain.get(d) ?? 0) + 1);
-            }
-        }
-    }
-    for (const lm of lmDetections) {
-        typeFreqs.host.set(lm.source_host, (typeFreqs.host.get(lm.source_host) ?? 0) + 3);
-        typeFreqs.host.set(lm.target_host, (typeFreqs.host.get(lm.target_host) ?? 0) + 3);
-        if (lm.actor) typeFreqs.user.set(lm.actor, (typeFreqs.user.get(lm.actor) ?? 0) + 2);
-    }
-
-    // Build allowed top-N sets
-    const allowed: Record<GNodeType, Set<string>> = {
-        host: new Set(), user: new Set(), process: new Set(),
-        ip: new Set(), domain: new Set(), alert: new Set(),
-    };
-    for (const [t, fm] of Object.entries(typeFreqs) as [GNodeType, Map<string, number>][]) {
-        for (const [id] of [...fm.entries()].sort((a, b) => b[1] - a[1]).slice(0, G_MAX_NODES[t])) {
-            allowed[t].add(id);
-        }
-    }
-
-    function ensureNode(id: string, type: GNodeType, label: string): GNode {
-        const ex = nodeMap.get(id);
-        if (ex) { ex.weight++; return ex; }
-        const angle = Math.random() * Math.PI * 2;
-        const dist = 60 + Math.random() * 80;
-        const n: GNode = { id, type, label, x: cx + Math.cos(angle) * dist, y: cy + Math.sin(angle) * dist, vx: 0, vy: 0, pinned: false, weight: 1 };
-        nodeMap.set(id, n);
-        return n;
-    }
-
-    function ensureEdge(src: string, tgt: string, type: GEdgeType) {
-        if (src === tgt) return;
-        const key = `${src}→${tgt}:${type}`;
-        const ex = edgeMap.get(key);
-        if (ex) { ex.weight++; return; }
-        edgeMap.set(key, { source: src, target: tgt, edgeType: type, weight: 1 });
-    }
-
-    // Pass 2: build nodes/edges
-    for (const ev of events) {
-        const hostRaw = String(ev.host ?? ev.computer ?? "").trim();
-        if (!hostRaw || !allowed.host.has(hostRaw)) continue;
-        const hostId = `host:${hostRaw}`;
-        ensureNode(hostId, "host", hostRaw);
-
-        const userRaw = String(ev.user ?? "").trim();
-        if (userRaw && !G_SYSTEM_USERS.has(userRaw.toLowerCase()) && allowed.user.has(userRaw)) {
-            const uid = `user:${userRaw}`;
-            ensureNode(uid, "user", userRaw);
-            ensureEdge(hostId, uid, "logon");
-        }
-
-        const src = String(ev.source_short ?? "").toUpperCase();
-        const dn = String(ev.display_name ?? "").trim();
-        if (dn && (src === "PREFETCH" || src === "AMCACHE")) {
-            const parts = dn.split(/[/\\]/);
-            const pName = parts[parts.length - 1] ?? dn;
-            if (allowed.process.has(pName)) {
-                const pid = `proc:${pName}`;
-                ensureNode(pid, "process", pName);
-                ensureEdge(hostId, pid, "ran");
-                if (userRaw && !G_SYSTEM_USERS.has(userRaw.toLowerCase()) && allowed.user.has(userRaw))
-                    ensureEdge(`user:${userRaw}`, pid, "executed");
-            }
-        }
-
-        if ((src === "SIGMA" || src === "HAYABUSA")) {
-            const rule = String(ev.rule_name ?? ev.event_id ?? "").trim();
-            if (rule && allowed.alert.has(rule)) {
-                const aid = `alert:${rule}`;
-                ensureNode(aid, "alert", rule.length > 30 ? rule.slice(0, 28) + "…" : rule);
-                ensureEdge(hostId, aid, "alert_edge");
-            }
-        }
-
-        const msg = String(ev.message ?? ev.description ?? "");
-        for (const ioc of detectIOCs(msg)) {
-            if (ioc.type === "IPv4" && !gIsPrivateIP(ioc.value) && allowed.ip.has(ioc.value)) {
-                const iid = `ip:${ioc.value}`;
-                ensureNode(iid, "ip", ioc.value);
-                ensureEdge(hostId, iid, "network");
-            }
-            if (ioc.type === "Domain") {
-                const d = ioc.value.toLowerCase();
-                if (allowed.domain.has(d)) {
-                    const did = `domain:${d}`;
-                    ensureNode(did, "domain", d);
-                    ensureEdge(hostId, did, "dns");
-                }
-            }
-        }
-    }
-
-    for (const lm of lmDetections) {
-        const sid = `host:${lm.source_host}`;
-        const tid = `host:${lm.target_host}`;
-        ensureNode(sid, "host", lm.source_host);
-        ensureNode(tid, "host", lm.target_host);
-        ensureEdge(sid, tid, "lateral");
-        if (lm.actor) {
-            const uid = `user:${lm.actor}`;
-            ensureNode(uid, "user", lm.actor);
-            ensureEdge(sid, uid, "logon");
-            ensureEdge(tid, uid, "logon");
-        }
-    }
-
-    // Remove truly isolated non-host nodes
-    const connIds = new Set<string>();
-    for (const e of edgeMap.values()) { connIds.add(e.source); connIds.add(e.target); }
-    const finalNodes = [...nodeMap.values()].filter((n) => n.type === "host" || connIds.has(n.id));
-    const finalIds = new Set(finalNodes.map((n) => n.id));
-    const finalEdges = [...edgeMap.values()].filter((e) => finalIds.has(e.source) && finalIds.has(e.target));
-
-    return { nodes: finalNodes, edges: finalEdges };
-}
-
-// Physics constants
-const G_REPULSION = 9000;
-const G_SPRING_K = 0.025;
-const G_SPRING_REST = 130;
-const G_FRICTION = 0.87;
-const G_GRAVITY = 0.004;
-
-function gSimStep(nodes: GNode[], edges: GEdge[], w: number, h: number): boolean {
-    const cx = w / 2, cy = h / 2;
-    let moving = false;
-
-    const adj = new Map<string, string[]>();
-    for (const n of nodes) adj.set(n.id, []);
-    for (const e of edges) {
-        adj.get(e.source)?.push(e.target);
-        adj.get(e.target)?.push(e.source);
-    }
-    const nodeById = new Map(nodes.map((n) => [n.id, n]));
-
-    for (const node of nodes) {
-        if (node.pinned) continue;
-        let fx = 0, fy = 0;
-
-        for (const other of nodes) {
-            if (other.id === node.id) continue;
-            const dx = node.x - other.x, dy = node.y - other.y;
-            const d2 = Math.max(1, dx * dx + dy * dy);
-            const d = Math.sqrt(d2);
-            const f = G_REPULSION / d2;
-            fx += (dx / d) * f; fy += (dy / d) * f;
-        }
-
-        for (const nid of (adj.get(node.id) ?? [])) {
-            const nb = nodeById.get(nid);
-            if (!nb) continue;
-            const dx = nb.x - node.x, dy = nb.y - node.y;
-            const d = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-            const f = G_SPRING_K * (d - G_SPRING_REST);
-            fx += (dx / d) * f; fy += (dy / d) * f;
-        }
-
-        fx += (cx - node.x) * G_GRAVITY;
-        fy += (cy - node.y) * G_GRAVITY;
-
-        node.vx = (node.vx + fx) * G_FRICTION;
-        node.vy = (node.vy + fy) * G_FRICTION;
-
-        const spd = Math.sqrt(node.vx ** 2 + node.vy ** 2);
-        if (spd > 12) { node.vx = (node.vx / spd) * 12; node.vy = (node.vy / spd) * 12; }
-
-        node.x = Math.max(40, Math.min(w - 40, node.x + node.vx));
-        node.y = Math.max(40, Math.min(h - 40, node.y + node.vy));
-
-        if (spd > 0.15) moving = true;
-    }
-    return moving;
-}
-
-function GMiniMap({ nodes, edges, panX, panY, zoom, gw, gh }: {
-    nodes: GNode[]; edges: GEdge[];
-    panX: number; panY: number; zoom: number; gw: number; gh: number;
-}) {
-    const MW = 130, MH = 85;
-    if (nodes.length === 0) return null;
-    const xs = nodes.map((n) => n.x), ys = nodes.map((n) => n.y);
-    const minX = Math.min(...xs), maxX = Math.max(...xs);
-    const minY = Math.min(...ys), maxY = Math.max(...ys);
-    const dw = Math.max(1, maxX - minX), dh = Math.max(1, maxY - minY);
-    const sc = Math.min((MW * 0.85) / dw, (MH * 0.85) / dh);
-    const ox = (MW - dw * sc) / 2, oy = (MH - dh * sc) / 2;
-    const mx = (x: number) => (x - minX) * sc + ox;
-    const my = (y: number) => (y - minY) * sc + oy;
-    const vl = (-panX / zoom - minX) * sc + ox;
-    const vt = (-panY / zoom - minY) * sc + oy;
-    const vw = (gw / zoom) * sc, vh = (gh / zoom) * sc;
-    return (
-        <div className="absolute bottom-10 right-2 z-20 border border-border/50 bg-card/90 rounded-sm overflow-hidden shadow-lg">
-            <svg width={MW} height={MH}>
-                {edges.slice(0, 150).map((e, i) => {
-                    const s = nodes.find((n) => n.id === e.source), t = nodes.find((n) => n.id === e.target);
-                    if (!s || !t) return null;
-                    return <line key={i} x1={mx(s.x)} y1={my(s.y)} x2={mx(t.x)} y2={my(t.y)} stroke="#ffffff18" strokeWidth={0.5} />;
-                })}
-                {nodes.map((n) => (
-                    <circle key={n.id} cx={mx(n.x)} cy={my(n.y)} r={2.5} fill={G_NODE_STYLES[n.type].stroke} opacity={0.8} />
-                ))}
-                <rect x={vl} y={vt} width={Math.max(4, vw)} height={Math.max(4, vh)} fill="none" stroke="#ffffff50" strokeWidth={1} />
-            </svg>
-        </div>
-    );
-}
-
-function EntityGraph({
-    events,
-    lmDetections,
-    onNodeClick,
-}: {
-    events: Record<string, unknown>[];
-    lmDetections: LateralMovementDetection[];
-    onNodeClick: (dsl: string) => void;
-}) {
-    const containerRef = useRef<HTMLDivElement>(null);
-    const [dim, setDim] = useState({ w: 900, h: 500 });
-    const nodesRef = useRef<GNode[]>([]);
-    const edgesRef = useRef<GEdge[]>([]);
-    const [, setTick] = useState(0);
-    const rafRef = useRef<number | null>(null);
-    const simRef = useRef(true);
-    const stepsRef = useRef(0);
-
-    const [pan, setPan] = useState({ x: 0, y: 0 });
-    const [zoom, setZoom] = useState(1);
-    const panActiveRef = useRef(false);
-    const lastPanRef = useRef({ x: 0, y: 0 });
-    const draggingRef = useRef<string | null>(null);
-    const dragOffRef = useRef({ x: 0, y: 0 });
-
-    const [hoveredId, setHoveredId] = useState<string | null>(null);
-    const [selectedId, setSelectedId] = useState<string | null>(null);
-
-    // Rebuild graph when inputs change
-    useEffect(() => {
-        const g = buildEntityGraph(events, lmDetections, dim.w, dim.h);
-        nodesRef.current = g.nodes;
-        edgesRef.current = g.edges;
-        stepsRef.current = 0;
-        simRef.current = true;
-        setTick((t) => t + 1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [events.length, lmDetections.length]);
-
-    // Measure container
-    useEffect(() => {
-        if (!containerRef.current) return;
-        const ro = new ResizeObserver((entries) => {
-            const r = entries[0]?.contentRect;
-            if (r?.width && r.height) setDim({ w: r.width, h: r.height });
-        });
-        ro.observe(containerRef.current);
-        return () => ro.disconnect();
-    }, []);
-
-    // Simulation RAF loop
-    useEffect(() => {
-        function step() {
-            if (!simRef.current) return;
-            const moving = gSimStep(nodesRef.current, edgesRef.current, dim.w, dim.h);
-            stepsRef.current++;
-            setTick((t) => t + 1);
-            if (moving && stepsRef.current < 250) {
-                rafRef.current = requestAnimationFrame(step);
-            } else {
-                simRef.current = false;
-            }
-        }
-        rafRef.current = requestAnimationFrame(step);
-        return () => { if (rafRef.current !== null) cancelAnimationFrame(rafRef.current); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [dim.w, dim.h, nodesRef.current.length]);
-
-    const nodes = nodesRef.current;
-    const edges = edgesRef.current;
-
-    const focusSet = useMemo(() => {
-        const id = hoveredId ?? selectedId;
-        if (!id) return null;
-        const s = new Set<string>([id]);
-        for (const e of edges) {
-            if (e.source === id) s.add(e.target);
-            if (e.target === id) s.add(e.source);
-        }
-        return s;
-    }, [hoveredId, selectedId, edges]);
-
-    function handleWheel(e: React.WheelEvent) {
-        e.preventDefault();
-        setZoom((z) => Math.min(3, Math.max(0.2, z * (e.deltaY < 0 ? 1.1 : 0.9))));
-    }
-
-    function handleBgDown(e: React.MouseEvent) {
-        if (e.button !== 0) return;
-        panActiveRef.current = true;
-        lastPanRef.current = { x: e.clientX, y: e.clientY };
-    }
-
-    function handleMouseMove(e: React.MouseEvent) {
-        if (draggingRef.current) {
-            const node = nodesRef.current.find((n) => n.id === draggingRef.current);
-            if (node && containerRef.current) {
-                const rect = containerRef.current.getBoundingClientRect();
-                node.x = (e.clientX - rect.left - pan.x - dragOffRef.current.x) / zoom;
-                node.y = (e.clientY - rect.top - pan.y - dragOffRef.current.y) / zoom;
-                node.vx = 0; node.vy = 0; node.pinned = true;
-                setTick((t) => t + 1);
-            }
-        } else if (panActiveRef.current) {
-            const dx = e.clientX - lastPanRef.current.x;
-            const dy = e.clientY - lastPanRef.current.y;
-            lastPanRef.current = { x: e.clientX, y: e.clientY };
-            setPan((p) => ({ x: p.x + dx, y: p.y + dy }));
-        }
-    }
-
-    function handleMouseUp() { draggingRef.current = null; panActiveRef.current = false; }
-
-    function handleNodeDown(e: React.MouseEvent, node: GNode) {
-        e.stopPropagation();
-        if (e.button !== 0) return;
-        draggingRef.current = node.id;
-        const rect = containerRef.current?.getBoundingClientRect();
-        dragOffRef.current = {
-            x: node.x * zoom - (e.clientX - (rect?.left ?? 0) - pan.x),
-            y: node.y * zoom - (e.clientY - (rect?.top ?? 0) - pan.y),
-        };
-        if (!simRef.current) { simRef.current = true; stepsRef.current = 0; }
-    }
-
-    function handleNodeClick(e: React.MouseEvent, node: GNode) {
-        e.stopPropagation();
-        setSelectedId((prev) => (prev === node.id ? null : node.id));
-        const q = nodeToDSL(node);
-        if (q) onNodeClick(q);
-    }
-
-    function nodeToDSL(node: GNode): string {
-        switch (node.type) {
-            case "host":    return `host:${node.label}`;
-            case "user":    return `user:${node.label}`;
-            case "process": return `"${node.label}"`;
-            case "ip":      return `"${node.label}"`;
-            case "domain":  return `"${node.label}"`;
-            case "alert":   return `rule:${node.label.replace(/…$/, "").trim()}`;
-        }
-    }
-
-    function resetLayout() {
-        const { w, h } = dim;
-        for (const n of nodesRef.current) {
-            const a = Math.random() * Math.PI * 2, d = 50 + Math.random() * 100;
-            n.x = w / 2 + Math.cos(a) * d; n.y = h / 2 + Math.sin(a) * d;
-            n.vx = 0; n.vy = 0; n.pinned = false;
-        }
-        stepsRef.current = 0; simRef.current = true;
-        setPan({ x: 0, y: 0 }); setZoom(1);
-        setTick((t) => t + 1);
-    }
-
-    const selectedNode = nodes.find((n) => n.id === selectedId);
-    const connCount = useMemo(() => {
-        if (!selectedId) return 0;
-        return edges.filter((e) => e.source === selectedId || e.target === selectedId).length;
-    }, [selectedId, edges]);
-
-    if (nodes.length === 0) {
-        return (
-            <div className="flex items-center justify-center h-48 font-mono text-sm text-muted-foreground">
-                <Network className="w-4 h-4 mr-2" />
-                No graph entities in current page events.
-            </div>
-        );
-    }
-
-    return (
-        <div className="relative" style={{ height: "520px" }}>
-            {/* Toolbar */}
-            <div className="absolute top-2 left-2 z-20 flex items-center gap-1.5">
-                <button onClick={resetLayout} className="px-2 py-1 border border-border/50 bg-card/90 font-mono text-[10px] text-muted-foreground hover:text-foreground rounded-sm">RESET</button>
-                <button onClick={() => setZoom((z) => Math.min(3, z * 1.2))} className="w-6 h-6 flex items-center justify-center border border-border/50 bg-card/90 font-mono text-xs text-muted-foreground hover:text-foreground rounded-sm">+</button>
-                <button onClick={() => setZoom((z) => Math.max(0.2, z * 0.8))} className="w-6 h-6 flex items-center justify-center border border-border/50 bg-card/90 font-mono text-xs text-muted-foreground hover:text-foreground rounded-sm">−</button>
-                <span className="px-2 py-1 border border-border/40 bg-card/80 font-mono text-[10px] text-muted-foreground rounded-sm tabular-nums">{Math.round(zoom * 100)}%</span>
-                <span className="px-2 py-1 border border-border/40 bg-card/80 font-mono text-[10px] text-muted-foreground rounded-sm">{nodes.length}N · {edges.length}E</span>
-                {simRef.current && <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" title="Simulation running" />}
-            </div>
-
-            {/* Selected node panel */}
-            {selectedNode && (
-                <div className="absolute top-2 right-36 z-20 min-w-[200px] max-w-[240px] border border-primary/40 bg-card/95 rounded-sm p-3 shadow-xl font-mono">
-                    <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: G_NODE_STYLES[selectedNode.type].stroke }} />
-                            <span className="text-[10px] text-muted-foreground">{G_NODE_TYPE_LABELS[selectedNode.type]}</span>
-                        </div>
-                        <button onClick={() => setSelectedId(null)} className="text-muted-foreground hover:text-foreground"><X className="w-3 h-3" /></button>
-                    </div>
-                    <div className="text-xs font-bold text-foreground break-all mb-1.5">{selectedNode.label}</div>
-                    <div className="text-[10px] text-muted-foreground space-y-0.5">
-                        <div>seen ×{selectedNode.weight} · {connCount} edge{connCount !== 1 ? "s" : ""}</div>
-                        <div className="text-primary/70 pt-1">↑ timeline filtered above</div>
-                    </div>
-                </div>
-            )}
-
-            {/* SVG canvas */}
-            <div
-                ref={containerRef}
-                className="w-full h-full overflow-hidden bg-black/20 border border-border/30 rounded-sm cursor-grab active:cursor-grabbing"
-                onMouseDown={handleBgDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
-                onWheel={handleWheel}
-            >
-                <svg width="100%" height="100%">
-                    <defs>
-                        {(Object.entries(G_EDGE_STYLES) as [GEdgeType, typeof G_EDGE_STYLES[GEdgeType]][]).map(([type, s]) => (
-                            <marker key={type} id={`garrow-${type}`} markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto">
-                                <path d="M0,0 L0,6 L6,3 z" fill={s.stroke} opacity={0.65} />
-                            </marker>
-                        ))}
-                    </defs>
-                    <g transform={`translate(${pan.x},${pan.y}) scale(${zoom})`}>
-                        {/* Edges */}
-                        {edges.map((edge, i) => {
-                            const s = nodes.find((n) => n.id === edge.source);
-                            const t = nodes.find((n) => n.id === edge.target);
-                            if (!s || !t) return null;
-                            const es = G_EDGE_STYLES[edge.edgeType];
-                            const dim2 = focusSet ? !focusSet.has(s.id) && !focusSet.has(t.id) : false;
-                            const dx = t.x - s.x, dy = t.y - s.y;
-                            const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-                            const sr = G_NODE_STYLES[s.type].r + 2;
-                            const tr = G_NODE_STYLES[t.type].r + 5;
-                            const x1 = s.x + (dx / dist) * sr, y1 = s.y + (dy / dist) * sr;
-                            const x2 = t.x - (dx / dist) * tr, y2 = t.y - (dy / dist) * tr;
-                            // Slight curve via quadratic bezier
-                            const mx2 = (x1 + x2) / 2 + (dy / dist) * 18;
-                            const my2 = (y1 + y2) / 2 - (dx / dist) * 18;
-                            return (
-                                <path key={i}
-                                    d={`M${x1},${y1} Q${mx2},${my2} ${x2},${y2}`}
-                                    fill="none"
-                                    stroke={es.stroke}
-                                    strokeWidth={es.width * Math.min(2.5, edge.weight * 0.6 + 0.4)}
-                                    strokeDasharray={es.dash}
-                                    opacity={dim2 ? 0.05 : 0.5}
-                                    markerEnd={`url(#garrow-${edge.edgeType})`}
-                                />
-                            );
-                        })}
-                        {/* Nodes */}
-                        {nodes.map((node) => {
-                            const ns = G_NODE_STYLES[node.type];
-                            const isHov = hoveredId === node.id;
-                            const isSel = selectedId === node.id;
-                            const dim2 = focusSet ? !focusSet.has(node.id) : false;
-                            const r = ns.r * (isHov || isSel ? 1.15 : 1);
-                            return (
-                                <g key={node.id}
-                                    transform={`translate(${node.x},${node.y})`}
-                                    onMouseDown={(e) => handleNodeDown(e, node)}
-                                    onClick={(e) => handleNodeClick(e, node)}
-                                    onMouseEnter={() => setHoveredId(node.id)}
-                                    onMouseLeave={() => setHoveredId(null)}
-                                    style={{ cursor: "pointer", opacity: dim2 ? 0.15 : 1 }}
-                                >
-                                    {(isHov || isSel) && (
-                                        <circle r={r + 7} fill="none" stroke={ns.stroke} strokeWidth={1} opacity={0.3} />
-                                    )}
-                                    <circle r={r} fill={ns.fill} stroke={ns.stroke} strokeWidth={isSel ? 2.5 : isHov ? 2 : 1.5} opacity={0.92} />
-                                    <text textAnchor="middle" dominantBaseline="central" fontSize={r * 0.72} fill={ns.stroke} opacity={0.85} style={{ pointerEvents: "none", userSelect: "none" }}>
-                                        {ns.icon}
-                                    </text>
-                                    <text y={r + 12} textAnchor="middle" fontSize={9} fill="#94a3b8" fontFamily="monospace" style={{ pointerEvents: "none", userSelect: "none" }}>
-                                        {node.label.length > 18 ? node.label.slice(0, 16) + "…" : node.label}
-                                    </text>
-                                    {node.weight > 2 && (
-                                        <text x={r - 2} y={-r + 6} fontSize={7} fill={ns.stroke} fontFamily="monospace" opacity={0.65} style={{ pointerEvents: "none", userSelect: "none" }}>
-                                            ×{node.weight}
-                                        </text>
-                                    )}
-                                    {node.pinned && (
-                                        <circle r={3} cx={r - 4} cy={-r + 4} fill={ns.stroke} opacity={0.6} />
-                                    )}
-                                </g>
-                            );
-                        })}
-                    </g>
-                </svg>
-                <GMiniMap nodes={nodes} edges={edges} panX={pan.x} panY={pan.y} zoom={zoom} gw={dim.w} gh={dim.h} />
-            </div>
-
-            {/* Legend */}
-            <div className="absolute bottom-1 left-1 z-20 flex flex-wrap items-center gap-2 px-2 py-1.5 border border-border/40 bg-card/90 rounded-sm">
-                {(Object.entries(G_NODE_STYLES) as [GNodeType, typeof G_NODE_STYLES[GNodeType]][]).map(([type, s]) => (
-                    <div key={type} className="flex items-center gap-1">
-                        <div className="w-2.5 h-2.5 rounded-full border" style={{ backgroundColor: s.fill, borderColor: s.stroke }} />
-                        <span className="font-mono text-[9px] text-muted-foreground">{G_NODE_TYPE_LABELS[type]}</span>
-                    </div>
-                ))}
-                <div className="w-px h-3 bg-border/50 mx-1" />
-                <span className="font-mono text-[9px] text-muted-foreground/60">DRAG·SCROLL·CLICK</span>
-            </div>
-        </div>
-    );
-}
-
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function SuperTimeline() {
@@ -1525,7 +903,7 @@ export default function SuperTimeline() {
     const [searchInput, setSearchInput] = useState("");
     const [debouncedSearch, setDebouncedSearch] = useState("");
     const [page, setPage] = useState(1);
-    const [pageSize, setPageSize] = useState<number>(100);
+    const [pageSize, setPageSize] = useState<number>(50);
     const [pageJumpInput, setPageJumpInput] = useState("");
 
     // Host filter
@@ -1592,9 +970,6 @@ export default function SuperTimeline() {
 
     // Query help tooltip
     const [showQueryHelp, setShowQueryHelp] = useState(false);
-
-    // Entity graph toggle
-    const [showGraph, setShowGraph] = useState(false);
 
     // ── Close column picker on outside click ─────────────────────────────────
     useEffect(() => {
@@ -1744,6 +1119,16 @@ export default function SuperTimeline() {
     useEffect(() => {
         if (lmError) console.error("[SuperTimeline] lateral movement query error:", lmError);
     }, [lmError]);
+
+    // ── Pre-computed LM windows — avoids Date parsing inside every row render ─
+    const lmWindows = useMemo(() =>
+        (lmData ?? []).map((det) => ({
+            srcHost: det.source_host,
+            tgtHost: det.target_host,
+            firstMs: det.first_seen ? new Date(det.first_seen).getTime() : -Infinity,
+            lastMs:  det.last_seen  ? new Date(det.last_seen).getTime()  :  Infinity,
+        })),
+    [lmData]);
 
     // ── Derived lists from response ───────────────────────────────────────────
     const knownHosts: string[]  = timelineData?.hosts ?? [];
@@ -1970,6 +1355,28 @@ export default function SuperTimeline() {
 
     // ── Keyboard navigation ───────────────────────────────────────────────────
     const rows = timelineData?.data ?? [];
+
+    // Pre-compute event hashes once per page load — each row needs its hash
+    // twice (tag filter + TAG cell) so this halves hashEvent call count.
+    const eventHashCache = useMemo(
+        () => new Map(rows.map((row) => [row, hashEvent(row)])),
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+        [rows]
+    );
+
+    // Pre-compute highlighted messages once per {rows, debouncedSearch} combination.
+    // highlightTerms creates JSX per call — caching avoids N*2 recreation on every state change.
+    const highlightCache = useMemo(() => {
+        const term = debouncedSearch && debouncedSearch.length >= 2 ? debouncedSearch : "";
+        return new Map(
+            rows.map((row) => {
+                const msg = truncate(String(row["message"] ?? row["description"] ?? "—"), 140);
+                return [row, term ? highlightTerms(msg, term) : msg];
+            })
+        );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [rows, debouncedSearch]);
+
     useEffect(() => {
         if (!isDone) return;
         function handleKeyDown(e: KeyboardEvent) {
@@ -2127,15 +1534,6 @@ export default function SuperTimeline() {
                             </div>
                             <div className="flex items-center gap-2">
                                 <Button
-                                    variant={showGraph ? "tactical" : "outline"}
-                                    size="sm"
-                                    onClick={() => setShowGraph((v) => !v)}
-                                    className="gap-2 font-mono text-xs"
-                                >
-                                    <Network className="w-3.5 h-3.5" />
-                                    {showGraph ? "HIDE GRAPH" : "ENTITY GRAPH"}
-                                </Button>
-                                <Button
                                     variant="outline"
                                     size="sm"
                                     onClick={triggerBuild}
@@ -2147,25 +1545,6 @@ export default function SuperTimeline() {
                                 </Button>
                             </div>
                         </div>
-                    </TacticalPanel>
-                )}
-
-                {/* ── Entity Relationship Graph ────────────────────────────── */}
-                {isDone && showGraph && (
-                    <TacticalPanel
-                        title="ENTITY RELATIONSHIP GRAPH"
-                        status="active"
-                        headerActions={
-                            <span className="font-mono text-[10px] text-muted-foreground">
-                                built from current page · click node to filter timeline
-                            </span>
-                        }
-                    >
-                        <EntityGraph
-                            events={rows}
-                            lmDetections={lmData ?? []}
-                            onNodeClick={(q) => { handleSearchChange(q); setPage(1); }}
-                        />
                     </TacticalPanel>
                 )}
 
@@ -2652,7 +2031,7 @@ export default function SuperTimeline() {
                                     <tbody>
                                         {timelineData.data.filter((row) => {
                                             if (!tagFilterActive) return true;
-                                            const h = hashEvent(row);
+                                            const h = eventHashCache.get(row) ?? hashEvent(row);
                                             return eventTags[h] === tagFilterActive;
                                         }).map((row, i) => {
                                             const eventSeq   = row["event_seq"] != null ? Number(row["event_seq"]) + 1 : ((page - 1) * pageSize + i + 1);
@@ -2674,13 +2053,11 @@ export default function SuperTimeline() {
 
                                             // Row styling
                                             const isSigma = srcShort === "SIGMA" || srcShort === "HAYABUSA";
-                                            const isInLmWindow = lmData?.some((det) => {
-                                                const dt = new Date(datetime).getTime();
-                                                if (isNaN(dt)) return false;
-                                                const first = det.first_seen ? new Date(det.first_seen).getTime() : -Infinity;
-                                                const last  = det.last_seen  ? new Date(det.last_seen).getTime()  : Infinity;
-                                                return dt >= first && dt <= last && (det.source_host === host || det.target_host === host);
-                                            }) ?? false;
+                                            const dtMs = new Date(datetime).getTime();
+                                            const isInLmWindow = !isNaN(dtMs) && lmWindows.some(
+                                                (w) => dtMs >= w.firstMs && dtMs <= w.lastMs &&
+                                                       (w.srcHost === host || w.tgtHost === host)
+                                            );
 
                                             const rowCls = isSigma
                                                 ? "border-b border-red-500/20 bg-red-500/5 hover:bg-red-500/10"
@@ -2793,13 +2170,13 @@ export default function SuperTimeline() {
                                                     {/* MESSAGE */}
                                                     <td className="px-3 py-1.5 max-w-[0] w-full">
                                                         <span className="truncate block" title={message}>
-                                                            {highlightTerms(truncate(message, 140), debouncedSearch)}
+                                                            {highlightCache.get(row) ?? message}
                                                         </span>
                                                     </td>
                                                     {/* TAG */}
                                                     <td className="px-2 py-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                                                         {(() => {
-                                                            const evHash = hashEvent(row);
+                                                            const evHash = eventHashCache.get(row) ?? hashEvent(row);
                                                             const tag = eventTags[evHash];
                                                             const meta = tag ? EVENT_TAG_META[tag] : null;
                                                             return (

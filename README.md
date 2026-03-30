@@ -23,7 +23,8 @@ Built for DFIR practitioners who need a single platform to coordinate collection
 | **Evidence Vault** | SHA256-hashed evidence with immutable LOCKED state; export as ZIP with signature |
 | **Forensics Pipeline** | Background Celery workers: 8 EZTools parsers → Hayabusa + Chainsaw Sigma hunting → DuckDB super timeline |
 | **Threat Hunting UI** | Sigma hits, YARA matches, IOC indicators, MITRE ATT&CK kill chain visualization |
-| **Timeline Explorer** | DuckDB-powered full-text search across merged super timeline (browser-based) |
+| **Timeline Explorer** | DuckDB-powered full-text search across merged super timeline with date range, source filter, and CSV/JSONL export |
+| **Incident Hub** | Per-incident command center: metadata, quick-action grid, analysis progress, lateral movement summary |
 | **Template System** | Reusable incident templates with preflight checklists and default endpoint sets |
 | **Role-Based Access** | Three roles: `admin` > `operator` > `viewer` with fine-grained endpoint enforcement |
 | **Audit Log** | Hash-chained system event log with filtering by event type, actor, target, time range |
@@ -269,7 +270,9 @@ The backend **refuses to start** if `SECRET_KEY` matches any known weak default 
 ### Hardening Applied
 
 - Docker containers run as non-root (`dfir` UID 1000), `no-new-privileges:true`, `cap_drop: ALL`
-- Security headers on all responses (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy)
+- Security headers on all responses (X-Content-Type-Options, X-Frame-Options, X-XSS-Protection, Referrer-Policy, X-Permitted-Cross-Domain-Policies, Permissions-Policy, Content-Security-Policy)
+- CORS restricted to explicit methods and header whitelist (no wildcards)
+- Empty `AGENT_SHARED_SECRET` causes startup RuntimeError (same as weak `SECRET_KEY`)
 - In-memory sliding window rate limiter on `/auth/login` — 20 attempts per IP per 60 seconds
 - Agent token comparison via `hmac.compare_digest` (timing-attack resistant)
 - Path traversal prevention via `safe_join()` + ID validation regex on all file paths
@@ -468,7 +471,7 @@ alembic revision --autogenerate -m "description"       # Generate new migration
 ```
 
 **Migration chain** (in order):
-`20260101_initial_schema` → `20260117_add_incident_collection_state` → `20260122_add_incident_template_id` → `20260303_add_concurrency_limit` → `20260401_processing_pipeline` → `20260402_processing_settings` → `20260403_phase2_analytics`
+`20260101_initial_schema` → `20260117_add_incident_collection_state` → `20260122_add_incident_template_id` → `20260303_add_concurrency_limit` → `20260401_processing_pipeline` → `20260402_processing_settings` → `20260403_phase2_analytics` → `20260501_super_timeline`
 
 ### Code Style
 

@@ -5,16 +5,16 @@ services:
     image: postgres:16-alpine
     container_name: dfir-postgres
     environment:
-      POSTGRES_USER: dfir
-      POSTGRES_PASSWORD: dfir
-      POSTGRES_DB: dfir
+      POSTGRES_USER:     ${POSTGRES_USER:-dfir}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set. Run scripts/generate-secrets.sh}
+      POSTGRES_DB:       ${POSTGRES_DB:-dfir}
       PGDATA: /var/lib/postgresql/data/pgdata
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
       - dfir_postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U dfir -d dfir"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dfir} -d ${POSTGRES_DB:-dfir}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -48,29 +48,26 @@ services:
     cap_drop:
       - ALL
     environment:
-      DATABASE_URL: postgresql+asyncpg://dfir:dfir@db:5432/dfir
-      # REQUIRED: Set SECRET_KEY in your .env file before starting.
-      # Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Copy .env.example to .env and generate a strong key.}
-      ACCESS_TOKEN_EXPIRE_MINUTES: 60
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dfir}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-dfir}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Run scripts/generate-secrets.sh}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
       EVIDENCE_STORAGE_PATH: /vault/evidence
-      # REQUIRED: Set AGENT_SHARED_SECRET in your .env file before starting.
-      # Generate with: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-      AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:?AGENT_SHARED_SECRET must be set. Copy .env.example to .env and generate a strong secret.}
+      AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:?AGENT_SHARED_SECRET must be set. Run scripts/generate-secrets.sh}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-true}
-      DFIR_DEFAULT_ADMIN_PASSWORD: ${DFIR_DEFAULT_ADMIN_PASSWORD:-admin123!}
-      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
-      # Forensics pipeline tool paths (set in Dockerfile, override here if needed)
-      EZTOOLS_DIR: ${EZTOOLS_DIR:-/opt/eztools}
-      HAYABUSA_PATH: ${HAYABUSA_PATH:-/opt/hayabusa/hayabusa}
-      CHAINSAW_PATH: ${CHAINSAW_PATH:-/opt/chainsaw/chainsaw}
-      SIGMA_RULES_DIR: ${SIGMA_RULES_DIR:-/opt/chainsaw/rules/}
-      CELERY_BROKER_URL: redis://redis:6379/0
+      DFIR_DEFAULT_ADMIN_PASSWORD:   ${DFIR_DEFAULT_ADMIN_PASSWORD:?DFIR_DEFAULT_ADMIN_PASSWORD must be set}
+      DFIR_DEFAULT_ANALYST_PASSWORD: ${DFIR_DEFAULT_ANALYST_PASSWORD:-}
+      DFIR_DEFAULT_VIEWER_PASSWORD:  ${DFIR_DEFAULT_VIEWER_PASSWORD:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-https://localhost}
+      EZTOOLS_DIR:      ${EZTOOLS_DIR:-/opt/eztools}
+      HAYABUSA_PATH:    ${HAYABUSA_PATH:-/opt/hayabusa/hayabusa}
+      CHAINSAW_PATH:    ${CHAINSAW_PATH:-/opt/chainsaw/chainsaw}
+      SIGMA_RULES_DIR:  ${SIGMA_RULES_DIR:-/opt/chainsaw/rules/}
+      CELERY_BROKER_URL:    redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
-      # Set to true in .env to auto-seed demo data on startup (for feature testing only)
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
-    ports:
-      - "127.0.0.1:8000:8000"
+    # Backend is only reachable via the nginx proxy — no direct host port
+    expose:
+      - "8000"
     depends_on:
       db:
         condition: service_healthy
@@ -99,15 +96,15 @@ services:
     cap_drop:
       - ALL
     environment:
-      DATABASE_URL: postgresql+asyncpg://dfir:dfir@db:5432/dfir
-      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Copy .env.example to .env and generate a strong key.}
-      AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:?AGENT_SHARED_SECRET must be set.}
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dfir}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-dfir}
+      SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set}
+      AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:?AGENT_SHARED_SECRET must be set}
       EVIDENCE_STORAGE_PATH: /vault/evidence
-      EZTOOLS_DIR: ${EZTOOLS_DIR:-/opt/eztools}
-      HAYABUSA_PATH: ${HAYABUSA_PATH:-/opt/hayabusa/hayabusa}
-      CHAINSAW_PATH: ${CHAINSAW_PATH:-/opt/chainsaw/chainsaw}
-      SIGMA_RULES_DIR: ${SIGMA_RULES_DIR:-/opt/chainsaw/rules/}
-      CELERY_BROKER_URL: redis://redis:6379/0
+      EZTOOLS_DIR:      ${EZTOOLS_DIR:-/opt/eztools}
+      HAYABUSA_PATH:    ${HAYABUSA_PATH:-/opt/hayabusa/hayabusa}
+      CHAINSAW_PATH:    ${CHAINSAW_PATH:-/opt/chainsaw/chainsaw}
+      SIGMA_RULES_DIR:  ${SIGMA_RULES_DIR:-/opt/chainsaw/rules/}
+      CELERY_BROKER_URL:    redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
     depends_on:
       db:
@@ -116,6 +113,12 @@ services:
         condition: service_healthy
     volumes:
       - dfir_evidence:/vault/evidence
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.worker.celery_app inspect ping --timeout 5 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     restart: unless-stopped
     networks:
       - dfir-network
@@ -125,21 +128,57 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-https://localhost/api/v1}
     container_name: dfir-frontend
     security_opt:
       - no-new-privileges:true
-    ports:
-      - "127.0.0.1:5173:80"
+    cap_drop:
+      - ALL
+    # Frontend is only reachable via the nginx proxy — no direct host port
+    expose:
+      - "80"
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://0.0.0.0:80/ || exit 1"]
+      test: ["CMD-SHELL", "curl -f --silent --max-time 4 http://0.0.0.0:80/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+    restart: unless-stopped
+    networks:
+      - dfir-network
+
+  # ── HTTPS reverse proxy ──────────────────────────────────────────────────────
+  # Terminates TLS and proxies to backend (:8000) and frontend (:80).
+  # Run scripts/generate-self-signed-cert.sh for local dev certificates.
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: dfir-nginx
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE   # required to bind :80 and :443 as non-root
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    volumes:
+      - ./nginx/nginx-ssl.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost/api/v1/status/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
     networks:
       - dfir-network

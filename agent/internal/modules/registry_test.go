@@ -1,6 +1,16 @@
 package modules
 
-import "testing"
+import (
+	"os"
+	"testing"
+
+	"github.com/dfir/agent/internal/logging"
+)
+
+func TestMain(m *testing.M) {
+	logging.Init()
+	os.Exit(m.Run())
+}
 
 func TestModuleRegistryResolution(t *testing.T) {
 	if err := Init(); err != nil {

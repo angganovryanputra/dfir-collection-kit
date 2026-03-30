@@ -34,6 +34,8 @@ router = APIRouter()
 
 
 def _validate_identifier(value: str, label: str) -> str:
+    if len(value) > 256:
+        raise HTTPException(status_code=400, detail=f"Invalid {label}")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", value):
         raise HTTPException(status_code=400, detail=f"Invalid {label}")
     return value
@@ -259,6 +261,8 @@ async def create_export_endpoint(
     item = None
     if not payload.incident_id and not payload.evidence_id:
         raise HTTPException(status_code=400, detail="incident_id or evidence_id is required")
+    if payload.incident_id and payload.evidence_id:
+        raise HTTPException(status_code=400, detail="Provide either incident_id or evidence_id, not both")
     if payload.incident_id:
         _validate_identifier(payload.incident_id, "incident_id")
         export_path = await asyncio.to_thread(

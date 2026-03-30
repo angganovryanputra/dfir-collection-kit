@@ -16,6 +16,7 @@ import (
 	"github.com/dfir/agent/internal/jobs"
 	"github.com/dfir/agent/internal/logging"
 	"github.com/dfir/agent/internal/modules"
+	"github.com/dfir/agent/internal/parsers"
 	"github.com/dfir/agent/internal/storage"
 )
 
@@ -67,6 +68,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Failed to initialize modules: %v\n", err)
 		os.Exit(1)
 	}
+	parsers.Init()
 
 	agent, err := agent.New(cfg)
 	if err != nil {
@@ -100,6 +102,7 @@ func runDryRun(cfg *config.Config, moduleIDs string, workDir string) error {
 	if err := modules.Init(); err != nil {
 		return fmt.Errorf("failed to initialize modules: %w", err)
 	}
+	parsers.Init()
 
 	ids := strings.Split(moduleIDs, ",")
 	if workDir == "" {

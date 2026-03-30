@@ -37,7 +37,10 @@ def _validate_security_settings() -> None:
         )
 
     if not settings.AGENT_SHARED_SECRET:
-        logger.warning("AGENT_SHARED_SECRET is not configured — all agent requests will be rejected")
+        raise RuntimeError(
+            "AGENT_SHARED_SECRET is not configured. "
+            "Set a strong random secret via the AGENT_SHARED_SECRET environment variable."
+        )
     elif settings.AGENT_SHARED_SECRET.lower() in _INSECURE_DEFAULTS:
         logger.warning(
             "AGENT_SHARED_SECRET is set to a known insecure default ('%s'). "
@@ -63,6 +66,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-XSS-Protection", "1; mode=block")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
+        response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+        # CSP: API-only backend — no HTML served here, but block any accidental rendering
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'none'; frame-ancestors 'none'",
+        )
         return response
 
 
@@ -81,8 +90,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
     allow_credentials=allow_credentials,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept", "X-Agent-Token"],
 )
 app.add_middleware(SecurityHeadersMiddleware)
 

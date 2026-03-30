@@ -5,8 +5,8 @@ from app.models.device import Device
 from app.schemas.device import DeviceCreate, DeviceUpdate
 
 
-async def list_devices(db: AsyncSession) -> list[Device]:
-    result = await db.execute(select(Device).order_by(Device.hostname.asc()))
+async def list_devices(db: AsyncSession, limit: int = 1000) -> list[Device]:
+    result = await db.execute(select(Device).order_by(Device.hostname.asc()).limit(limit))
     return list(result.scalars().all())
 
 

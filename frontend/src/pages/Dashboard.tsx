@@ -105,8 +105,13 @@ export default function Dashboard() {
   });
 
   useEffect(() => {
-    if (incidentsQuery.error || collectorsQuery.error || evidenceQuery.error) {
-      setErrorMessage("Unable to load dashboard data.");
+    const err = incidentsQuery.error ?? collectorsQuery.error ?? evidenceQuery.error;
+    if (!err) return;
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("ECONNREFUSED")) {
+      setErrorMessage("Cannot reach the backend server. Check network or service status.");
+    } else {
+      setErrorMessage("Unable to load dashboard data. The server returned an error.");
     }
   }, [incidentsQuery.error, collectorsQuery.error, evidenceQuery.error]);
 
