@@ -20,7 +20,7 @@ import { getStoredRole, isViewerRole } from "@/lib/auth";
 
 
 type IncidentSummary = {
-  id: string;
+  id: string; A
   type: string;
   status: string;
   target_endpoints: string[];
@@ -91,12 +91,12 @@ type EvidenceItemResponse = {
 // Agent phases: collecting → parsing → uploading (matches executor.go status strings)
 const PHASES: { id: string; name: string }[] = [
   { id: "collecting", name: "ARTIFACT COLLECTION" },
-  { id: "parsing",    name: "LOCAL PARSING" },
-  { id: "uploading",  name: "EVIDENCE UPLOAD" },
+  { id: "parsing", name: "LOCAL PARSING" },
+  { id: "uploading", name: "EVIDENCE UPLOAD" },
 ];
 
 const resolveActivePhaseId = (backendPhase: string | null): string => {
-  if (backendPhase === "parsing")   return "parsing";
+  if (backendPhase === "parsing") return "parsing";
   if (backendPhase === "uploading") return "uploading";
   return "collecting";
 };
@@ -117,7 +117,6 @@ export default function CollectionExecution() {
   const [isComplete, setIsComplete] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [incident, setIncident] = useState<IncidentSummary | null>(null);
-  const [incidentLoaded, setIncidentLoaded] = useState(false);
   const [device, setDevice] = useState<DeviceSummary | null>(null);
   const [collector, setCollector] = useState<CollectorSummary | null>(null);
   const [summary, setSummary] = useState({
@@ -157,8 +156,6 @@ export default function CollectionExecution() {
         setCollector(collectors[0] ?? null);
       } catch {
         setErrorMessage("Unable to load collection context.");
-      } finally {
-        setIncidentLoaded(true);
       }
     };
 
@@ -168,14 +165,6 @@ export default function CollectionExecution() {
   useEffect(() => {
     const startCollection = async () => {
       if (!incidentId || startedRef.current) return;
-      // Wait until incident metadata is available before deciding whether to start.
-      if (!incidentLoaded) return;
-      // Don't re-trigger collection if it is already complete or the incident is closed.
-      if (incident && ["COLLECTION_COMPLETE", "CLOSED"].includes(incident.status)) {
-        startedRef.current = true;
-        if (incident.status === "COLLECTION_COMPLETE") setIsComplete(true);
-        return;
-      }
       if (isViewer) {
         setErrorMessage("Viewer accounts cannot start collections.");
         return;
@@ -197,7 +186,7 @@ export default function CollectionExecution() {
     };
 
     startCollection();
-  }, [incidentId, isViewer, incidentLoaded, incident]);
+  }, [incidentId, isViewer]);
 
   useEffect(() => {
     const pollStatus = async () => {
@@ -250,9 +239,9 @@ export default function CollectionExecution() {
           const activePhaseId = resolveActivePhaseId(status.phase);
           setPhases((prev) =>
             prev.map((phase) => {
-              const phaseIdx  = PHASES.findIndex((p) => p.id === phase.id);
+              const phaseIdx = PHASES.findIndex((p) => p.id === phase.id);
               const activeIdx = PHASES.findIndex((p) => p.id === activePhaseId);
-              if (phaseIdx < activeIdx)    return { ...phase, status: "complete", progress: 100 };
+              if (phaseIdx < activeIdx) return { ...phase, status: "complete", progress: 100 };
               if (phase.id === activePhaseId) {
                 const prog = phase.id === "collecting" ? status.progress : undefined;
                 return { ...phase, status: "active", progress: prog };
@@ -348,66 +337,66 @@ export default function CollectionExecution() {
                 {isComplete
                   ? "COLLECTION COMPLETE"
                   : phases.find((p) => p.status === "active")?.id === "parsing"
-                  ? "PARSING ARTIFACTS"
-                  : phases.find((p) => p.status === "active")?.id === "uploading"
-                  ? "UPLOADING EVIDENCE"
-                  : "COLLECTION IN PROGRESS"}
+                    ? "PARSING ARTIFACTS"
+                    : phases.find((p) => p.status === "active")?.id === "uploading"
+                      ? "UPLOADING EVIDENCE"
+                      : "COLLECTION IN PROGRESS"}
               </h1>
-                <p className="font-mono text-xs text-muted-foreground">
-                  INCIDENT: {incident?.id ?? incidentId ?? "PENDING"}
-                </p>
+              <p className="font-mono text-xs text-muted-foreground">
+                INCIDENT: {incident?.id ?? incidentId ?? "PENDING"}
+              </p>
             </div>
           </div>
           <div className="flex items-center gap-6">
-              {selectedModuleIds && (
-                <div className="font-mono text-sm">
-                  <span className="text-muted-foreground">MODULES: </span>
-                  <span className="text-primary font-bold">{selectedModuleIds.length}</span>
-                </div>
-              )}
+            {selectedModuleIds && (
               <div className="font-mono text-sm">
-                <span className="text-muted-foreground">ELAPSED: </span>
-                <span className="text-primary font-bold">{formatTime(elapsedTime)}</span>
+                <span className="text-muted-foreground">MODULES: </span>
+                <span className="text-primary font-bold">{selectedModuleIds.length}</span>
               </div>
-              <StatusIndicator
-                status={isComplete ? "verified" : "active"}
-                label={
-                  isStarting ? "INITIALIZING"
-                  : isComplete ? "COMPLETE"
-                  : (phases.find((p) => p.status === "active")?.id ?? "collecting").toUpperCase()
-                }
-                pulse={!isComplete}
-              />
+            )}
+            <div className="font-mono text-sm">
+              <span className="text-muted-foreground">ELAPSED: </span>
+              <span className="text-primary font-bold">{formatTime(elapsedTime)}</span>
             </div>
+            <StatusIndicator
+              status={isComplete ? "verified" : "active"}
+              label={
+                isStarting ? "INITIALIZING"
+                  : isComplete ? "COMPLETE"
+                    : (phases.find((p) => p.status === "active")?.id ?? "collecting").toUpperCase()
+              }
+              pulse={!isComplete}
+            />
           </div>
-        </header>
+        </div>
+      </header>
 
-        {errorMessage && (
-          <WarningBanner variant="critical" className="animate-pulse">
-            <AlertTriangle className="inline w-4 h-4 mr-2" />
-            {errorMessage}
-          </WarningBanner>
-        )}
+      {errorMessage && (
+        <WarningBanner variant="critical" className="animate-pulse">
+          <AlertTriangle className="inline w-4 h-4 mr-2" />
+          {errorMessage}
+        </WarningBanner>
+      )}
 
-        {completionMessage && !errorMessage && (
-          <WarningBanner variant="warning">
-            {completionMessage}
-          </WarningBanner>
-        )}
+      {completionMessage && !errorMessage && (
+        <WarningBanner variant="warning">
+          {completionMessage}
+        </WarningBanner>
+      )}
 
-        {/* Critical Warning Banner */}
-        {!isComplete && !errorMessage && (
-          <WarningBanner variant="critical" className="animate-pulse">
-            <AlertTriangle className="inline w-4 h-4 mr-2" />
-            {isStarting
-              ? "INITIALIZING COLLECTION ENGINE — STAND BY"
-              : phases.find((p) => p.status === "active")?.id === "parsing"
+      {/* Critical Warning Banner */}
+      {!isComplete && !errorMessage && (
+        <WarningBanner variant="critical" className="animate-pulse">
+          <AlertTriangle className="inline w-4 h-4 mr-2" />
+          {isStarting
+            ? "INITIALIZING COLLECTION ENGINE — STAND BY"
+            : phases.find((p) => p.status === "active")?.id === "parsing"
               ? "AGENT PARSING ARTIFACTS LOCALLY — DO NOT TERMINATE AGENT PROCESS"
               : phases.find((p) => p.status === "active")?.id === "uploading"
-              ? "UPLOADING EVIDENCE TO SERVER — DO NOT DISCONNECT NETWORK"
-              : "DO NOT SHUT DOWN OR RESTART TARGET SYSTEM — COLLECTION IN PROGRESS"}
-          </WarningBanner>
-        )}
+                ? "UPLOADING EVIDENCE TO SERVER — DO NOT DISCONNECT NETWORK"
+                : "DO NOT SHUT DOWN OR RESTART TARGET SYSTEM — COLLECTION IN PROGRESS"}
+        </WarningBanner>
+      )}
 
       {/* Main Content */}
       <main className="flex-1 p-6 overflow-hidden">
