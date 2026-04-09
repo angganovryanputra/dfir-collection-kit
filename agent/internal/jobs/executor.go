@@ -23,6 +23,9 @@ import (
 // DefaultConcurrency is the number of modules that run in parallel when no limit is specified.
 const DefaultConcurrency = 4
 
+// MaxEvidenceZipBytes is the hard limit for a single evidence ZIP (50 GB).
+const MaxEvidenceZipBytes = 50 * 1024 * 1024 * 1024
+
 // Executor handles the execution of a collection job
 type Executor struct {
 	apiClient  *api.Client
@@ -63,6 +66,12 @@ func (e *Executor) Run(
 	retryAttempts int,
 	concurrencyLimit int,
 ) error {
+	logJob := logging.WithJob(jobID)
+	logJob.Info("Starting job execution")
+	logJob.Info("Incident ID: %s", incidentID)
+	logJob.Info("Work directory: %s", workDir)
+	logJob.Info("Modules to execute: %d (concurrency: %d)", len(moduleList), concurrencyLimit)
+
 	intPtr := func(value int) *int {
 		return &value
 	}
@@ -85,11 +94,13 @@ func (e *Executor) Run(
 			return err
 		}
 		if isCancelled(status) {
-			_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+			if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 				Status:  "cancelled",
 				Message: "Job cancelled by operator",
 				LogTail: []string{"Job cancelled by operator"},
-			})
+			}); err != nil {
+				logJob.Warning("Failed to update job status: %v", err)
+			}
 			return fmt.Errorf("job cancelled")
 		}
 		return nil
@@ -111,12 +122,6 @@ func (e *Executor) Run(
 
 	e.currentJob = job
 
-	logJob := logging.WithJob(jobID)
-	logJob.Info("Starting job execution")
-	logJob.Info("Incident ID: %s", incidentID)
-	logJob.Info("Work directory: %s", workDir)
-	logJob.Info("Modules to execute: %d (concurrency: %d)", len(moduleList), concurrencyLimit)
-
 	// Create work directory
 	if err := storage.CreateWorkDir(workDir); err != nil {
 		return fmt.Errorf("failed to create work directory: %w", err)
@@ -133,11 +138,13 @@ func (e *Executor) Run(
 		message := fmt.Sprintf("Unsupported modules: %s", strings.Join(missingModules, ", "))
 		logJob.Error(message)
 		if e.apiClient != nil {
-			_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+			if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 				Status:  "failed",
 				Message: message,
 				LogTail: []string{message},
-			})
+			}); err != nil {
+				logJob.Warning("Failed to update job status: %v", err)
+			}
 		}
 		return fmt.Errorf("%s", message)
 	}
@@ -187,11 +194,13 @@ func (e *Executor) Run(
 			logJob.Info("Starting module: %s", mod.ModuleID)
 			apiMu.Lock()
 			if e.apiClient != nil {
-				_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+				if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 					Status:  "collecting",
 					Message: fmt.Sprintf("Executing %s", mod.ModuleID),
 					LogTail: []string{fmt.Sprintf("Executing module %s", mod.ModuleID)},
-				})
+				}); err != nil {
+					logJob.Warning("Failed to update job status: %v", err)
+				}
 			}
 			apiMu.Unlock()
 
@@ -219,11 +228,13 @@ func (e *Executor) Run(
 					logJob.Warning("Module timed out: %s", mod.ModuleID)
 					apiMu.Lock()
 					if e.apiClient != nil {
-						_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+						if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 							Status:  "collecting",
 							Message: fmt.Sprintf("Timeout in %s", mod.ModuleID),
 							LogTail: []string{fmt.Sprintf("Timeout in %s", mod.ModuleID)},
-						})
+						}); err != nil {
+							logJob.Warning("Failed to update job status: %v", err)
+						}
 					}
 					apiMu.Unlock()
 				}
@@ -234,11 +245,13 @@ func (e *Executor) Run(
 				if attempt < attempts {
 					apiMu.Lock()
 					if e.apiClient != nil {
-						_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+						if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 							Status:  "collecting",
 							Message: fmt.Sprintf("Retry %d/%d for %s", attempt, attempts, mod.ModuleID),
 							LogTail: []string{fmt.Sprintf("Retry %d/%d for %s", attempt, attempts, mod.ModuleID)},
-						})
+						}); err != nil {
+							logJob.Warning("Failed to update job status: %v", err)
+						}
 					}
 					apiMu.Unlock()
 				}
@@ -267,23 +280,27 @@ func (e *Executor) Run(
 			failedModules = append(failedModules, result.moduleID)
 			apiMu.Lock()
 			if e.apiClient != nil {
-				_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+				if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 					Status:  "collecting",
 					Message: fmt.Sprintf("Module %s failed: %v", result.moduleID, result.err),
 					LogTail: []string{fmt.Sprintf("Module %s failed: %v", result.moduleID, result.err)},
-				})
+				}); err != nil {
+					logJob.Warning("Failed to update job status: %v", err)
+				}
 			}
 			apiMu.Unlock()
 		} else {
 			logJob.Info("Completed module: %s (%d/%d)", result.moduleID, completed, totalModules)
 			apiMu.Lock()
 			if e.apiClient != nil {
-				_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+				if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 					Status:   fmt.Sprintf("collecting (%d/%d)", completed, totalModules),
 					Progress: intPtr(progress),
 					Message:  fmt.Sprintf("Completed %s", result.moduleID),
 					LogTail:  []string{fmt.Sprintf("Completed module %s", result.moduleID)},
-				})
+				}); err != nil {
+					logJob.Warning("Failed to update job status: %v", err)
+				}
 			}
 			apiMu.Unlock()
 		}
@@ -294,10 +311,12 @@ func (e *Executor) Run(
 		msg := fmt.Sprintf("All modules failed: %s", strings.Join(failedModules, ", "))
 		logJob.Error(msg)
 		if e.apiClient != nil {
-			_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+			if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 				Status:  "failed",
 				Message: msg,
-			})
+			}); err != nil {
+				logJob.Warning("Failed to update job status: %v", err)
+			}
 		}
 		return fmt.Errorf("%s", msg)
 	}
@@ -310,11 +329,13 @@ func (e *Executor) Run(
 	// Phase 2: Parse collected artifacts
 	logJob.Info("Starting artifact parsing phase")
 	if e.apiClient != nil {
-		_ = e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+		if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 			Status:  "parsing",
 			Message: "Parsing collected artifacts",
 			LogTail: []string{"Parsing collected artifacts"},
-		})
+		}); err != nil {
+			logJob.Warning("Failed to update job status: %v", err)
+		}
 	}
 	parsers.RunAll(ctx, workDir)
 
@@ -386,11 +407,13 @@ func (e *Executor) executeModule(ctx context.Context, job *Job, module api.JobMo
 		if modules.IsWarning(err) {
 			log.Warning("Module warning: %s - %v", module.ModuleID, err)
 			if e.apiClient != nil {
-				e.apiClient.UpdateJobStatus(ctx, job.ID, api.JobStatusUpdate{
+				if err2 := e.apiClient.UpdateJobStatus(ctx, job.ID, api.JobStatusUpdate{
 					Status:  job.Status,
 					Message: fmt.Sprintf("Warning in %s: %v", module.ModuleID, err),
 					LogTail: []string{fmt.Sprintf("Warning in %s: %v", module.ModuleID, err)},
-				})
+				}); err2 != nil {
+					log.Warning("Failed to report module warning status: %v", err2)
+				}
 			}
 			return nil
 		}
@@ -447,6 +470,7 @@ func (e *Executor) createEvidenceZip(ctx context.Context, job *Job) error {
 
 	w := zip.NewWriter(zipFile)
 
+	var zipSize int64
 	err = filepath.Walk(job.WorkDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -474,8 +498,13 @@ func (e *Executor) createEvidenceZip(ctx context.Context, job *Job) error {
 			return fmt.Errorf("failed to open file %s: %w", path, err)
 		}
 		defer f.Close()
-		if _, err := io.Copy(fw, f); err != nil {
+		n, err := io.Copy(fw, f)
+		if err != nil {
 			return fmt.Errorf("failed to write file %s to ZIP: %w", relPath, err)
+		}
+		zipSize += n
+		if zipSize > MaxEvidenceZipBytes {
+			return fmt.Errorf("evidence ZIP exceeds maximum size limit (%d GB)", MaxEvidenceZipBytes/1024/1024/1024)
 		}
 		return nil
 	})

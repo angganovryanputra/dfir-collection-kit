@@ -39,14 +39,7 @@ async def put_system_settings(
         raise HTTPException(status_code=400, detail="evidence_storage_path must be an absolute path")
     if storage_path.exists() and not os.access(storage_path, os.W_OK):
         raise HTTPException(status_code=400, detail="evidence_storage_path exists but is not writable")
-    if payload.max_file_size_gb <= 0:
-        raise HTTPException(status_code=400, detail="max_file_size_gb must be greater than 0")
-    if payload.collection_timeout_min <= 0:
-        raise HTTPException(status_code=400, detail="collection_timeout_min must be greater than 0")
-    if payload.max_concurrent_jobs < 0:
-        raise HTTPException(status_code=400, detail="max_concurrent_jobs cannot be negative")
-    if payload.retry_attempts < 0:
-        raise HTTPException(status_code=400, detail="retry_attempts cannot be negative")
+    # Numeric range checks for fields not covered by schema-level Field constraints.
     if payload.session_timeout_min <= 0:
         raise HTTPException(status_code=400, detail="session_timeout_min must be greater than 0")
     if payload.max_failed_logins < 0:
@@ -57,6 +50,10 @@ async def put_system_settings(
         raise HTTPException(status_code=400, detail="hash_algorithm must be SHA-256 or SHA-1")
     if payload.export_format.upper() != "ZIP":
         raise HTTPException(status_code=400, detail="export_format must be ZIP")
+    # timesketch_url is validated at the schema level; this guard makes the HTTP
+    # error message explicit for API consumers that bypass schema validation.
+    if payload.timesketch_url and not payload.timesketch_url.startswith(("http://", "https://")):
+        raise HTTPException(status_code=400, detail="timesketch_url must start with http:// or https://")
     current = await get_settings(db)
     settings = await upsert_settings(db, payload)
     settings_out = SystemSettingsOut.model_validate(settings)

@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 
 from celery import Celery
+from celery.exceptions import SoftTimeLimitExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -35,14 +36,18 @@ celery_app.conf.update(
     task_acks_late=True,
     # One long forensics task per worker process at a time
     worker_prefetch_multiplier=1,
+    # Hard kill after 2 h; soft warning at 1 h 50 min (pipeline tasks)
+    task_time_limit=7200,
+    task_soft_time_limit=6600,
 )
 
 
-@celery_app.task(bind=True, name="dfir.run_pipeline", max_retries=1)
+@celery_app.task(bind=True, name="dfir.run_pipeline", max_retries=1, time_limit=7200, soft_time_limit=6600)
 def run_pipeline_task(self, incident_id: str, job_id: str, base_path: str) -> dict:
     """
     Celery task wrapper for the forensics parsing pipeline.
     Runs the async pipeline inside a fresh event loop.
+    Hard limit: 2 h. Soft limit: 1 h 50 min (logs warning, allows graceful cleanup).
     """
     from app.services.artifact_parser_service import run_pipeline_background
 
@@ -51,16 +56,20 @@ def run_pipeline_task(self, incident_id: str, job_id: str, base_path: str) -> di
         asyncio.run(run_pipeline_background(incident_id, job_id, Path(base_path)))
         logger.info("Celery: pipeline completed for job %s", job_id)
         return {"status": "done", "job_id": job_id}
+    except SoftTimeLimitExceeded:
+        logger.error("Celery: pipeline soft time limit exceeded for job %s — aborting", job_id)
+        raise
     except Exception as exc:
         logger.error("Celery: pipeline failed for job %s: %s", job_id, exc, exc_info=True)
         raise self.retry(exc=exc, countdown=30)
 
 
-@celery_app.task(bind=True, name="dfir.run_super_timeline", max_retries=1)
+@celery_app.task(bind=True, name="dfir.run_super_timeline", max_retries=1, time_limit=3600, soft_time_limit=3300)
 def run_super_timeline_task(self, incident_id: str, base_path: str) -> dict:
     """
     Celery task wrapper for the Super Timeline merge + lateral movement detection.
     Runs the async service inside a fresh event loop.
+    Hard limit: 1 h. Soft limit: 55 min.
     """
     from app.services.super_timeline_service import build_super_timeline_background
 
@@ -69,6 +78,9 @@ def run_super_timeline_task(self, incident_id: str, base_path: str) -> dict:
         asyncio.run(build_super_timeline_background(incident_id, Path(base_path)))
         logger.info("Celery: super timeline completed for incident %s", incident_id)
         return {"status": "done", "incident_id": incident_id}
+    except SoftTimeLimitExceeded:
+        logger.error("Celery: super timeline soft time limit exceeded for incident %s — aborting", incident_id)
+        raise
     except Exception as exc:
         logger.error(
             "Celery: super timeline failed for incident %s: %s", incident_id, exc, exc_info=True

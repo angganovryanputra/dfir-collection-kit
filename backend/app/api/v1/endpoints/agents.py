@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 _SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
 
-from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Header, HTTPException, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
@@ -53,12 +53,14 @@ def verify_agent_secret(agent_token: str | None) -> None:
 
 @router.get("/", response_model=list[DeviceOut])
 async def list_agents(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[DeviceOut]:
     from app.crud.device import list_devices
 
-    agents = await list_devices(db)
+    agents = await list_devices(db, limit=limit, offset=offset)
     return [DeviceOut.model_validate(agent) for agent in agents]
 
 
@@ -390,45 +392,59 @@ async def upload_job_evidence(
     await asyncio.to_thread(append_chain_log, chain_log_path, f"{timestamp} | HASH | {chain_log_hash}")
 
     total_size = await asyncio.to_thread(lambda: sum(p.stat().st_size for p in extracted_files))
-    folder_payload = EvidenceFolderCreate(
-        id=job.id,
-        incident_id=job.incident_id,
-        type="COLLECTION",
-        date=datetime.now(timezone.utc).date().isoformat(),
-        files_count=len(extracted_files),
-        total_size=str(total_size),
-        status="LOCKED",
-    )
-    await create_folder(db, folder_payload)
 
-    # Hash all files concurrently in a thread pool
-    item_hashes = await asyncio.gather(
-        *[asyncio.to_thread(hash_file, item, runtime_settings.hash_algorithm) for item in extracted_files]
-    )
-    for idx, (item, item_hash) in enumerate(zip(extracted_files, item_hashes), start=1):
-        item_payload = EvidenceItemCreate(
-            id=f"{job.id}-{idx}",
+    # Persist folder, items, and CoC entry atomically.  Roll back and clean up on failure so the
+    # agent can retry without leaving orphaned DB records or extracted files on disk.
+    try:
+        folder_payload = EvidenceFolderCreate(
+            id=job.id,
             incident_id=job.incident_id,
-            name=item.name,
-            type="FILE",
-            size=str(item.stat().st_size),
-            status="HASH_VERIFIED",
-            hash=item_hash,
-            collected_at=timestamp,
+            type="COLLECTION",
+            date=datetime.now(timezone.utc).date().isoformat(),
+            files_count=len(extracted_files),
+            total_size=str(total_size),
+            status="LOCKED",
         )
-        await create_item(db, item_payload)
+        await create_folder(db, folder_payload)
 
-    await create_entry(
-        db,
-        ChainOfCustodyEntryCreate(
-            id=f"coc-{job.id}",
-            incident_id=job.incident_id,
-            timestamp=timestamp,
-            action="EVIDENCE UPLOAD",
-            actor=f"AGENT {agent_id}",
-            target=zip_path.name,
-        ),
-    )
+        # Hash all files concurrently in a thread pool
+        item_hashes = await asyncio.gather(
+            *[asyncio.to_thread(hash_file, item, runtime_settings.hash_algorithm) for item in extracted_files]
+        )
+        for idx, (item, item_hash) in enumerate(zip(extracted_files, item_hashes), start=1):
+            item_payload = EvidenceItemCreate(
+                id=f"{job.id}-{idx}",
+                incident_id=job.incident_id,
+                name=item.name,
+                type="FILE",
+                size=str(item.stat().st_size),
+                status="HASH_VERIFIED",
+                hash=item_hash,
+                collected_at=timestamp,
+            )
+            await create_item(db, item_payload)
+
+        await create_entry(
+            db,
+            ChainOfCustodyEntryCreate(
+                id=f"coc-{job.id}",
+                incident_id=job.incident_id,
+                timestamp=timestamp,
+                action="EVIDENCE UPLOAD",
+                actor=f"AGENT {agent_id}",
+                target=zip_path.name,
+            ),
+        )
+    except Exception as exc:
+        logger.error(
+            "Evidence DB write failed for job %s (incident %s): %s — rolling back",
+            job_id, job.incident_id, exc, exc_info=True,
+        )
+        await db.rollback()
+        # Remove extracted files so the agent can retry with a clean state
+        import shutil
+        await asyncio.to_thread(shutil.rmtree, str(extracted_dir), ignore_errors=True)
+        raise HTTPException(status_code=500, detail="Evidence processing failed — retry upload") from exc
 
     await asyncio.to_thread(write_lock_marker, base_path / "LOCKED")
 

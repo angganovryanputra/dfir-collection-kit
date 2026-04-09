@@ -9,6 +9,7 @@ import { KeyValueRow } from "@/components/common/KeyValueRow";
 import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug, Layers, ChevronDown, ChevronUp, Info } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
+import { useToast } from "@/components/ui/use-toast";
 
 interface ToolsStatus {
   ez_tools_path: string | null;
@@ -79,6 +80,7 @@ export default function ProcessingStatus() {
     const navigate = useNavigate();
     const { id: incidentId } = useParams<{ id: string }>();
     const [errorExpanded, setErrorExpanded] = useState(false);
+    const { toast } = useToast();
 
     const { data: job, isLoading, error } = useQuery<ProcessingJobOut>({
         queryKey: ["processing-status", incidentId],
@@ -289,7 +291,14 @@ export default function ProcessingStatus() {
                                         a.click();
                                         a.remove();
                                         window.URL.revokeObjectURL(url);
-                                    } catch { /* ignore */ }
+                                    } catch (err) {
+                                        console.error("Timeline download failed:", err);
+                                        toast({
+                                            title: "Download Failed",
+                                            description: "Could not download timeline.jsonl. Check the console for details.",
+                                            variant: "destructive",
+                                        });
+                                    }
                                 }}
                             >
                                 <Download className="w-4 h-4 mr-2" />

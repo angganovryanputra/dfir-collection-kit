@@ -5,8 +5,8 @@ from app.models.incident import Incident
 from app.schemas.incident import IncidentCreate, IncidentUpdate
 
 
-async def list_incidents(db: AsyncSession, limit: int = 1000) -> list[Incident]:
-    result = await db.execute(select(Incident).order_by(Incident.updated_at.desc()).limit(limit))
+async def list_incidents(db: AsyncSession, limit: int = 1000, offset: int = 0) -> list[Incident]:
+    result = await db.execute(select(Incident).order_by(Incident.updated_at.desc()).offset(offset).limit(limit))
     return list(result.scalars().all())
 
 

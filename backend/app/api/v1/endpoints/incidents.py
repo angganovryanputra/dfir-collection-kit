@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 logger = logging.getLogger(__name__)
 
@@ -48,10 +48,12 @@ PHASE_STEPS = [
 
 @router.get("/", response_model=list[IncidentOut])
 async def get_incidents(
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[IncidentOut]:
-    incidents = await list_incidents(db)
+    incidents = await list_incidents(db, limit=limit, offset=offset)
     return [IncidentOut.model_validate(incident) for incident in incidents]
 
 

@@ -306,6 +306,13 @@ export default function CollectionSetup() {
         </WarningBanner>
       )}
 
+      {activeOS === "macos" && (
+        <WarningBanner variant="warning">
+          macOS collection is not yet supported by the Go agent. The job will be queued but no
+          modules will execute.
+        </WarningBanner>
+      )}
+
       <main className="flex-1 p-6 overflow-auto">
         <div className="grid grid-cols-12 gap-6">
           {/* Left — module picker */}

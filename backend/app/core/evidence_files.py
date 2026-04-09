@@ -7,8 +7,8 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 
-# Maximum total uncompressed size allowed per ZIP (2 GB)
-_MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024
+# Maximum total uncompressed size allowed per ZIP (50 GB)
+_MAX_EXTRACT_BYTES = 50 * 1024 * 1024 * 1024
 # Streaming copy chunk size (4 MB)
 _COPY_CHUNK = 4 * 1024 * 1024
 
@@ -43,44 +43,35 @@ def extract_zip(zip_path: Path, output_dir: Path) -> list[Path]:
     """Extract a ZIP archive with path traversal and decompression bomb protection."""
     extracted: list[Path] = []
     ensure_directory(output_dir)
+    resolved_output_dir = output_dir.resolve()
 
     with zipfile.ZipFile(zip_path, "r") as zip_ref:
-        # Pre-check: reject if total uncompressed size is excessive (decompression bomb)
-        total_uncompressed = sum(m.file_size for m in zip_ref.infolist())
-        if total_uncompressed > _MAX_UNCOMPRESSED_BYTES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"ZIP uncompressed content exceeds {_MAX_UNCOMPRESSED_BYTES // (1024**3)} GB limit",
-            )
+        total_bytes_extracted = 0
 
         for member in zip_ref.infolist():
-            member_path = Path(member.filename)
-            # Reject absolute paths, parent traversal, and null bytes
-            if (
-                member_path.is_absolute()
-                or ".." in member_path.parts
-                or "\x00" in member.filename
-            ):
-                raise HTTPException(status_code=400, detail="Invalid zip contents: path traversal detected")
+            # Path traversal protection: resolve the target path and confirm it stays
+            # within the output directory before extracting anything.
+            raw_target = (output_dir / member.filename).resolve()
+            if not str(raw_target).startswith(str(resolved_output_dir) + os.sep) and raw_target != resolved_output_dir:
+                raise ValueError("ZIP contains path traversal entry")
 
-            target = safe_join(output_dir, member.filename)
             if member.is_dir():
-                ensure_directory(target)
+                ensure_directory(raw_target)
                 continue
-            ensure_directory(target.parent)
+            ensure_directory(raw_target.parent)
 
-            # Stream extraction — never load full file into RAM
-            with zip_ref.open(member) as source, target.open("wb") as dest:
-                written = 0
+            # Stream extraction — never load the full member into RAM.
+            with zip_ref.open(member) as source, raw_target.open("wb") as dest:
                 buf = source.read(_COPY_CHUNK)
                 while buf:
-                    written += len(buf)
-                    if written > _MAX_UNCOMPRESSED_BYTES:
-                        raise HTTPException(status_code=413, detail="ZIP member exceeds size limit")
+                    total_bytes_extracted += len(buf)
+                    # ZIP bomb protection: abort if cumulative extracted bytes exceed the limit.
+                    if total_bytes_extracted > _MAX_EXTRACT_BYTES:
+                        raise ValueError("ZIP extraction exceeds size limit")
                     dest.write(buf)
                     buf = source.read(_COPY_CHUNK)
 
-            extracted.append(target)
+            extracted.append(raw_target)
     return extracted
 
 

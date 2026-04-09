@@ -117,6 +117,7 @@ export default function CollectionExecution() {
   const [isComplete, setIsComplete] = useState(false);
   const [elapsedTime, setElapsedTime] = useState(0);
   const [incident, setIncident] = useState<IncidentSummary | null>(null);
+  const [incidentLoaded, setIncidentLoaded] = useState(false);
   const [device, setDevice] = useState<DeviceSummary | null>(null);
   const [collector, setCollector] = useState<CollectorSummary | null>(null);
   const [summary, setSummary] = useState({
@@ -156,6 +157,8 @@ export default function CollectionExecution() {
         setCollector(collectors[0] ?? null);
       } catch {
         setErrorMessage("Unable to load collection context.");
+      } finally {
+        setIncidentLoaded(true);
       }
     };
 
@@ -165,6 +168,14 @@ export default function CollectionExecution() {
   useEffect(() => {
     const startCollection = async () => {
       if (!incidentId || startedRef.current) return;
+      // Wait until incident metadata is available before deciding whether to start.
+      if (!incidentLoaded) return;
+      // Don't re-trigger collection if it is already complete or the incident is closed.
+      if (incident && ["COLLECTION_COMPLETE", "CLOSED"].includes(incident.status)) {
+        startedRef.current = true;
+        if (incident.status === "COLLECTION_COMPLETE") setIsComplete(true);
+        return;
+      }
       if (isViewer) {
         setErrorMessage("Viewer accounts cannot start collections.");
         return;
@@ -186,7 +197,7 @@ export default function CollectionExecution() {
     };
 
     startCollection();
-  }, [incidentId, isViewer]);
+  }, [incidentId, isViewer, incidentLoaded, incident]);
 
   useEffect(() => {
     const pollStatus = async () => {

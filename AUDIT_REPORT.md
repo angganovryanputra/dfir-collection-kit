@@ -18,6 +18,22 @@ All **critical** and **high** severity findings have been remediated across 9 re
 | Low | 14 | 14 | 0 |
 | **Total** | **73** | **73** | **0** |
 
+**Session 2026-04-01 additions (Sprint 1–4 implementation):**
+- C-SES1: `.env.example` — `admin123!` replaced with `CHANGE_ME_BEFORE_LAUNCH` placeholder; added `POSTGRES_PASSWORD`, `REDIS_PASSWORD`
+- C-SES2: `agents.py` — evidence upload DB writes (create_folder, create_item loop, CoC entry) wrapped in try/except with `await db.rollback()` + extracted-file cleanup on failure
+- C-SES3: `evidence_files.py` — `extract_zip` now validates every member path (no directory traversal) and enforces 50 GB uncompressed size limit (ZIP bomb protection)
+- C-SES4: Go Agent `executor.go` — `MaxEvidenceZipBytes = 50 GB` constant; `createEvidenceZip` tracks cumulative bytes and returns error if limit exceeded
+- H-SES1: `worker.py` — `run_pipeline_task` gets `time_limit=7200, soft_time_limit=6600`; `run_super_timeline_task` gets `time_limit=3600, soft_time_limit=3300`; `SoftTimeLimitExceeded` handled explicitly
+- H-SES2: `App.tsx` — `PageBoundary` class + `RouteBoundary` function added; all 19 protected routes wrapped for per-page isolation; global `ErrorBoundary` improved with "Go to Dashboard" button
+- H-SES3: `CollectionExecution.tsx` — `incidentLoaded` gate added; startCollection skips API call if incident already COLLECTION_COMPLETE or CLOSED (prevents accidental restart)
+- H-SES4: Go Agent `executor.go` — all 10× `_ = e.apiClient.UpdateJobStatus(...)` calls replaced with `if err := ...; err != nil { logJob.Warning(...) }`; bare call in `executeModule` fixed
+- H-SES5: `ProcessingStatus.tsx` — timeline download `catch { /* ignore */ }` replaced with `toast()` + `console.error`
+- M-SES1: `schemas/settings.py` — `Field(ge=..., le=...)` bounds on 5 numeric fields; `@field_validator` for `timesketch_url` (must be http/https or empty)
+- M-SES2: `docker-compose.yml` — Redis `requirepass` + AUTH in broker URLs for backend + celery
+- M-SES3: `CollectionSetup.tsx` — warning banner shown when activeOS is `macos` (no Go agent implementation)
+- M-SES4: `incidents.py` + `agents.py` list endpoints — `limit` + `offset` query params exposed; CRUD functions updated
+- L-SES1: `forensics/timeline_builder.py` — dead code deleted (used `pandas`, never called)
+
 **Session 2026-03-27 additions (post-audit refinements):**
 - C-NEW1: `_VALID_TRANSITIONS` backward transitions removed (ACTIVE→PENDING, COLLECTION_COMPLETE→ACTIVE)
 - C-NEW2: `AGENT_SHARED_SECRET` empty → RuntimeError at startup
@@ -92,7 +108,7 @@ All **critical** and **high** severity findings have been remediated across 9 re
 | ID | Component | File | Issue | Status |
 |----|-----------|------|-------|--------|
 | L1 | Backend | `requirements.txt` | `bcrypt==3.2.2` pinned — workaround for passlib + bcrypt 4.x incompatibility | **Accepted risk** — functional but dated. Migrate to `PyJWT` + direct `bcrypt` in next major refactor |
-| L2 | Backend | `services/forensics/timeline_builder.py` | Dead code — never called by active pipeline (uses DuckDB) | **Accepted** — low risk, minor maintenance debt |
+| L2 | Backend | `services/forensics/timeline_builder.py` | Dead code — never called by active pipeline (uses DuckDB) | **Fixed** — file deleted 2026-04-01 |
 | L3 | Backend | `crud/` | `list_devices`, `list_incidents`, `list_users`, `list_folders`, `list_items` have no server-side pagination limit | **Accepted for beta** — DFIR scale (dozens of incidents, not thousands); add limit if load warrants |
 
 ---
@@ -285,12 +301,13 @@ Current complete chain (as of 2026-03-18):
     → 20260117_add_incident_collection_state
         → 20260122_add_incident_template_id
             → 20260303_add_concurrency_limit
-                → 20260401_add_processing_pipeline
-                    → 20260402_add_processing_settings
+                → 20260401_processing_pipeline
+                    → 20260402_processing_settings
                         → 20260403_phase2_analytics
+                            → 20260501_super_timeline
 ```
 
-Next migration should set `down_revision = "20260403_phase2_analytics"`.
+Next migration should set `down_revision = "20260501_super_timeline"`.
 
 ---
 

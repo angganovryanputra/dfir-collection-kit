@@ -26,10 +26,11 @@ services:
   redis:
     image: redis:7-alpine
     container_name: dfir-redis
+    command: redis-server --requirepass ${REDIS_PASSWORD:-CHANGE_ME_REDIS}
     ports:
       - "127.0.0.1:6379:6379"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-CHANGE_ME_REDIS}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -62,8 +63,8 @@ services:
       HAYABUSA_PATH:    ${HAYABUSA_PATH:-/opt/hayabusa/hayabusa}
       CHAINSAW_PATH:    ${CHAINSAW_PATH:-/opt/chainsaw/chainsaw}
       SIGMA_RULES_DIR:  ${SIGMA_RULES_DIR:-/opt/chainsaw/rules/}
-      CELERY_BROKER_URL:    redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_BROKER_URL:    redis://:${REDIS_PASSWORD:-CHANGE_ME_REDIS}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-CHANGE_ME_REDIS}@redis:6379/0
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
     # Backend is only reachable via the nginx proxy — no direct host port
     expose:
@@ -104,8 +105,8 @@ services:
       HAYABUSA_PATH:    ${HAYABUSA_PATH:-/opt/hayabusa/hayabusa}
       CHAINSAW_PATH:    ${CHAINSAW_PATH:-/opt/chainsaw/chainsaw}
       SIGMA_RULES_DIR:  ${SIGMA_RULES_DIR:-/opt/chainsaw/rules/}
-      CELERY_BROKER_URL:    redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/0
+      CELERY_BROKER_URL:    redis://:${REDIS_PASSWORD:-CHANGE_ME_REDIS}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-CHANGE_ME_REDIS}@redis:6379/0
     depends_on:
       db:
         condition: service_healthy

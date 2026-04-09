@@ -1,15 +1,15 @@
-from pydantic import BaseModel, field_serializer
+from pydantic import BaseModel, Field, field_serializer, field_validator
 from pydantic import ConfigDict
 
 
 class SystemSettingsBase(BaseModel):
     evidence_storage_path: str
-    max_file_size_gb: int
+    max_file_size_gb: int = Field(ge=1, le=500)
     hash_algorithm: str
-    collection_timeout_min: int
-    max_concurrent_jobs: int
-    concurrency_limit: int
-    retry_attempts: int
+    collection_timeout_min: int = Field(ge=1, le=1440)
+    max_concurrent_jobs: int = Field(ge=0, le=50)
+    concurrency_limit: int = Field(ge=1, le=32)
+    retry_attempts: int = Field(ge=0, le=10)
     session_timeout_min: int
     max_failed_logins: int
     log_retention_days: int
@@ -23,6 +23,15 @@ class SystemSettingsBase(BaseModel):
     timesketch_url: str | None = None
     timesketch_token: str | None = None
     auto_process: bool = True
+
+    @field_validator("timesketch_url", mode="before")
+    @classmethod
+    def _validate_timesketch_url(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return v
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("timesketch_url must start with http:// or https://")
+        return v
 
 
 class SystemSettingsCreate(SystemSettingsBase):
