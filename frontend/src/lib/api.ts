@@ -1,6 +1,6 @@
 type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
-const DEFAULT_BASE_URL = "http://localhost:8000/api/v1";
+const DEFAULT_BASE_URL = "/api/v1";
 
 const getBaseUrl = () => {
   const envUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;

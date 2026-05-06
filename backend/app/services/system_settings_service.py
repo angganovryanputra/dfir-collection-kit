@@ -32,6 +32,15 @@ class RuntimeSettings:
     timesketch_url: str | None = None
     timesketch_token: str | None = None
     auto_process: bool = True
+    webhook_url: str | None = None
+    notification_email: str | None = None
+    agent_binary_path: str | None = None
+    s3_enabled: bool = False
+    s3_endpoint_url: str | None = None
+    s3_access_key: str | None = None
+    s3_secret_key: str | None = None
+    s3_bucket: str | None = None
+    s3_region: str | None = None
 
 
 DEFAULT_SETTINGS = RuntimeSettings(
@@ -55,6 +64,15 @@ DEFAULT_SETTINGS = RuntimeSettings(
     timesketch_url=None,
     timesketch_token=None,
     auto_process=True,
+    webhook_url=None,
+    notification_email=None,
+    agent_binary_path=None,
+    s3_enabled=False,
+    s3_endpoint_url=None,
+    s3_access_key=None,
+    s3_secret_key=None,
+    s3_bucket=None,
+    s3_region=None,
 )
 
 _runtime_cache: RuntimeSettings | None = None
