@@ -15,6 +15,13 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Widen alembic_version.version_num so long revision IDs (> 32 chars) are accepted.
+    # Alembic writes the new revision ID AFTER upgrade() returns, so this ALTER must
+    # happen first — otherwise the UPDATE alembic_version SET version_num=... fails.
+    op.execute(sa.text(
+        "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"
+    ))
+
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     existing_cols = {c["name"] for c in inspector.get_columns("system_settings")}

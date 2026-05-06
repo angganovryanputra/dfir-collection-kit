@@ -18,4 +18,21 @@ FROM nginx:1.27-alpine
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
+# Pre-create nginx temp/log dirs owned by nginx (uid 101) so nginx can start
+# without chown at runtime — required when cap_drop: ALL blocks privilege ops.
+# Also strip the global `user` directive since setuid() needs CAP_SETUID.
+RUN mkdir -p /var/cache/nginx/client_temp \
+             /var/cache/nginx/proxy_temp \
+             /var/cache/nginx/fastcgi_temp \
+             /var/cache/nginx/uwsgi_temp \
+             /var/cache/nginx/scgi_temp \
+    && chown -R nginx:nginx \
+         /var/cache/nginx \
+         /var/log/nginx \
+         /usr/share/nginx/html \
+    && touch /var/run/nginx.pid \
+    && chown nginx:nginx /var/run/nginx.pid \
+    && sed -i 's/^user\s.*;$/# user directive removed for unprivileged run/' /etc/nginx/nginx.conf
+
+USER nginx
 EXPOSE 80
