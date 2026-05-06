@@ -10,9 +10,12 @@ class CollectionStartRequest(BaseModel):
     If module_ids is provided, only those modules are collected.
     If profile is provided (e.g. "triage", "ransomware", "full"), the profile's modules are used.
     If neither is provided, all modules for the detected OS are collected.
+    agent_ids, if provided, restricts collection to the specified device IDs instead of
+    looking up devices by hostname from incident.target_endpoints.
     """
     module_ids: list[str] | None = None
     profile: str | None = None
+    agent_ids: list[str] | None = None  # explicit agent device IDs to target
 
 
 class CollectionStartResponse(BaseModel):
@@ -20,6 +23,7 @@ class CollectionStartResponse(BaseModel):
     status: str
     progress: int
     phase: str
+    job_ids: list[str] = []  # IDs of all created/existing jobs
 
 
 class CollectionLogEntry(BaseModel):

@@ -296,6 +296,42 @@ func (c *Client) UploadEvidence(ctx context.Context, jobID string, zipPath strin
 	if err := validateID(jobID); err != nil {
 		return fmt.Errorf("UploadEvidence: %w", err)
 	}
+	
+	// 1. Try to get a pre-signed S3 URL first
+	urlURL := "/agents/" + c.config.AgentID + "/jobs/" + jobID + "/upload-url"
+	urlResp, err := c.makeRequest(ctx, "GET", urlURL, nil, "")
+	if err == nil {
+		defer urlResp.Body.Close()
+		
+		if urlResp.StatusCode == http.StatusOK {
+			var presignedData struct {
+				URL    string `json:"url"`
+				Method string `json:"method"`
+			}
+			if err := json.NewDecoder(urlResp.Body).Decode(&presignedData); err == nil && presignedData.URL != "" {
+				logging.WithJob(jobID).Info("Using direct-to-S3 upload")
+				err = c.uploadToS3(ctx, jobID, zipPath, presignedData.URL, presignedData.Method)
+				if err == nil {
+					// 2. Notify backend that upload is complete
+					completeURL := "/agents/" + c.config.AgentID + "/jobs/" + jobID + "/upload-complete"
+					compResp, compErr := c.makeRequest(ctx, "POST", completeURL, nil, "")
+					if compErr == nil {
+						defer compResp.Body.Close()
+						if compResp.StatusCode == http.StatusOK {
+							logging.WithJob(jobID).Info("S3 Evidence upload completed and notified backend")
+							return nil
+						}
+						logging.WithJob(jobID).Error("Failed to notify backend of upload completion: status %d", compResp.StatusCode)
+					}
+				} else {
+					logging.WithJob(jobID).Error("Direct-to-S3 upload failed, falling back to legacy upload: %v", err)
+				}
+			}
+		}
+	}
+
+	logging.WithJob(jobID).Info("Using legacy multipart upload")
+	
 	file, err := os.Open(zipPath)
 	if err != nil {
 		return fmt.Errorf("failed to open zip file: %w", err)
@@ -335,8 +371,8 @@ func (c *Client) UploadEvidence(ctx context.Context, jobID string, zipPath strin
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("upload failed: status %d: %s", resp.StatusCode, string(body))
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("upload failed: status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var result map[string]interface{}
@@ -345,5 +381,38 @@ func (c *Client) UploadEvidence(ctx context.Context, jobID string, zipPath strin
 	}
 
 	logging.WithJob(jobID).Info("Evidence uploaded successfully")
+	return nil
+}
+
+func (c *Client) uploadToS3(ctx context.Context, jobID, zipPath, presignedURL, method string) error {
+	file, err := os.Open(zipPath)
+	if err != nil {
+		return fmt.Errorf("failed to open zip file for S3 upload: %w", err)
+	}
+	defer file.Close()
+	
+	stat, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat file for S3 upload: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, presignedURL, file)
+	if err != nil {
+		return fmt.Errorf("failed to create S3 upload request: %w", err)
+	}
+	
+	req.ContentLength = stat.Size()
+	
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("S3 upload request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("S3 upload failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+	
 	return nil
 }

@@ -322,6 +322,65 @@ async def update_job_status_endpoint(
     return JobOut.model_validate(updated)
 
 
+@router.get("/{agent_id}/jobs/{job_id}/upload-url")
+async def get_job_upload_url(
+    agent_id: str,
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
+) -> dict:
+    verify_agent_secret(agent_token)
+    job = await get_job(db, job_id)
+    if not job or job.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    from app.services.s3_service import get_s3_service
+    s3_service = await get_s3_service(db)
+    if not s3_service:
+        raise HTTPException(status_code=400, detail="S3 Object Storage is not enabled")
+    
+    object_key = f"{job.incident_id}/{job.id}/collection.zip"
+    presigned_url = await s3_service.generate_presigned_upload_url(object_key)
+    
+    return {"url": presigned_url, "method": "PUT"}
+
+
+@router.post("/{agent_id}/jobs/{job_id}/upload-complete")
+async def complete_job_upload(
+    agent_id: str,
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+    agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
+) -> dict:
+    verify_agent_secret(agent_token)
+    job = await get_job(db, job_id)
+    if not job or job.agent_id != agent_id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status in ("completed", "failed"):
+        raise HTTPException(status_code=400, detail=f"Job already {job.status}")
+
+    from app.services.s3_service import get_s3_service
+    from app.worker import process_s3_upload_task
+    s3_service = await get_s3_service(db)
+    if not s3_service:
+        raise HTTPException(status_code=400, detail="S3 Object Storage is not enabled")
+    
+    # Trigger Celery task to download, extract, and process the evidence
+    from app.core.config import settings
+    base_path = Path(settings.STORAGE_PATH) / str(job.incident_id) / str(job.id)
+    object_key = f"{job.incident_id}/{job.id}/collection.zip"
+
+    # Mark job as processing
+    job.status = "processing"
+    await db.commit()
+
+    # Dispatch to Celery
+    process_s3_upload_task.delay(job.incident_id, job.id, str(base_path), object_key)
+    
+    return {"status": "processing"}
+
+
 @router.post("/{agent_id}/jobs/{job_id}/upload")
 async def upload_job_evidence(
     agent_id: str,
@@ -329,7 +388,7 @@ async def upload_job_evidence(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
-) -> dict:
+) -> JobOut:
     verify_agent_secret(agent_token)
     job = await get_job(db, job_id)
     if not job or job.agent_id != agent_id:

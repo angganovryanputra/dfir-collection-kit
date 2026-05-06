@@ -23,6 +23,26 @@ class SystemSettingsBase(BaseModel):
     timesketch_url: str | None = None
     timesketch_token: str | None = None
     auto_process: bool = True
+    # Notification settings
+    webhook_url: str | None = None
+    notification_email: str | None = None
+    agent_binary_path: str | None = None
+    # S3 Object Storage Settings for Evidence Vault
+    s3_enabled: bool = False
+    s3_endpoint_url: str | None = None
+    s3_access_key: str | None = None
+    s3_secret_key: str | None = None
+    s3_bucket: str | None = None
+    s3_region: str | None = None
+
+    @field_validator("notification_email", mode="before")
+    @classmethod
+    def _validate_notification_email(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return v
+        if "@" not in v:
+            raise ValueError("notification_email must contain '@' or be empty")
+        return v
 
     @field_validator("timesketch_url", mode="before")
     @classmethod
@@ -49,7 +69,7 @@ class SystemSettingsApiOut(SystemSettingsBase):
     """API response schema — masks timesketch_token so it is never returned in plaintext."""
     id: str
 
-    @field_serializer("timesketch_token")
+    @field_serializer("timesketch_token", "s3_secret_key")
     def _mask_token(self, v: str | None) -> str | None:
         return "***" if v else None
 

@@ -28,6 +28,13 @@ MODULE_REGISTRY = {
         "output_relpath": "volatile/windows/dns_cache.txt",
         "params": {},
     },
+    "windows_memory_acquisition": {
+        "os": "windows",
+        "category": "volatile",
+        "priority": 0,  # highest priority — acquire while processes are live
+        "output_relpath": "volatile/windows/memory.raw",
+        "params": {},
+    },
     # ── Windows · Logs ──────────────────────────────────────────────────────
     "windows_eventlog_security": {
         "os": "windows",
@@ -156,6 +163,13 @@ MODULE_REGISTRY = {
         "category": "volatile",
         "priority": 1,
         "output_relpath": "volatile/linux/network_connections.txt",
+        "params": {},
+    },
+    "linux_memory_acquisition": {
+        "os": "linux",
+        "category": "volatile",
+        "priority": 0,  # highest priority — acquire while processes are live
+        "output_relpath": "volatile/linux/memory.raw",
         "params": {},
     },
     # ── Linux · Logs ────────────────────────────────────────────────────────

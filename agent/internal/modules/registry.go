@@ -139,6 +139,7 @@ func Init() error {
 	Register(NewWindowsEventLogTaskScheduler())
 	Register(NewWindowsTypedURLs())
 	Register(NewWindowsNetworkShares())
+	Register(NewWindowsMemoryAcquisition())
 
 	// Register additional Linux modules (credentials, audit, open files, kernel, shell history)
 	Register(NewLinuxShadow())
@@ -156,6 +157,7 @@ func Init() error {
 	Register(NewLinuxEnvironment())
 	Register(NewLinuxPAMConfig())
 	Register(NewLinuxContainers())
+	Register(NewLinuxMemoryAcquisition())
 
 	logging.Info("Initialized %d modules", len(moduleRegistry))
 	return nil

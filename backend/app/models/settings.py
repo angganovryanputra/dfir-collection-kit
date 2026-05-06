@@ -28,3 +28,14 @@ class SystemSettings(Base):
     timesketch_url: Mapped[str | None] = mapped_column(String, nullable=True)
     timesketch_token: Mapped[str | None] = mapped_column(String, nullable=True)
     auto_process: Mapped[bool] = mapped_column(Boolean, server_default="true", default=True)
+    # Notification settings
+    webhook_url: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    notification_email: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    agent_binary_path: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    # S3 Object Storage Settings for Evidence Vault
+    s3_enabled: Mapped[bool] = mapped_column(Boolean, server_default="false", default=False)
+    s3_endpoint_url: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    s3_access_key: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    s3_secret_key: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    s3_bucket: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    s3_region: Mapped[str | None] = mapped_column(String, nullable=True, default=None)

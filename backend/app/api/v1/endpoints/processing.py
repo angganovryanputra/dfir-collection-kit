@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import csv
+import io
+import json as _json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
@@ -456,3 +459,180 @@ async def get_lateral_movements(
     """Return all lateral movement detections for an incident, ordered by confidence desc."""
     detections = await list_lateral_movements(db, incident_id)
     return [LateralMovementOut.model_validate(d) for d in detections]
+
+
+# ── IOC Bulk Import ────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/ioc/indicators/bulk",
+    response_model=dict,
+    status_code=201,
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def bulk_import_ioc_indicators(
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Bulk import IOC indicators from a CSV or JSON file.
+
+    CSV (with header row): type,value,description,source,severity
+    JSON: array of objects with fields type, value, and optional description/source/severity.
+    Max 10,000 rows per upload. Max 5MB file size.
+    """
+    _MAX_ROWS = 10_000
+    _MAX_BYTES = 5 * 1024 * 1024
+    _VALID_TYPES = {"ip", "domain", "sha256", "md5", "sha1", "url"}
+    _VALID_SEVE = {"critical", "high", "medium", "low", "informational"}
+
+    content = await file.read()
+    if len(content) > _MAX_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 5MB)")
+
+    text = content.decode("utf-8", errors="replace")
+    fname = (file.filename or "").lower()
+
+    rows: list[dict] = []
+    if fname.endswith(".json") or text.lstrip().startswith("["):
+        try:
+            rows = _json.loads(text)
+            if not isinstance(rows, list):
+                raise HTTPException(status_code=400, detail="JSON must be a list of objects")
+        except _json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
+    else:
+        reader = csv.DictReader(io.StringIO(text))
+        rows = list(reader)
+
+    if len(rows) > _MAX_ROWS:
+        raise HTTPException(
+            status_code=400, detail=f"Too many rows ({len(rows)} > {_MAX_ROWS})"
+        )
+
+    imported = 0
+    skipped = 0
+    errors: list[str] = []
+
+    BATCH = 500
+    for i, row in enumerate(rows):
+        ioc_type = str(row.get("type", "")).strip().lower()
+        value = str(row.get("value", "")).strip()
+        description = str(row.get("description", "")).strip() or None
+        source = str(row.get("source", "")).strip() or None
+        severity = str(row.get("severity", "high")).strip().lower()
+
+        if ioc_type not in _VALID_TYPES:
+            errors.append(f"Row {i+1}: unknown type '{ioc_type}'")
+            skipped += 1
+            continue
+        if not value:
+            errors.append(f"Row {i+1}: empty value")
+            skipped += 1
+            continue
+        if severity not in _VALID_SEVE:
+            severity = "high"
+
+        try:
+            await create_ioc_indicator(
+                db,
+                ioc_type=ioc_type,
+                value=value,
+                description=description,
+                source=source,
+                severity=severity,
+                created_by=current_user.username,
+            )
+            imported += 1
+        except Exception as exc:
+            errors.append(f"Row {i+1}: {str(exc)[:100]}")
+            skipped += 1
+
+        if (i + 1) % BATCH == 0:
+            await db.flush()
+
+    await db.commit()
+    return {"imported": imported, "skipped": skipped, "errors": errors[:20]}
+
+
+# ── MITRE ATT&CK Navigator Export ─────────────────────────────────────────────
+
+
+@router.get("/incident/{incident_id}/attack-chains/navigator")
+async def export_attack_chains_navigator(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Response:
+    """Export ATT&CK chains as an ATT&CK Navigator layer JSON (format v4.5).
+
+    The layer can be imported directly at https://mitre-attack.github.io/attack-navigator/
+    """
+    import json as _json_local
+
+    chains = await list_attack_chains(db, incident_id)
+    if not chains:
+        raise HTTPException(
+            status_code=404,
+            detail="No attack chains found for this incident — run the processing pipeline first",
+        )
+
+    _SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "informational": 0}
+    _SEV_COLOR = {
+        "critical": "#d9534f",
+        "high": "#f0ad4e",
+        "medium": "#f5c518",
+        "low": "#5bc0de",
+        "informational": "#aaaaaa",
+    }
+
+    tech_map: dict[str, dict] = {}
+    for chain in chains:
+        for tech in chain.techniques or []:
+            if tech not in tech_map:
+                tech_map[tech] = {"count": 0, "severity": "informational"}
+            tech_map[tech]["count"] += 1
+            if _SEV_RANK.get(chain.severity, 0) > _SEV_RANK.get(tech_map[tech]["severity"], 0):
+                tech_map[tech]["severity"] = chain.severity
+
+    max_count = max((d["count"] for d in tech_map.values()), default=1)
+
+    techniques = [
+        {
+            "techniqueID": tid.upper(),
+            "score": data["count"],
+            "color": _SEV_COLOR.get(data["severity"], "#aaaaaa"),
+            "comment": f"severity={data['severity']} hits={data['count']}",
+            "enabled": True,
+        }
+        for tid, data in tech_map.items()
+    ]
+
+    layer = {
+        "name": f"DFIR {incident_id}",
+        "versions": {"attack": "14", "navigator": "4.9", "layer": "4.5"},
+        "domain": "enterprise-attack",
+        "description": f"ATT&CK techniques detected in incident {incident_id}",
+        "techniques": techniques,
+        "gradient": {
+            "colors": ["#ffffff", "#ff6666"],
+            "minValue": 0,
+            "maxValue": max_count,
+        },
+        "legendItems": [
+            {"color": c, "label": s.capitalize()} for s, c in _SEV_COLOR.items()
+        ],
+        "showTacticRowBackground": True,
+        "tacticRowBackground": "#dddddd",
+        "selectTechniquesAcrossTactics": True,
+        "selectSubtechniquesWithParent": False,
+    }
+
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in incident_id)
+    return Response(
+        content=_json_local.dumps(layer, indent=2),
+        media_type="application/json",
+        headers={
+            "Content-Disposition": f'attachment; filename="navigator_{safe_id}.json"'
+        },
+    )

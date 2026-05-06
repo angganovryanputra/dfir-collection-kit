@@ -92,3 +92,5 @@ temp/
  frontend/Dockerfile.dev
  frontend/src/App.test.tsx
  frontend/test.html
+# Added by code-review-graph
+.code-review-graph/

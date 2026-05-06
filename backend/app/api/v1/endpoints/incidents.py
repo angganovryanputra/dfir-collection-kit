@@ -166,18 +166,23 @@ async def start_collection_endpoint(
     except Exception as exc:
         logger.warning("CoC entry failed for incident %s (COLLECTION STARTED): %s", incident_id, exc)
 
+    import re as _re
+    from app.crud.job import get_job
+
+    # Default OS — derived from first target hostname for fallback module selection
+    target_hostnames = incident.target_endpoints or []
     os_name = "windows"
-    if incident.target_endpoints:
-        result = await db.execute(
-            select(Device).where(Device.hostname == incident.target_endpoints[0])
+    if target_hostnames:
+        result_os = await db.execute(
+            select(Device).where(Device.hostname == target_hostnames[0])
         )
-        device = result.scalar_one_or_none()
-        if device and device.os:
-            normalized = normalize_os_name(device.os)
+        first_device = result_os.scalar_one_or_none()
+        if first_device and first_device.os:
+            normalized = normalize_os_name(first_device.os)
             if normalized in {"windows", "linux", "macos"}:
                 os_name = normalized
 
-    # Resolve which modules to collect: explicit IDs > profile > all for OS
+    # Resolve fallback modules (used for single unassigned job or as per-device default)
     try:
         if payload.module_ids:
             modules = build_modules(module_ids=payload.module_ids, os_name=os_name)
@@ -188,21 +193,70 @@ async def start_collection_endpoint(
             modules = build_modules(os_name=os_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     runtime_settings = await get_runtime_settings(db)
     if runtime_settings.max_concurrent_jobs > 0:
         active_jobs = await count_active_jobs(db)
         if active_jobs >= runtime_settings.max_concurrent_jobs:
             raise HTTPException(status_code=409, detail="Job concurrency limit reached")
-    # Idempotent: only create the job if it doesn't already exist.
-    # Re-triggering collection (e.g. navigate back) must not cause a PK conflict.
-    from app.crud.job import get_job
-    if not await get_job(db, f"JOB-{incident_id}"):
-        await create_job(
-            db,
-            JobCreate(id=f"JOB-{incident_id}", incident_id=incident_id),
-            modules,
-            f"{incident_id}/JOB-{incident_id}",
+
+    # Resolve target devices: explicit agent_ids > hostnames from incident > none
+    if payload.agent_ids:
+        dev_result = await db.execute(
+            select(Device).where(Device.id.in_(payload.agent_ids))
         )
+        devices = list(dev_result.scalars().all())
+    elif target_hostnames:
+        dev_result = await db.execute(
+            select(Device).where(Device.hostname.in_(target_hostnames))
+        )
+        devices = list(dev_result.scalars().all())
+    else:
+        devices = []
+
+    def _safe_hostname(h: str) -> str:
+        return _re.sub(r"[^a-zA-Z0-9-]", "-", h)[:16].strip("-") or "host"
+
+    job_ids: list[str] = []
+
+    if devices:
+        for device in devices:
+            dev_os = normalize_os_name(device.os) if device.os else os_name
+            if dev_os not in {"windows", "linux", "macos"}:
+                dev_os = os_name
+            try:
+                if payload.module_ids:
+                    dev_modules = build_modules(module_ids=payload.module_ids, os_name=dev_os)
+                elif payload.profile:
+                    dev_modules = build_modules(
+                        module_ids=get_profile_modules(payload.profile, dev_os), os_name=dev_os
+                    )
+                else:
+                    dev_modules = build_modules(os_name=dev_os)
+            except ValueError:
+                dev_modules = modules
+
+            safe_host = _safe_hostname(device.hostname)
+            job_id = f"JOB-{incident_id}-{safe_host}"
+            if not await get_job(db, job_id):
+                await create_job(
+                    db,
+                    JobCreate(id=job_id, incident_id=incident_id, agent_id=device.id),
+                    dev_modules,
+                    f"{incident_id}/{job_id}",
+                )
+            job_ids.append(job_id)
+    else:
+        # Fallback: single unassigned job (demo / no registered agents)
+        job_id = f"JOB-{incident_id}"
+        if not await get_job(db, job_id):
+            await create_job(
+                db,
+                JobCreate(id=job_id, incident_id=incident_id),
+                modules,
+                f"{incident_id}/{job_id}",
+            )
+        job_ids.append(job_id)
 
     await safe_record_event(
         db,
@@ -214,12 +268,13 @@ async def start_collection_endpoint(
         target_type="incident",
         target_id=incident_id,
         status="success",
-        message="Collection started",
+        message=f"Collection started: {len(job_ids)} job(s)",
         metadata={
-            "job_id": f"JOB-{incident_id}",
+            "job_ids": job_ids,
             "module_count": len(modules),
             "profile": payload.profile,
             "custom_module_ids": bool(payload.module_ids),
+            "device_count": len(devices),
         },
     )
 
@@ -228,6 +283,7 @@ async def start_collection_endpoint(
         status="started",
         progress=0,
         phase=PHASE_STEPS[0][0],
+        job_ids=job_ids,
     )
 
 
@@ -334,12 +390,35 @@ async def update_incident_endpoint(
     return IncidentOut.model_validate(incident)
 
 
+async def _render_pdf(html_content: str) -> bytes:
+    """Render HTML report to PDF using weasyprint. Raises HTTPException 501 if not installed."""
+    import asyncio as _asyncio
+
+    def _do_render(html_str: str) -> bytes:
+        try:
+            from weasyprint import HTML as WeasyHTML  # type: ignore[import]
+            return WeasyHTML(string=html_str).write_pdf()
+        except ImportError:
+            raise RuntimeError("weasyprint not installed")
+
+    try:
+        return await _asyncio.to_thread(_do_render, html_content)
+    except RuntimeError as exc:
+        if "weasyprint not installed" in str(exc):
+            raise HTTPException(
+                status_code=501,
+                detail="PDF export requires weasyprint. Install it or use ?format=html",
+            )
+        raise HTTPException(status_code=500, detail=f"PDF generation failed: {exc}") from exc
+
+
 @router.get(
     "/{incident_id}/report",
     dependencies=[Depends(require_roles("operator", "admin"))],
 )
 async def get_incident_report(
     incident_id: str,
+    format: str = Query(default="html", description="Report format: html or pdf"),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> Response:
@@ -348,7 +427,17 @@ async def get_incident_report(
         html_content = await generate_incident_report(incident_id, db)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
     safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in incident_id)
+
+    if format.lower() == "pdf":
+        pdf_bytes = await _render_pdf(html_content)
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="report_{safe_id}.pdf"'},
+        )
+
     return Response(
         content=html_content,
         media_type="text/html",
