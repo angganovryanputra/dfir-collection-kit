@@ -35,6 +35,7 @@ from app.services.super_timeline_service import build_super_timeline_background
 
 DEMO_INCIDENT_ID = "INC-MOCK-SUPERTL"
 _NOW = datetime.now(timezone.utc).isoformat()
+_NOW_DT = datetime.now(timezone.utc)
 
 _HOSTS = [
     {"device_id": "DEVICE-WS01", "hostname": "WORKSTATION-01", "ip": "192.168.1.50",
@@ -402,11 +403,11 @@ async def _seed_db(db, evidence_root: Path) -> None:
                 os="windows",
                 agent_version="1.4.0",
                 status="online",
-                last_seen=_NOW,
+                last_seen=_NOW_DT,
                 cpu_usage=None,
                 memory_usage=None,
                 collection_status="idle",
-                registered_at=_NOW,
+                registered_at=_NOW_DT,
             ))
             await db.flush()
             print(f"[demo] Created Device {did} ({host['hostname']})")
@@ -469,11 +470,11 @@ async def _seed_db(db, evidence_root: Path) -> None:
                 os=spec["os"],
                 agent_version="1.4.0",
                 status="online",
-                last_seen=_NOW,
+                last_seen=_NOW_DT,
                 cpu_usage=None,
                 memory_usage=None,
                 collection_status="idle",
-                registered_at=_NOW,
+                registered_at=_NOW_DT,
             ))
             await db.flush()
             print(f"[demo] Created extra Device {spec['device_id']} ({spec['hostname']})")
@@ -486,7 +487,7 @@ async def _seed_db(db, evidence_root: Path) -> None:
                 name=spec["name"],
                 endpoint=spec["endpoint"],
                 status=spec["status"],
-                last_heartbeat=_NOW,
+                last_heartbeat=_NOW_DT,
             ))
             await db.flush()
             print(f"[demo] Created Collector {spec['id']} ({spec['name']})")

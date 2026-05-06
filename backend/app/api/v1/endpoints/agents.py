@@ -141,7 +141,7 @@ async def agent_heartbeat(
         target_id=updated.id,
         status="success",
         message="Heartbeat received",
-        metadata={"status": updated.status, "last_seen": updated.last_seen},
+        metadata={"status": updated.status, "last_seen": updated.last_seen.isoformat() if updated.last_seen else None},
     )
     return DeviceOut.model_validate(updated)
 
@@ -388,7 +388,7 @@ async def upload_job_evidence(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
-) -> JobOut:
+) -> dict:
     verify_agent_secret(agent_token)
     job = await get_job(db, job_id)
     if not job or job.agent_id != agent_id:

@@ -1,5 +1,8 @@
-from sqlalchemy import String
+from datetime import datetime
+
+from sqlalchemy import DateTime, String
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.sql import func
 
 from app.db.base import Base
 
@@ -14,8 +17,8 @@ class Device(Base):
     os: Mapped[str] = mapped_column(String)
     agent_version: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String, index=True)
-    last_seen: Mapped[str] = mapped_column(String)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     cpu_usage: Mapped[int | None] = mapped_column(nullable=True)
     memory_usage: Mapped[int | None] = mapped_column(nullable=True)
     collection_status: Mapped[str] = mapped_column(String)
-    registered_at: Mapped[str] = mapped_column(String)
+    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

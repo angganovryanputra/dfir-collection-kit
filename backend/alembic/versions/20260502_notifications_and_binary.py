@@ -9,7 +9,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "20260502_notifications_and_binary"
-down_revision = "20260501_super_timeline"
+down_revision = "79fe3e192d10"
 branch_labels = None
 depends_on = None
 

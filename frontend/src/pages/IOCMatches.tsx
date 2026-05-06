@@ -1,11 +1,18 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ShieldAlert, Globe, Hash, Wifi, HelpCircle, AlertTriangle } from "lucide-react";
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+} from "@/components/ui/dialog";
+import { ChevronLeft, ShieldAlert, Globe, Hash, Wifi, HelpCircle, AlertTriangle, Upload, Loader2, CheckCircle2 } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { getStoredAuth } from "@/lib/auth";
 
 interface IOCMatch {
     id: string;
@@ -23,6 +30,12 @@ interface IOCMatch {
 interface IOCMatchList {
     total: number;
     items: IOCMatch[];
+}
+
+interface BulkImportResult {
+    imported: number;
+    skipped: number;
+    errors: string[];
 }
 
 const IOC_TYPES = ["all", "ip", "domain", "sha256", "md5", "sha1"];
@@ -45,9 +58,48 @@ const SEVERITY_COLOR: Record<string, string> = {
 export default function IOCMatches() {
     const navigate = useNavigate();
     const { id: incidentId } = useParams<{ id: string }>();
+    const queryClient = useQueryClient();
     const [activeType, setActiveType] = useState("all");
     const [page, setPage] = useState(1);
     const LIMIT = 100;
+
+    const [isImportOpen, setIsImportOpen] = useState(false);
+    const [importFile, setImportFile] = useState<File | null>(null);
+    const [isImporting, setIsImporting] = useState(false);
+    const [importResult, setImportResult] = useState<BulkImportResult | null>(null);
+    const [importError, setImportError] = useState<string | null>(null);
+    const fileInputRef = useRef<HTMLInputElement>(null);
+
+    const handleBulkImport = async () => {
+        if (!importFile) return;
+        setIsImporting(true);
+        setImportResult(null);
+        setImportError(null);
+        try {
+            const auth = getStoredAuth();
+            const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8000/api/v1";
+            const formData = new FormData();
+            formData.append("file", importFile);
+            const resp = await fetch(`${baseUrl}/processing/ioc/indicators/bulk`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${auth?.token ?? ""}` },
+                body: formData,
+            });
+            if (!resp.ok) {
+                const text = await resp.text();
+                throw new Error(text || `HTTP ${resp.status}`);
+            }
+            const result = (await resp.json()) as BulkImportResult;
+            setImportResult(result);
+            setImportFile(null);
+            if (fileInputRef.current) fileInputRef.current.value = "";
+            await queryClient.invalidateQueries({ queryKey: ["ioc-matches", incidentId] });
+        } catch (err) {
+            setImportError(err instanceof Error ? err.message : "Import failed");
+        } finally {
+            setIsImporting(false);
+        }
+    };
 
     const { data, isLoading, error } = useQuery<IOCMatchList>({
         queryKey: ["ioc-matches", incidentId, activeType, page],
@@ -71,14 +123,28 @@ export default function IOCMatches() {
             title="IOC MATCHES"
             subtitle={`INCIDENT: ${incidentId}`}
             headerActions={
-                <Button
-                    variant="ghost"
-                    onClick={() => navigate(`/incidents/${incidentId}/processing`)}
-                    size="sm"
-                >
-                    <ChevronLeft className="w-4 h-4 mr-2" />
-                    BACK TO PIPELINE
-                </Button>
+                <div className="flex items-center gap-2">
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                            setImportResult(null);
+                            setImportError(null);
+                            setIsImportOpen(true);
+                        }}
+                    >
+                        <Upload className="w-4 h-4 mr-2" />
+                        IMPORT IOCs
+                    </Button>
+                    <Button
+                        variant="ghost"
+                        onClick={() => navigate(`/incidents/${incidentId}/processing`)}
+                        size="sm"
+                    >
+                        <ChevronLeft className="w-4 h-4 mr-2" />
+                        BACK TO PIPELINE
+                    </Button>
+                </div>
             }
         >
             <div className="p-6 flex flex-col gap-6 max-w-5xl mx-auto w-full">
@@ -232,6 +298,92 @@ export default function IOCMatches() {
                     )}
                 </TacticalPanel>
             </div>
+
+            <Dialog open={isImportOpen} onOpenChange={(open) => {
+                setIsImportOpen(open);
+                if (!open) {
+                    setImportFile(null);
+                    setImportResult(null);
+                    setImportError(null);
+                    if (fileInputRef.current) fileInputRef.current.value = "";
+                }
+            }}>
+                <DialogContent className="max-w-lg bg-card border-border">
+                    <DialogHeader>
+                        <DialogTitle className="font-mono text-lg tracking-wider">IMPORT IOC INDICATORS</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                        <p className="font-mono text-xs text-muted-foreground">
+                            Upload a <span className="text-foreground">.csv</span> or <span className="text-foreground">.json</span> file containing IOC indicators to bulk-import into the threat intelligence database.
+                        </p>
+                        <div className="space-y-2">
+                            <label className="font-mono text-xs text-muted-foreground uppercase">File</label>
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept=".csv,.json"
+                                onChange={(e) => setImportFile(e.target.files?.[0] ?? null)}
+                                className="w-full font-mono text-xs text-foreground bg-secondary border border-border px-3 py-2 file:mr-3 file:bg-primary/10 file:border file:border-primary/30 file:text-primary file:font-mono file:text-xs file:px-2 file:py-1 file:cursor-pointer cursor-pointer"
+                            />
+                        </div>
+
+                        {importResult && (
+                            <div className="p-3 border border-green-500/40 bg-green-500/5 space-y-1">
+                                <div className="flex items-center gap-2 font-mono text-xs text-green-400 font-bold">
+                                    <CheckCircle2 className="w-4 h-4" />
+                                    IMPORT COMPLETE
+                                </div>
+                                <div className="font-mono text-xs text-muted-foreground">
+                                    Imported: <span className="text-foreground">{importResult.imported}</span>
+                                    {"  ·  "}
+                                    Skipped: <span className="text-foreground">{importResult.skipped}</span>
+                                </div>
+                                {importResult.errors.length > 0 && (
+                                    <div className="font-mono text-xs text-destructive mt-1">
+                                        {importResult.errors.slice(0, 5).map((e, i) => (
+                                            <div key={i}>{e}</div>
+                                        ))}
+                                        {importResult.errors.length > 5 && (
+                                            <div>…and {importResult.errors.length - 5} more errors</div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {importError && (
+                            <div className="flex items-center gap-2 p-3 border border-destructive/40 bg-destructive/5 font-mono text-xs text-destructive">
+                                <AlertTriangle className="w-4 h-4 shrink-0" />
+                                {importError}
+                            </div>
+                        )}
+
+                        <div className="flex gap-3 pt-2 border-t border-border">
+                            <Button
+                                variant="outline"
+                                className="flex-1"
+                                onClick={() => setIsImportOpen(false)}
+                                disabled={isImporting}
+                            >
+                                {importResult ? "CLOSE" : "CANCEL"}
+                            </Button>
+                            {!importResult && (
+                                <Button
+                                    variant="tactical"
+                                    className="flex-1"
+                                    onClick={() => void handleBulkImport()}
+                                    disabled={!importFile || isImporting}
+                                >
+                                    {isImporting
+                                        ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />IMPORTING…</>
+                                        : <><Upload className="w-4 h-4 mr-2" />IMPORT</>
+                                    }
+                                </Button>
+                            )}
+                        </div>
+                    </div>
+                </DialogContent>
+            </Dialog>
         </AppLayout>
     );
 }

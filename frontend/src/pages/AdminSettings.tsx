@@ -97,6 +97,9 @@ interface SystemSettingsResponse {
   yara_rules_path: string | null;
   timesketch_url: string | null;
   auto_process: boolean;
+  webhook_url: string | null;
+  notification_email: string | null;
+  agent_binary_path: string | null;
 }
 
 interface AuditLogEntry {
@@ -981,6 +984,55 @@ export default function AdminSettings() {
                         <p className="font-mono text-xs text-muted-foreground">
                           Locked to safe defaults.
                         </p>
+                      </div>
+                    </div>
+                  </TacticalPanel>
+
+                  {/* Notifications & Alerts Settings */}
+                  <TacticalPanel title="NOTIFICATIONS & ALERTS" className="col-span-2">
+                    <div className="grid grid-cols-3 gap-4">
+                      <div className="space-y-2">
+                        <FormLabel className="text-muted-foreground uppercase">
+                          Webhook URL
+                        </FormLabel>
+                        <Input
+                          value={systemSettings?.webhook_url ?? ""}
+                          placeholder="https://hooks.slack.com/..."
+                          onChange={(event) =>
+                            setSystemSettings((current) =>
+                              current ? { ...current, webhook_url: event.target.value || null } : current
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <FormLabel className="text-muted-foreground uppercase">
+                          Notification Email
+                        </FormLabel>
+                        <Input
+                          type="email"
+                          value={systemSettings?.notification_email ?? ""}
+                          placeholder="security@company.com"
+                          onChange={(event) =>
+                            setSystemSettings((current) =>
+                              current ? { ...current, notification_email: event.target.value || null } : current
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <FormLabel className="text-muted-foreground uppercase">
+                          Agent Binary Path
+                        </FormLabel>
+                        <Input
+                          value={systemSettings?.agent_binary_path ?? ""}
+                          placeholder="/opt/dfir-agents/"
+                          onChange={(event) =>
+                            setSystemSettings((current) =>
+                              current ? { ...current, agent_binary_path: event.target.value || null } : current
+                            )
+                          }
+                        />
                       </div>
                     </div>
                   </TacticalPanel>

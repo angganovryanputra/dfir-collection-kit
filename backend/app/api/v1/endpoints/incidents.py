@@ -237,7 +237,9 @@ async def start_collection_endpoint(
                 dev_modules = modules
 
             safe_host = _safe_hostname(device.hostname)
-            job_id = f"JOB-{incident_id}-{safe_host}"
+            # Append 6-char device ID suffix to prevent collision when two hostnames
+            # share the same first 16 characters.
+            job_id = f"JOB-{incident_id}-{safe_host}-{device.id[:6]}"
             if not await get_job(db, job_id):
                 await create_job(
                     db,
@@ -347,6 +349,51 @@ async def poll_collection_endpoint(
     )
 
 
+@router.post(
+    "/{incident_id}/collect/retry",
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
+async def retry_failed_jobs_endpoint(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Reset all failed or cancelled jobs for an incident back to pending."""
+    incident = await get_incident(db, incident_id)
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    if incident.status == "CLOSED":
+        raise HTTPException(status_code=409, detail="Cannot retry jobs on a closed incident")
+
+    from app.crud.job import list_jobs_for_incident, update_job_status
+
+    jobs = await list_jobs_for_incident(db, incident_id)
+    reset_ids: list[str] = []
+    for job in jobs:
+        if job.status in ("failed", "cancelled"):
+            await update_job_status(db, job.id, "pending")
+            reset_ids.append(job.id)
+
+    if reset_ids:
+        await update_incident(db, incident_id, IncidentUpdate(status="COLLECTION_IN_PROGRESS"))
+
+    await safe_record_event(
+        db,
+        event_type="collection.retry",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="backend",
+        action="retry failed jobs",
+        target_type="incident",
+        target_id=incident_id,
+        status="success",
+        message=f"Reset {len(reset_ids)} job(s) to pending",
+        metadata={"reset_job_ids": reset_ids},
+    )
+
+    return {"reset_jobs": len(reset_ids), "job_ids": reset_ids}
+
+
 @router.patch(
     "/{incident_id}",
     response_model=IncidentOut,
@@ -403,8 +450,10 @@ async def _render_pdf(html_content: str) -> bytes:
 
     try:
         return await _asyncio.to_thread(_do_render, html_content)
-    except RuntimeError as exc:
-        if "weasyprint not installed" in str(exc):
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            raise
+        if "weasyprint not installed" in str(exc) or isinstance(exc, ImportError):
             raise HTTPException(
                 status_code=501,
                 detail="PDF export requires weasyprint. Install it or use ?format=html",

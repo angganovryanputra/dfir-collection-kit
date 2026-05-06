@@ -547,6 +547,28 @@ async def run_parsing_pipeline(
             incident_id, proc_job_id, db,
         )
         logger.info("Sigma phase complete for job %s: %d hits", job_id, hits_count)
+
+        # Fire notification for critical/high Sigma hits (best-effort)
+        try:
+            if hits_count > 0:
+                from app.services.notification_service import notify_critical_sigma_hit
+                from app.crud.processing import list_sigma_hits
+
+                # Find the most severe hit to report
+                _hits, _ = await list_sigma_hits(db, incident_id, "critical", 1, 0)
+                if not _hits:
+                    _hits, _ = await list_sigma_hits(db, incident_id, "high", 1, 0)
+                if _hits:
+                    _top = _hits[0]
+                    _runtime2 = await get_runtime_settings(db)
+                    _wh2 = getattr(_runtime2, "webhook_url", None) or ""
+                    if _wh2:
+                        await notify_critical_sigma_hit(
+                            incident_id, proc_job_id, _top.rule_name, _top.severity, _wh2
+                        )
+        except Exception as _sex:
+            logger.debug("Sigma notification failed (non-fatal): %s", _sex)
+
         await _add_coc_entry(
             db, incident_id,
             "SIGMA DETECTION COMPLETE",
@@ -587,6 +609,23 @@ async def run_parsing_pipeline(
             completed_at=datetime.now(timezone.utc),
         )
         await db.commit()
+
+        try:
+            from app.services.notification_service import notify_pipeline_complete
+            from app.crud.analytics import list_ioc_matches
+            from app.crud.processing import count_sigma_hits_by_severity
+
+            sev_counts = await count_sigma_hits_by_severity(db, incident_id)
+            total_sigma = sum(sev_counts.values())
+            _, ioc_total = await list_ioc_matches(db, incident_id, None, 1, 0)
+
+            runtime = await get_runtime_settings(db)
+            webhook_url = getattr(runtime, "webhook_url", None) or ""
+            if webhook_url:
+                await notify_pipeline_complete(incident_id, job_id, total_sigma, ioc_total, webhook_url)
+        except Exception as _exc:
+            logger.debug("Notification failed (non-fatal): %s", _exc)
+
         return proc_job_id
 
     except Exception as exc:
@@ -598,6 +637,17 @@ async def run_parsing_pipeline(
             completed_at=datetime.now(timezone.utc),
         )
         await db.commit()
+
+        try:
+            from app.services.notification_service import notify_pipeline_failed
+            from app.services.system_settings_service import get_runtime_settings as _get_settings
+            _runtime = await _get_settings(db)
+            _webhook = getattr(_runtime, "webhook_url", None) or ""
+            if _webhook:
+                await notify_pipeline_failed(incident_id, job_id, str(exc)[:300], _webhook)
+        except Exception as _nex:
+            logger.debug("Notification failed (non-fatal): %s", _nex)
+
         return proc_job_id
 
 

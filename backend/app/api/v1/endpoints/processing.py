@@ -294,7 +294,7 @@ async def get_ioc_indicators(
     _: User = Depends(get_current_user),
 ) -> list[IOCIndicatorOut]:
     """List known bad indicators."""
-    indicators, _total = await list_ioc_indicators(db, ioc_type, limit, offset)
+    indicators, _total = await list_ioc_indicators(db, ioc_type, limit, offset)  # noqa: F841
     return [IOCIndicatorOut.model_validate(i) for i in indicators]
 
 
@@ -496,9 +496,10 @@ async def bulk_import_ioc_indicators(
     rows: list[dict] = []
     if fname.endswith(".json") or text.lstrip().startswith("["):
         try:
-            rows = _json.loads(text)
-            if not isinstance(rows, list):
+            parsed: object = _json.loads(text)
+            if not isinstance(parsed, list):
                 raise HTTPException(status_code=400, detail="JSON must be a list of objects")
+            rows = parsed
         except _json.JSONDecodeError as exc:
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {exc}") from exc
     else:
@@ -510,11 +511,23 @@ async def bulk_import_ioc_indicators(
             status_code=400, detail=f"Too many rows ({len(rows)} > {_MAX_ROWS})"
         )
 
+    from app.models.analytics import IOCIndicator as _IOCIndicator
+    import uuid as _uuid
+
     imported = 0
     skipped = 0
     errors: list[str] = []
+    batch: list[_IOCIndicator] = []
 
-    BATCH = 500
+    _BATCH_SIZE = 500
+
+    async def _flush_batch() -> None:
+        if not batch:
+            return
+        db.add_all(batch)
+        await db.flush()
+        batch.clear()
+
     for i, row in enumerate(rows):
         ioc_type = str(row.get("type", "")).strip().lower()
         value = str(row.get("value", "")).strip()
@@ -533,25 +546,23 @@ async def bulk_import_ioc_indicators(
         if severity not in _VALID_SEVE:
             severity = "high"
 
-        try:
-            await create_ioc_indicator(
-                db,
+        batch.append(
+            _IOCIndicator(
+                id=str(_uuid.uuid4()),
                 ioc_type=ioc_type,
-                value=value,
+                value=value.lower(),
                 description=description,
                 source=source,
                 severity=severity,
                 created_by=current_user.username,
             )
-            imported += 1
-        except Exception as exc:
-            errors.append(f"Row {i+1}: {str(exc)[:100]}")
-            skipped += 1
+        )
+        imported += 1
 
-        if (i + 1) % BATCH == 0:
-            await db.flush()
+        if len(batch) >= _BATCH_SIZE:
+            await _flush_batch()
 
-    await db.commit()
+    await _flush_batch()
     return {"imported": imported, "skipped": skipped, "errors": errors[:20]}
 
 

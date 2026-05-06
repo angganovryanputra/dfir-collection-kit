@@ -32,9 +32,12 @@ import {
   Settings,
   Power,
   Trash2,
+  Download,
+  Loader2,
+  Info,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
-import { getStoredRole } from "@/lib/auth";
+import { getStoredAuth, getStoredRole } from "@/lib/auth";
 
 interface Device {
   id: string;
@@ -99,6 +102,11 @@ const mapDevice = (device: DeviceResponse): Device => ({
 });
 
 
+interface AgentBinaryInfo {
+  windows_amd64: boolean;
+  linux_amd64: boolean;
+}
+
 type FilterStatus = "all" | "online" | "offline" | "degraded" | "pending";
 type FilterType = "all" | "workstation" | "server" | "laptop" | "virtual";
 
@@ -121,6 +129,40 @@ export default function Devices() {
     collectionStatus: "idle" as Device["collectionStatus"],
   });
   const isAdmin = getStoredRole() === "admin";
+  const [isDownloadingAgent, setIsDownloadingAgent] = useState<Record<string, boolean>>({});
+  const [agentDownloadError, setAgentDownloadError] = useState<string | null>(null);
+
+  const agentBinaryInfoQuery = useQuery<AgentBinaryInfo>({
+    queryKey: ["agent-binary-info"],
+    queryFn: () => apiGet<AgentBinaryInfo>("/agent-binary/info"),
+    retry: false,
+  });
+
+  const downloadAgentBinary = async (os: string, arch: string, filename: string) => {
+    const key = `${os}-${arch}`;
+    setIsDownloadingAgent((prev) => ({ ...prev, [key]: true }));
+    setAgentDownloadError(null);
+    try {
+      const auth = getStoredAuth();
+      const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8000/api/v1";
+      const url = `${baseUrl}/agent-binary/download?os=${encodeURIComponent(os)}&arch=${encodeURIComponent(arch)}`;
+      const resp = await fetch(url, {
+        headers: { Authorization: `Bearer ${auth?.token ?? ""}` },
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      const objUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(objUrl);
+    } catch (err) {
+      setAgentDownloadError(err instanceof Error ? err.message : "Download failed");
+    } finally {
+      setIsDownloadingAgent((prev) => ({ ...prev, [key]: false }));
+    }
+  };
 
   const devicesQuery = useQuery<DeviceResponse[]>({
     queryKey: ["devices"],
@@ -343,6 +385,63 @@ export default function Devices() {
               {errorMessage}
             </div>
           )}
+
+          {/* Download Agent Section */}
+          <div className="mb-6">
+            <TacticalPanel title="DOWNLOAD AGENT">
+              <div className="flex items-center gap-4 flex-wrap">
+                {agentBinaryInfoQuery.isLoading && (
+                  <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Checking available binaries…
+                  </div>
+                )}
+                {agentBinaryInfoQuery.error && (
+                  <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
+                    <Info className="w-4 h-4" />
+                    Agent binary downloads not configured. Set <span className="text-foreground">agent_binary_path</span> in System Config.
+                  </div>
+                )}
+                {agentBinaryInfoQuery.data && !agentBinaryInfoQuery.data.windows_amd64 && !agentBinaryInfoQuery.data.linux_amd64 && (
+                  <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
+                    <Info className="w-4 h-4" />
+                    No agent binaries available. Place pre-built binaries in the configured <span className="text-foreground">agent_binary_path</span> directory.
+                  </div>
+                )}
+                {agentBinaryInfoQuery.data?.windows_amd64 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={isDownloadingAgent["windows-amd64"]}
+                    onClick={() => void downloadAgentBinary("windows", "amd64", "agent-windows-amd64.exe")}
+                  >
+                    {isDownloadingAgent["windows-amd64"]
+                      ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      : <Download className="w-4 h-4 mr-2" />
+                    }
+                    WINDOWS x64 (.exe)
+                  </Button>
+                )}
+                {agentBinaryInfoQuery.data?.linux_amd64 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={isDownloadingAgent["linux-amd64"]}
+                    onClick={() => void downloadAgentBinary("linux", "amd64", "agent-linux-amd64")}
+                  >
+                    {isDownloadingAgent["linux-amd64"]
+                      ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      : <Download className="w-4 h-4 mr-2" />
+                    }
+                    LINUX x64
+                  </Button>
+                )}
+                {agentDownloadError && (
+                  <span className="font-mono text-xs text-destructive">{agentDownloadError}</span>
+                )}
+              </div>
+            </TacticalPanel>
+          </div>
 
           {/* Filters & Actions */}
             <div className="flex items-center gap-4 mb-6 flex-wrap">

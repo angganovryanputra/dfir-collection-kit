@@ -21,8 +21,10 @@ import {
     Search,
     CheckCircle2,
     AlertTriangle,
+    AlertCircle,
     Server,
     Network,
+    Shield,
     Loader2,
     ArrowRight,
     Users,
@@ -31,7 +33,7 @@ import {
     Upload,
 } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
-import { getStoredRole } from "@/lib/auth";
+import { getStoredAuth, getStoredRole } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -290,6 +292,11 @@ export default function IncidentHub() {
     const [isClosing, setIsClosing] = useState(false);
     const [isPushingTs, setIsPushingTs] = useState(false);
     const [tsError, setTsError] = useState<string | null>(null);
+    const [isRetrying, setIsRetrying] = useState(false);
+    const [retryResult, setRetryResult] = useState<string | null>(null);
+    const [retryError, setRetryError] = useState<string | null>(null);
+    const [isDownloadingNavigator, setIsDownloadingNavigator] = useState(false);
+    const [navigatorError, setNavigatorError] = useState<string | null>(null);
     const userRole = getStoredRole();
 
     // ── Data fetching ─────────────────────────────────────────────────────────
@@ -381,6 +388,58 @@ export default function IncidentHub() {
         }
     };
 
+    const handleRetryJobs = async () => {
+        if (!incidentId) return;
+        setIsRetrying(true);
+        setRetryResult(null);
+        setRetryError(null);
+        try {
+            const result = await apiPost<{ reset: number }>(`/incidents/${incidentId}/collect/retry`, {});
+            setRetryResult(`${result.reset} job${result.reset !== 1 ? "s" : ""} reset to pending`);
+            await queryClient.invalidateQueries({ queryKey: ["incident", incidentId] });
+        } catch (err) {
+            setRetryError(err instanceof Error ? err.message : "Retry failed");
+        } finally {
+            setIsRetrying(false);
+        }
+    };
+
+    const showRetryButton =
+        incident?.status === "COLLECTION_FAILED" ||
+        (userRole === "admin" || userRole === "operator");
+
+    const downloadWithAuth = async (url: string, filename: string) => {
+        const auth = getStoredAuth();
+        const resp = await fetch(url, {
+            headers: { Authorization: `Bearer ${auth?.token ?? ""}` },
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const blob = await resp.blob();
+        const objUrl = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = objUrl;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(objUrl);
+    };
+
+    const handleNavigatorExport = async () => {
+        if (!incidentId) return;
+        setIsDownloadingNavigator(true);
+        setNavigatorError(null);
+        try {
+            const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8000/api/v1";
+            await downloadWithAuth(
+                `${baseUrl}/processing/incident/${incidentId}/attack-chains/navigator`,
+                `navigator-${incidentId}.json`
+            );
+        } catch (err) {
+            setNavigatorError(err instanceof Error ? err.message : "Export failed");
+        } finally {
+            setIsDownloadingNavigator(false);
+        }
+    };
+
     if (incLoading) {
         return (
             <AppLayout title="INCIDENT HUB" subtitle="LOADING...">
@@ -418,6 +477,19 @@ export default function IncidentHub() {
                         <ChevronLeft className="w-4 h-4 mr-2" />
                         DASHBOARD
                     </Button>
+                    {/* Retry Failed Jobs */}
+                    {showRetryButton && incident?.status !== "CLOSED" && (
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => void handleRetryJobs()}
+                            disabled={isRetrying}
+                            className="gap-2 border-orange-500/40 text-orange-400 hover:bg-orange-500/10"
+                        >
+                            {isRetrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
+                            RETRY FAILED JOBS
+                        </Button>
+                    )}
                     {/* Close Incident */}
                     {incident?.status !== "CLOSED" && (userRole === "admin" || userRole === "operator") && (
                         <Button
@@ -623,6 +695,26 @@ export default function IncidentHub() {
                     </div>
                 )}
 
+                {/* ── Retry feedback banners ──────────────────────────────── */}
+                {retryResult && (
+                    <div className="flex items-center gap-3 p-3 border border-green-500/40 bg-green-500/5 rounded-sm">
+                        <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />
+                        <span className="font-mono text-xs text-green-400">{retryResult}</span>
+                    </div>
+                )}
+                {retryError && (
+                    <div className="flex items-center gap-3 p-3 border border-destructive/40 bg-destructive/5 rounded-sm">
+                        <AlertCircle className="w-4 h-4 text-destructive shrink-0" />
+                        <span className="font-mono text-xs text-destructive">{retryError}</span>
+                    </div>
+                )}
+                {navigatorError && (
+                    <div className="flex items-center gap-3 p-3 border border-destructive/40 bg-destructive/5 rounded-sm">
+                        <AlertCircle className="w-4 h-4 text-destructive shrink-0" />
+                        <span className="font-mono text-xs text-destructive">Navigator export failed: {navigatorError}</span>
+                    </div>
+                )}
+
                 {/* ── Quick Action Grid ────────────────────────────────────── */}
                 <TacticalPanel title="ANALYSIS ACTIONS">
                     <div className="grid grid-cols-3 gap-3">
@@ -783,6 +875,32 @@ export default function IncidentHub() {
                             }
                             onClick={() => navigate(`/incidents/${incidentId}/attack-chains`)}
                             disabled={!procDone}
+                        />
+
+                        {/* ATT&CK Navigator Export */}
+                        <ActionCard
+                            icon={isDownloadingNavigator
+                                ? <Loader2 className="w-5 h-5 animate-spin" />
+                                : <Shield className="w-5 h-5" />
+                            }
+                            title="ATT&CK NAVIGATOR"
+                            status={procDone ? "ready" : "unavailable"}
+                            description={
+                                isDownloadingNavigator
+                                    ? "Generating Navigator layer…"
+                                    : procDone
+                                    ? "Export MITRE ATT&CK Navigator layer JSON"
+                                    : "Available after processing"
+                            }
+                            badge={
+                                procDone ? (
+                                    <span className="px-2 py-0.5 border border-primary/30 bg-primary/10 text-primary font-mono text-[10px] rounded-sm">
+                                        JSON
+                                    </span>
+                                ) : undefined
+                            }
+                            onClick={() => void handleNavigatorExport()}
+                            disabled={!procDone || isDownloadingNavigator}
                         />
 
                         {/* Chain of Custody */}

@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -5,7 +7,7 @@ class CollectorBase(BaseModel):
     name: str
     endpoint: str
     status: str
-    last_heartbeat: str
+    last_heartbeat: datetime
 
 
 class CollectorCreate(CollectorBase):
