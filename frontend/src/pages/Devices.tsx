@@ -144,7 +144,7 @@ export default function Devices() {
     setAgentDownloadError(null);
     try {
       const auth = getStoredAuth();
-      const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8000/api/v1";
+      const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "/api/v1";
       const url = `${baseUrl}/agent-binary/download?os=${encodeURIComponent(os)}&arch=${encodeURIComponent(arch)}`;
       const resp = await fetch(url, {
         headers: { Authorization: `Bearer ${auth?.token ?? ""}` },

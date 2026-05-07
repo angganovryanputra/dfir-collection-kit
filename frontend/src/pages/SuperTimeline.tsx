@@ -1282,7 +1282,7 @@ export default function SuperTimeline() {
             if (dateFilterActive && dateFrom) params.set("date_from", new Date(dateFrom).toISOString());
             if (dateFilterActive && dateTo)   params.set("date_to", new Date(dateTo).toISOString());
 
-            const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8000/api/v1";
+            const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "/api/v1";
             const url = `${baseUrl}/evidence/super-timeline/${incidentId}/export?${params}`;
             const raw = localStorage.getItem("dfir_auth");
             const token = raw ? (JSON.parse(raw) as { token?: string }).token : null;

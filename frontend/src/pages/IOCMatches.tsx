@@ -77,7 +77,7 @@ export default function IOCMatches() {
         setImportError(null);
         try {
             const auth = getStoredAuth();
-            const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8000/api/v1";
+            const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "/api/v1";
             const formData = new FormData();
             formData.append("file", importFile);
             const resp = await fetch(`${baseUrl}/processing/ioc/indicators/bulk`, {

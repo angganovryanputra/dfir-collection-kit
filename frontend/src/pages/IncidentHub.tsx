@@ -428,7 +428,7 @@ export default function IncidentHub() {
         setIsDownloadingNavigator(true);
         setNavigatorError(null);
         try {
-            const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "http://localhost:8000/api/v1";
+            const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "/api/v1";
             await downloadWithAuth(
                 `${baseUrl}/processing/incident/${incidentId}/attack-chains/navigator`,
                 `navigator-${incidentId}.json`

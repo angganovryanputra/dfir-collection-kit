@@ -69,7 +69,7 @@ export default function ChainOfCustody() {
     setErrorMessage(null);
     try {
       const baseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
-      const base = (baseUrl?.trim() || "http://localhost:8000/api/v1").replace(/\/$/, "");
+      const base = (baseUrl?.trim() || "/api/v1").replace(/\/$/, "");
       const params = selectedIncident ? `?incident_id=${encodeURIComponent(selectedIncident)}` : "";
       const url = `${base}/chain-of-custody/export${params}`;
       const token = getStoredAuth()?.token ?? null;
