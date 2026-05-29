@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -14,20 +15,27 @@ from app.models.user import User
 
 router = APIRouter()
 
+# MODULE_REGISTRY is static after startup — cache grouped results per OS so
+# repeated requests from CollectionSetup don't re-iterate the dict each time.
+@lru_cache(maxsize=8)
+def _cached_modules_by_category(os_name: str | None) -> dict[str, Any]:
+    return get_modules_by_category(os_name)
+
 
 @router.get("")
 async def list_modules(
-    os: str | None = Query(default=None, description="Filter by OS: 'windows' or 'linux'"),
+    os: str | None = Query(default=None, description="Filter by OS: 'windows', 'linux', or 'macos'"),
     _: User = Depends(get_current_user),
 ) -> dict[str, Any]:
     """
     Return all registered collection modules grouped by category.
 
-    Each entry includes: id, os, category, priority, output_relpath.
+    Each entry includes: id, os, category, priority, output_relpath, estimated_size_mb.
     Pass ?os=windows, ?os=linux, or ?os=macos to restrict to a single platform.
     Darwin/Mac OS X strings are normalised to 'macos' automatically.
     """
-    grouped = get_modules_by_category(os)
+    normalized = normalize_os_name(os)
+    grouped = _cached_modules_by_category(normalized)
     return {"modules": grouped}
 
 

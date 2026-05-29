@@ -71,20 +71,31 @@ def _build_export_zip(incident_id: str, storage_path: str, max_bytes: int) -> Pa
     _ensure_directory(export_dir)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
     zip_path = export_dir / f"{incident_id}-{timestamp}.zip"
-    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-        for file_path in base_path.rglob("*"):
-            if not file_path.is_file():
-                continue
-            if export_dir in file_path.parents:
-                continue
-            rel_path = file_path.relative_to(base_path)
-            zip_file.write(file_path, rel_path)
-    if zip_path.stat().st_size > max_bytes:
-        try:
-            zip_path.unlink()
-        except OSError as exc:
-            logger.warning("Failed to delete oversized export %s: %s", zip_path, exc)
-        raise HTTPException(status_code=413, detail="Export exceeds size limit")
+
+    # Pre-check: sum uncompressed sizes before building so we fail fast
+    # without wasting CPU and disk writing a ZIP that will be rejected.
+    files_to_zip = [
+        f for f in base_path.rglob("*")
+        if f.is_file() and export_dir not in f.parents
+    ]
+    total_uncompressed = sum(f.stat().st_size for f in files_to_zip)
+    if total_uncompressed > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Export too large ({total_uncompressed / (1024 ** 3):.1f} GiB uncompressed). "
+                   "Request a partial export or increase max_file_size_gb in settings.",
+        )
+
+    try:
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+            for file_path in files_to_zip:
+                zip_file.write(file_path, file_path.relative_to(base_path))
+                # Mid-build guard: abort if compressed output exceeds limit
+                if zip_path.stat().st_size > max_bytes:
+                    raise HTTPException(status_code=413, detail="Export exceeds size limit")
+    except HTTPException:
+        zip_path.unlink(missing_ok=True)
+        raise
     _enforce_export_retention(export_dir, 5)
     return zip_path
 

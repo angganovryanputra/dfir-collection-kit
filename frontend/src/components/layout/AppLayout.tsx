@@ -82,7 +82,7 @@ export function AppLayout({
 
   const incidentsQuery = useQuery({
     queryKey: ["incidents"],
-    queryFn: () => apiGet<IncidentResponse[]>("/incidents"),
+    queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>("/incidents?limit=1000"),
   });
 
   const collectorsQuery = useQuery({
@@ -92,7 +92,7 @@ export function AppLayout({
 
   useEffect(() => {
     if (incidentsQuery.data) {
-      setIncidents(incidentsQuery.data.map(mapIncident));
+      setIncidents(incidentsQuery.data.items.map(mapIncident));
     }
   }, [incidentsQuery.data]);
 

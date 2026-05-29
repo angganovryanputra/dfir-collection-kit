@@ -470,6 +470,66 @@ MODULE_REGISTRY = {
         "output_relpath": "system/windows/network_shares.csv",
         "params": {},
     },
+    # ── Windows · Critical new artifacts ────────────────────────────────────
+    "windows_eventlog_bits": {
+        "os": "windows", "category": "logs", "priority": 2,
+        "output_relpath": "logs/windows/bits_transfer.evtx",
+        "params": {"time_window": "7d"},
+    },
+    "windows_eventlog_wmi_activity": {
+        "os": "windows", "category": "logs", "priority": 2,
+        "output_relpath": "logs/windows/wmi_activity.evtx",
+        "params": {"time_window": "7d"},
+    },
+    "windows_eventlog_ps_scriptblock": {
+        "os": "windows", "category": "logs", "priority": 2,
+        "output_relpath": "logs/windows/ps_scriptblock.evtx",
+        "params": {"time_window": "7d"},
+    },
+    "windows_hosts_file": {
+        "os": "windows", "category": "system", "priority": 1,
+        "output_relpath": "system/windows/hosts_file.txt", "params": {},
+    },
+    "windows_network_interfaces": {
+        "os": "windows", "category": "system", "priority": 1,
+        "output_relpath": "system/windows/network_interfaces.txt", "params": {},
+    },
+    "windows_defender_exclusions": {
+        "os": "windows", "category": "system", "priority": 1,
+        "output_relpath": "system/windows/defender_exclusions.txt", "params": {},
+    },
+    "windows_timeline": {
+        "os": "windows", "category": "artifacts", "priority": 2,
+        "output_relpath": "artifacts/windows/timeline/", "params": {},
+    },
+    "windows_appcompat_shims": {
+        "os": "windows", "category": "artifacts", "priority": 2,
+        "output_relpath": "artifacts/windows/appcompat_shims/", "params": {},
+    },
+    "windows_installed_software": {
+        "os": "windows", "category": "system", "priority": 3,
+        "output_relpath": "system/windows/installed_software.csv", "params": {},
+    },
+    "windows_process_tree": {
+        "os": "windows", "category": "volatile", "priority": 1,
+        "output_relpath": "volatile/windows/process_tree.csv", "params": {},
+    },
+    "windows_active_connections": {
+        "os": "windows", "category": "volatile", "priority": 1,
+        "output_relpath": "volatile/windows/active_connections.csv", "params": {},
+    },
+    "windows_ntds": {
+        "os": "windows", "category": "artifacts", "priority": 0,
+        "output_relpath": "artifacts/windows/ntds/", "params": {},
+    },
+    "windows_netlogon_log": {
+        "os": "windows", "category": "logs", "priority": 2,
+        "output_relpath": "logs/windows/netlogon/", "params": {},
+    },
+    "windows_ifeo": {
+        "os": "windows", "category": "persistence", "priority": 2,
+        "output_relpath": "persistence/windows/ifeo.txt", "params": {},
+    },
     # ── Linux · System ──────────────────────────────────────────────────────
     "linux_ip_config": {
         "os": "linux",
@@ -618,6 +678,59 @@ MODULE_REGISTRY = {
         "priority": 2,
         "output_relpath": "volatile/linux/containers.txt",
         "params": {},
+    },
+    # ── Linux · Critical new artifacts ──────────────────────────────────────
+    "linux_user_crontabs": {
+        "os": "linux", "category": "persistence", "priority": 2,
+        "output_relpath": "persistence/linux/user_crontabs/", "params": {},
+    },
+    "linux_user_shell_configs": {
+        "os": "linux", "category": "persistence", "priority": 2,
+        "output_relpath": "persistence/linux/user_shell_configs.txt", "params": {},
+    },
+    "linux_iptables_rules": {
+        "os": "linux", "category": "system", "priority": 1,
+        "output_relpath": "system/linux/firewall_rules.txt", "params": {},
+    },
+    "linux_lastlog": {
+        "os": "linux", "category": "logs", "priority": 2,
+        "output_relpath": "logs/linux/lastlog.txt", "params": {},
+    },
+    "linux_ssh_keys": {
+        "os": "linux", "category": "artifacts", "priority": 1,
+        "output_relpath": "artifacts/linux/ssh_keys/", "params": {},
+    },
+    "linux_network_config": {
+        "os": "linux", "category": "system", "priority": 1,
+        "output_relpath": "system/linux/network_config/", "params": {},
+    },
+    "linux_setuid_binaries": {
+        "os": "linux", "category": "system", "priority": 2,
+        "output_relpath": "system/linux/setuid_binaries.txt", "params": {},
+    },
+    "linux_proc_net": {
+        "os": "linux", "category": "volatile", "priority": 1,
+        "output_relpath": "volatile/linux/proc_net/", "params": {},
+    },
+    "linux_init_scripts": {
+        "os": "linux", "category": "persistence", "priority": 3,
+        "output_relpath": "persistence/linux/init_scripts.txt", "params": {},
+    },
+    "linux_at_jobs": {
+        "os": "linux", "category": "persistence", "priority": 3,
+        "output_relpath": "persistence/linux/at_jobs/", "params": {},
+    },
+    "linux_package_history": {
+        "os": "linux", "category": "logs", "priority": 3,
+        "output_relpath": "logs/linux/package_history/", "params": {},
+    },
+    "linux_profile_d": {
+        "os": "linux", "category": "persistence", "priority": 2,
+        "output_relpath": "persistence/linux/profile_d.txt", "params": {},
+    },
+    "linux_systemd_overrides": {
+        "os": "linux", "category": "persistence", "priority": 2,
+        "output_relpath": "persistence/linux/systemd_overrides/", "params": {},
     },
     # ── macOS · Volatile ─────────────────────────────────────────────────────
     "macos_process_list": {
@@ -806,12 +919,41 @@ _MODULE_SIZES: dict[str, float] = {
     "windows_wmi_repository": 30.0,
     "windows_typed_urls": 0.1,
     "windows_vss_enumerate": 0.1,
+    # Windows new artifacts
+    "windows_eventlog_bits": 20.0,
+    "windows_eventlog_wmi_activity": 10.0,
+    "windows_eventlog_ps_scriptblock": 50.0,
+    "windows_hosts_file": 0.1,
+    "windows_network_interfaces": 0.2,
+    "windows_defender_exclusions": 0.1,
+    "windows_timeline": 50.0,
+    "windows_appcompat_shims": 5.0,
+    "windows_installed_software": 1.0,
+    "windows_process_tree": 0.5,
+    "windows_active_connections": 0.5,
+    "windows_ntds": 200.0,
+    "windows_netlogon_log": 10.0,
+    "windows_ifeo": 0.1,
     # Linux — volatile
     "linux_process_list": 0.2,
     "linux_network_connections": 0.2,
     "linux_memory_acquisition": 8192.0,
     "linux_lsof": 0.5,
     "linux_containers": 0.5,
+    # Linux new artifacts
+    "linux_user_crontabs": 0.1,
+    "linux_user_shell_configs": 0.5,
+    "linux_iptables_rules": 0.2,
+    "linux_lastlog": 0.2,
+    "linux_ssh_keys": 0.5,
+    "linux_network_config": 0.5,
+    "linux_setuid_binaries": 0.5,
+    "linux_proc_net": 0.5,
+    "linux_init_scripts": 0.5,
+    "linux_at_jobs": 0.1,
+    "linux_package_history": 2.0,
+    "linux_profile_d": 0.2,
+    "linux_systemd_overrides": 2.0,
     # Linux — logs
     "linux_journalctl": 50.0,
     "linux_syslog": 30.0,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -6,7 +6,7 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { WarningBanner } from "@/components/WarningBanner";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { KeyValueRow } from "@/components/common/KeyValueRow";
-import { Shield, Play, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
+import { Shield, Play, AlertTriangle, ChevronDown, ChevronUp, Search, X } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { getStoredRole, isViewerRole } from "@/lib/auth";
 
@@ -16,6 +16,7 @@ type ModuleEntry = {
   category: string;
   priority: number;
   output_relpath: string;
+  estimated_size_mb?: number;
 };
 
 type ModulesByCategory = Record<string, ModuleEntry[]>;
@@ -82,6 +83,9 @@ export default function CollectionSetup() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeProfile, setActiveProfile] = useState<string | null>(null);
 
+  const [moduleSearch, setModuleSearch] = useState("");
+  const [devices, setDevices] = useState<DeviceSummary[]>([]);
+  const [selectedDeviceIds, setSelectedDeviceIds] = useState<Set<string>>(new Set());
   const isViewer = isViewerRole(getStoredRole());
 
   useEffect(() => {
@@ -91,7 +95,7 @@ export default function CollectionSetup() {
         return;
       }
       try {
-        const incidents = await apiGet<IncidentSummary[]>("/incidents");
+        const { items: incidents } = await apiGet<{ total: number; items: IncidentSummary[] }>("/incidents?limit=1000");
         const current = incidents.find((i) => i.id === incidentId) ?? null;
         setIncident(current);
 
@@ -115,6 +119,17 @@ export default function CollectionSetup() {
 
         setModulesByCategory(modulesResp.modules);
         setProfiles(profilesResp.profiles);
+
+        // Fetch all registered devices and pre-select those matching incident targets
+        const allDevices = await apiGet<DeviceSummary[]>("/devices");
+        const targetSet = new Set(
+          (current?.target_endpoints ?? []).map((h) => h.toLowerCase())
+        );
+        const relevantDevices = allDevices.filter(
+          (d) => targetSet.has(d.hostname.toLowerCase())
+        );
+        setDevices(relevantDevices);
+        setSelectedDeviceIds(new Set(relevantDevices.map((d) => d.id)));
 
         // Default: select all modules
         const allIds = new Set<string>();
@@ -238,13 +253,67 @@ export default function CollectionSetup() {
   const handleStartCollection = () => {
     if (isViewer || selected.size === 0) return;
     navigate(`/incidents/${incidentId}/collect`, {
-      state: { selectedModuleIds: Array.from(selected), profile: activeProfile },
+      state: {
+        selectedModuleIds: Array.from(selected),
+        profile: activeProfile,
+        // osOverride MUST be sent — CollectionExecution forwards it to the backend
+        // so validate_modules_for_os() uses the correct OS. Without this, the
+        // backend may reject selected modules (e.g. Linux modules against a Windows device).
+        osOverride: activeOS,
+        // agent_ids: explicitly targeted devices.
+        // Only send when the user has deselected some devices, otherwise let
+        // the backend resolve from incident.target_endpoints as usual.
+        agentIds:
+          devices.length > 0 && selectedDeviceIds.size < devices.length
+            ? Array.from(selectedDeviceIds)
+            : undefined,
+      },
     });
   };
 
   const orderedCategories = CATEGORY_ORDER.filter((cat) => modulesByCategory[cat]?.length);
 
   const totalModules = allModuleIds().length;
+
+  // Compute total estimated collection size for selected modules
+  const estimatedSizeMb = useMemo(() => {
+    let total = 0;
+    for (const entries of Object.values(modulesByCategory)) {
+      for (const m of entries) {
+        if (selected.has(m.id) && m.estimated_size_mb) {
+          total += m.estimated_size_mb;
+        }
+      }
+    }
+    return total;
+  }, [modulesByCategory, selected]);
+
+  const formatSize = (mb: number): string => {
+    if (mb < 1) return `~${Math.round(mb * 1024)} KB`;
+    if (mb < 1024) return `~${mb.toFixed(0)} MB`;
+    return `~${(mb / 1024).toFixed(1)} GB`;
+  };
+
+  // Filter modules by search query
+  const searchLower = moduleSearch.trim().toLowerCase();
+  const filteredCategories = searchLower
+    ? Object.fromEntries(
+        orderedCategories
+          .map((cat) => [
+            cat,
+            (modulesByCategory[cat] ?? []).filter(
+              (m) =>
+                m.id.toLowerCase().includes(searchLower) ||
+                m.category.toLowerCase().includes(searchLower) ||
+                m.output_relpath.toLowerCase().includes(searchLower),
+            ),
+          ])
+          .filter(([, mods]) => (mods as ModuleEntry[]).length > 0),
+      )
+    : modulesByCategory;
+  const visibleCategories = searchLower
+    ? Object.keys(filteredCategories)
+    : orderedCategories;
 
   return (
     <div className="min-h-screen bg-background tactical-grid flex flex-col">
@@ -308,8 +377,9 @@ export default function CollectionSetup() {
 
       {activeOS === "macos" && (
         <WarningBanner variant="warning">
-          macOS collection is not yet supported by the Go agent. The job will be queued but no
-          modules will execute.
+          macOS collection uses standard system tools (ps, launchctl, log, system_profiler). Some
+          artifacts require Full Disk Access for the agent process. Unified Log collection may be
+          large — consider using the Triage profile.
         </WarningBanner>
       )}
 
@@ -347,14 +417,47 @@ export default function CollectionSetup() {
               )}
             </TacticalPanel>
 
+            {/* Module search */}
+            <div className="flex items-center gap-2 px-1">
+              <div className="relative flex-1">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-muted-foreground" />
+                <input
+                  className="w-full h-8 pl-7 pr-7 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/50"
+                  placeholder="Search modules (e.g. prefetch, evtx, registry)..."
+                  value={moduleSearch}
+                  onChange={(e) => setModuleSearch(e.target.value)}
+                />
+                {moduleSearch && (
+                  <button
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    onClick={() => setModuleSearch("")}
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                )}
+              </div>
+              {moduleSearch && (
+                <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">
+                  {visibleCategories.reduce(
+                    (acc, cat) => acc + ((filteredCategories[cat] as ModuleEntry[] | undefined)?.length ?? 0),
+                    0,
+                  )} results
+                </span>
+              )}
+            </div>
+
             {/* Module categories */}
             {isLoading ? (
               <div className="font-mono text-sm text-muted-foreground text-center py-12">
                 LOADING MODULES...
               </div>
+            ) : visibleCategories.length === 0 ? (
+              <div className="font-mono text-sm text-muted-foreground text-center py-12">
+                No modules match "{moduleSearch}"
+              </div>
             ) : (
-              orderedCategories.map((cat) => {
-                const mods = modulesByCategory[cat] ?? [];
+              visibleCategories.map((cat) => {
+                const mods = (filteredCategories[cat] as ModuleEntry[] | undefined) ?? (modulesByCategory[cat] ?? []);
                 const catSelected = mods.filter((m) => selected.has(m.id)).length;
                 const isCollapsed = collapsedCategories.has(cat);
                 return (
@@ -420,12 +523,19 @@ export default function CollectionSetup() {
                               disabled={isViewer}
                               className="mt-0.5"
                             />
-                            <div className="min-w-0">
+                            <div className="min-w-0 flex-1">
                               <div className="font-mono text-xs text-foreground truncate">
                                 {mod.id.replace(/_/g, " ").toUpperCase()}
                               </div>
-                              <div className="font-mono text-xs text-muted-foreground truncate">
-                                {mod.output_relpath}
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono text-xs text-muted-foreground truncate flex-1">
+                                  {mod.output_relpath}
+                                </span>
+                                {mod.estimated_size_mb != null && mod.estimated_size_mb > 0 && (
+                                  <span className="font-mono text-[10px] text-muted-foreground/60 shrink-0">
+                                    {formatSize(mod.estimated_size_mb)}
+                                  </span>
+                                )}
                               </div>
                             </div>
                           </label>
@@ -458,6 +568,11 @@ export default function CollectionSetup() {
                   valueClassName="text-primary"
                 />
                 <KeyValueRow
+                  label="EST. SIZE:"
+                  value={estimatedSizeMb > 0 ? formatSize(estimatedSizeMb) : "—"}
+                  valueClassName={estimatedSizeMb > 10240 ? "text-yellow-500" : "text-primary"}
+                />
+                <KeyValueRow
                   label="PROFILE:"
                   value={
                     activeProfile
@@ -485,6 +600,69 @@ export default function CollectionSetup() {
                   );
                 })}
               </div>
+
+              {/* Device selection — shown only for multi-host incidents */}
+              {devices.length > 1 && (
+                <div className="mt-4 border-t border-border pt-3">
+                  <div className="flex items-center justify-between font-mono text-xs text-muted-foreground mb-2">
+                    <span>TARGET DEVICES</span>
+                    <div className="flex gap-2">
+                      <button
+                        className="hover:text-primary"
+                        onClick={() => setSelectedDeviceIds(new Set(devices.map((d) => d.id)))}
+                        disabled={isViewer}
+                      >
+                        ALL
+                      </button>
+                      <span>|</span>
+                      <button
+                        className="hover:text-foreground"
+                        onClick={() => setSelectedDeviceIds(new Set())}
+                        disabled={isViewer}
+                      >
+                        NONE
+                      </button>
+                    </div>
+                  </div>
+                  <div className="space-y-1">
+                    {devices.map((device) => (
+                      <label
+                        key={device.id}
+                        className={[
+                          "flex items-center gap-2 px-1 py-0.5 font-mono text-xs cursor-pointer",
+                          selectedDeviceIds.has(device.id)
+                            ? "text-foreground"
+                            : "text-muted-foreground/50",
+                          isViewer ? "cursor-not-allowed" : "",
+                        ].join(" ")}
+                      >
+                        <Checkbox
+                          checked={selectedDeviceIds.has(device.id)}
+                          onCheckedChange={() => {
+                            if (isViewer) return;
+                            setSelectedDeviceIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(device.id)) next.delete(device.id);
+                              else next.add(device.id);
+                              return next;
+                            });
+                          }}
+                          disabled={isViewer}
+                        />
+                        <span className="truncate">{device.hostname}</span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground/50">
+                          {device.os?.split("/")[0] ?? ""}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                  {selectedDeviceIds.size === 0 && (
+                    <div className="mt-1 font-mono text-[10px] text-destructive">
+                      No devices selected — collection will not run
+                    </div>
+                  )}
+                </div>
+              )}
             </TacticalPanel>
 
             <div className="space-y-3">

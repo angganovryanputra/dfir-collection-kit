@@ -33,6 +33,11 @@ import LegalHolds from "./pages/LegalHolds";
 import ThreatHuntLibrary from "./pages/ThreatHuntLibrary";
 import CustomModules from "./pages/CustomModules";
 import CorrelationView from "./pages/CorrelationView";
+import AuditLog from "./pages/AuditLog";
+import ScheduledCollections from "./pages/ScheduledCollections";
+import AgentConsole from "./pages/AgentConsole";
+import ThreatIntel from "./pages/ThreatIntel";
+import SIEMExport from "./pages/SIEMExport";
 
 const queryClient = new QueryClient();
 
@@ -186,9 +191,15 @@ const App = () => {
                 <Route path="/incidents/:id/report" element={<ProtectedRoute><RouteBoundary><IncidentReport /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/hypotheses" element={<ProtectedRoute><RouteBoundary><HypothesisBuilder /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/legal-holds" element={<ProtectedRoute><RouteBoundary><LegalHolds /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/incidents/:id/scheduled" element={<ProtectedRoute><RouteBoundary><ScheduledCollections /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/scheduled-collections" element={<ProtectedRoute><RouteBoundary><ScheduledCollections /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/threat-hunt" element={<ProtectedRoute><RouteBoundary><ThreatHuntLibrary /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/admin/custom-modules" element={<ProtectedRoute><RouteBoundary><CustomModules /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/admin/audit-log" element={<ProtectedRoute><RouteBoundary><AuditLog /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/correlate" element={<ProtectedRoute><RouteBoundary><CorrelationView /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/agents/:agentId/console" element={<ProtectedRoute><RouteBoundary><AgentConsole /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/threat-intel" element={<ProtectedRoute><RouteBoundary><ThreatIntel /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/incidents/:id/siem-export" element={<ProtectedRoute><RouteBoundary><SIEMExport /></RouteBoundary></ProtectedRoute>} />
 
                 <Route path="*" element={<NotFound />} />
               </Routes>

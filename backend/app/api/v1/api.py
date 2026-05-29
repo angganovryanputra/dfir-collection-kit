@@ -2,8 +2,11 @@ from fastapi import APIRouter
 
 from app.api.v1.endpoints import (
     agent_binary,
+    agent_commands,
     agents,
+    ai_analysis,
     auth,
+    case_management,
     audit_logs,
     chain_of_custody,
     collectors,
@@ -17,6 +20,7 @@ from app.api.v1.endpoints import (
     settings,
     status,
     templates,
+    threat_intel,
     users,
 )
 
@@ -39,3 +43,7 @@ api_router.include_router(modules.router, prefix="/modules", tags=["modules"])
 api_router.include_router(processing.router, prefix="/processing", tags=["processing"])
 api_router.include_router(agent_binary.router, prefix="/agent-binary", tags=["agent-binary"])
 api_router.include_router(platform_features.router, prefix="/platform", tags=["platform-features"])
+api_router.include_router(agent_commands.router, prefix="/agent-commands", tags=["agent-commands"])
+api_router.include_router(threat_intel.router, prefix="/threat-intel", tags=["threat-intel"])
+api_router.include_router(ai_analysis.router, prefix="/ai", tags=["ai-analysis"])
+api_router.include_router(case_management.router, prefix="/case", tags=["case-management"])

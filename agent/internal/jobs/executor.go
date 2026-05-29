@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -66,7 +68,7 @@ func (e *Executor) Run(
 	timeoutMinutes int,
 	retryAttempts int,
 	concurrencyLimit int,
-) error {
+) (retErr error) {
 	logJob := logging.WithJob(jobID)
 	logJob.Info("Starting job execution")
 	logJob.Info("Incident ID: %s", incidentID)
@@ -127,6 +129,17 @@ func (e *Executor) Run(
 	if err := storage.CreateWorkDir(workDir); err != nil {
 		return fmt.Errorf("failed to create work directory: %w", err)
 	}
+	// Clean up work directory on failure — prevents disk exhaustion from failed jobs.
+	// On success the caller manages the lifecycle of collected evidence.
+	// retErr is the named return value; every `return err` path sets it automatically.
+	defer func() {
+		if retErr != nil {
+			logJob.Info("Cleaning up work directory after failure: %s", workDir)
+			if removeErr := os.RemoveAll(workDir); removeErr != nil {
+				logJob.Warning("Failed to remove work directory %s: %v", workDir, removeErr)
+			}
+		}
+	}()
 
 	// Validate all modules before starting
 	missingModules := []string{}
@@ -382,6 +395,17 @@ func (e *Executor) Run(
 func (e *Executor) executeModule(ctx context.Context, job *Job, module api.JobModule) error {
 	log := logging.WithJob(job.ID)
 
+	outputPath, err := storage.SafeJoin(job.WorkDir, module.OutputRelPath)
+	if err != nil {
+		return fmt.Errorf("invalid output path: %w", err)
+	}
+
+	// Custom module: execute the shell command and write combined output to outputPath.
+	if module.Command != "" {
+		log.Info("Executing custom module %s via shell command", module.ModuleID)
+		return e.executeCustomModule(ctx, log, module.ModuleID, module.Command, outputPath)
+	}
+
 	moduleImpl, err := modules.GetModule(module.ModuleID)
 	if err != nil {
 		return fmt.Errorf("module not found: %s", module.ModuleID)
@@ -397,11 +421,6 @@ func (e *Executor) executeModule(ctx context.Context, job *Job, module api.JobMo
 		WorkDir:    job.WorkDir,
 		OS:         e.config.OS,
 		IsAdmin:    modules.IsAdmin(),
-	}
-
-	outputPath, err := storage.SafeJoin(job.WorkDir, module.OutputRelPath)
-	if err != nil {
-		return fmt.Errorf("invalid output path: %w", err)
 	}
 
 	if err := moduleImpl.Run(ctx, mctx, params, outputPath); err != nil {
@@ -422,6 +441,42 @@ func (e *Executor) executeModule(ctx context.Context, job *Job, module api.JobMo
 	}
 
 	log.Info("Module output written: %s", outputPath)
+	return nil
+}
+
+// executeCustomModule runs a user-defined shell command and saves its combined
+// stdout+stderr output to outputPath.  The command is run via the platform shell
+// (cmd.exe on Windows, sh on Unix) with a hard 10-minute timeout.
+func (e *Executor) executeCustomModule(
+	ctx context.Context,
+	log logging.JobLogger,
+	moduleID string,
+	command string,
+	outputPath string,
+) error {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return fmt.Errorf("custom module mkdir failed: %w", err)
+	}
+	// 10-minute hard limit for any custom command
+	cmdCtx, cancel := context.WithTimeout(ctx, 10*60*1e9)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	if strings.EqualFold(runtime.GOOS, "windows") {
+		cmd = exec.CommandContext(cmdCtx, "cmd.exe", "/C", command)
+	} else {
+		cmd = exec.CommandContext(cmdCtx, "sh", "-c", command)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		note := fmt.Sprintf("custom module %s failed: %v\n%s", moduleID, err, strings.TrimSpace(string(out)))
+		_ = os.WriteFile(outputPath, []byte(note), 0644)
+		return modules.NewWarningError(note)
+	}
+	if writeErr := os.WriteFile(outputPath, out, 0644); writeErr != nil {
+		return fmt.Errorf("custom module write failed: %w", writeErr)
+	}
+	log.Info("Custom module %s output written (%d bytes)", moduleID, len(out))
 	return nil
 }
 

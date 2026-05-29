@@ -1,9 +1,10 @@
+import { useState, useMemo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, GitBranch, Shield, Clock } from "lucide-react";
+import { ChevronLeft, GitBranch, Shield, Clock, X } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -51,7 +52,13 @@ const TACTIC_SHORT: Record<string, string> = {
     impact: "IMPACT",
 };
 
-function MitreHeatmap({ chains }: { chains: AttackChain[] }) {
+interface MitreHeatmapProps {
+    chains: AttackChain[];
+    selectedTactic: string | null;
+    onTacticClick: (tactic: string) => void;
+}
+
+function MitreHeatmap({ chains, selectedTactic, onTacticClick }: MitreHeatmapProps) {
     const tacticStats: Record<string, { chains: number; hits: number }> = {};
     for (const t of TACTIC_ORDER) tacticStats[t] = { chains: 0, hits: 0 };
     for (const chain of chains) {
@@ -73,14 +80,19 @@ function MitreHeatmap({ chains }: { chains: AttackChain[] }) {
 
     const maxChains = Math.max(1, ...Object.values(tacticStats).map((v) => v.chains));
 
-    const heatClass = (count: number) => {
+    const heatClass = (count: number, isSelected: boolean) => {
         if (count === 0)
-            return "border-border/30 bg-secondary/5 text-muted-foreground/30";
+            return "border-border/30 bg-secondary/5 text-muted-foreground/30 opacity-40";
+        
+        const baseClass = isSelected ? "ring-2 ring-primary ring-offset-1 ring-offset-background z-10" : "";
         const r = count / maxChains;
-        if (r <= 0.25) return "border-green-500/30 bg-green-500/8 text-green-400/80";
-        if (r <= 0.5)  return "border-green-500/50 bg-green-500/15 text-green-400";
-        if (r <= 0.75) return "border-yellow-500/50 bg-yellow-500/15 text-yellow-400";
-        return "border-red-500/50 bg-red-500/20 text-red-400";
+        let colorClass = "";
+        if (r <= 0.25) colorClass = "border-green-500/30 bg-green-500/8 text-green-400/80";
+        else if (r <= 0.5)  colorClass = "border-green-500/50 bg-green-500/15 text-green-400";
+        else if (r <= 0.75) colorClass = "border-yellow-500/50 bg-yellow-500/15 text-yellow-400";
+        else colorClass = "border-red-500/50 bg-red-500/20 text-red-400";
+
+        return cn(baseClass, colorClass);
     };
 
     return (
@@ -89,14 +101,16 @@ function MitreHeatmap({ chains }: { chains: AttackChain[] }) {
                 <div className="grid grid-cols-6 md:grid-cols-12 gap-1">
                     {TACTIC_ORDER.map((tactic) => {
                         const { chains: cCount, hits } = tacticStats[tactic];
+                        const isSelected = selectedTactic === tactic;
                         return (
                             <div
                                 key={tactic}
                                 className={cn(
-                                    "border p-2 text-center space-y-0.5 rounded-sm",
-                                    heatClass(cCount)
+                                    "border p-2 text-center space-y-0.5 rounded-sm cursor-pointer transition-all hover:scale-[1.02]",
+                                    heatClass(cCount, isSelected)
                                 )}
                                 title={tactic.replace(/_/g, " ").toUpperCase()}
+                                onClick={() => cCount > 0 && onTacticClick(tactic)}
                             >
                                 <div className="font-mono text-[8px] uppercase leading-tight tracking-wide">
                                     {TACTIC_SHORT[tactic]}
@@ -169,7 +183,7 @@ function ChainCard({ chain }: { chain: AttackChain }) {
     );
 
     return (
-        <div className="border border-border rounded-sm p-4 space-y-3 font-mono text-sm bg-secondary/10">
+        <div className="border border-border rounded-sm p-4 space-y-3 font-mono text-sm bg-secondary/10 hover:border-primary/40 transition-colors">
             {/* Header */}
             <div className="flex items-start justify-between gap-4">
                 <div className="flex items-center gap-2">
@@ -233,6 +247,7 @@ function ChainCard({ chain }: { chain: AttackChain }) {
 export default function AttackChains() {
     const navigate = useNavigate();
     const { id: incidentId } = useParams<{ id: string }>();
+    const [selectedTactic, setSelectedTactic] = useState<string | null>(null);
 
     const { data: chains = [], isLoading, error } = useQuery<AttackChain[]>({
         queryKey: ["attack-chains", incidentId],
@@ -240,9 +255,18 @@ export default function AttackChains() {
         retry: false,
     });
 
+    const filteredChains = useMemo(() => {
+        if (!selectedTactic) return chains;
+        return chains.filter((c) => c.tactics.includes(selectedTactic));
+    }, [chains, selectedTactic]);
+
     const critical = chains.filter((c) => c.severity === "critical").length;
     const high = chains.filter((c) => c.severity === "high").length;
     const totalHits = chains.reduce((s, c) => s + c.hit_count, 0);
+
+    const handleTacticClick = (tactic: string) => {
+        setSelectedTactic(selectedTactic === tactic ? null : tactic);
+    };
 
     return (
         <AppLayout
@@ -280,10 +304,29 @@ export default function AttackChains() {
                 </div>
 
                 {/* ATT&CK heatmap */}
-                {chains.length > 0 && <MitreHeatmap chains={chains} />}
+                {chains.length > 0 && (
+                    <MitreHeatmap 
+                        chains={chains} 
+                        selectedTactic={selectedTactic}
+                        onTacticClick={handleTacticClick}
+                    />
+                )}
 
                 {/* Chain list */}
-                <TacticalPanel title="ATTACK CHAINS">
+                <TacticalPanel 
+                    title={selectedTactic ? `ATTACK CHAINS — FILTERED BY ${selectedTactic.replace(/_/g, " ").toUpperCase()}` : "ATTACK CHAINS"}
+                    headerActions={selectedTactic && (
+                        <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground"
+                            onClick={() => setSelectedTactic(null)}
+                        >
+                            <X className="w-3 h-3 mr-1" />
+                            CLEAR FILTER
+                        </Button>
+                    )}
+                >
                     {isLoading ? (
                         <div className="flex items-center gap-3 font-mono text-sm text-muted-foreground py-8">
                             <Clock className="w-4 h-4 animate-spin" />
@@ -293,14 +336,14 @@ export default function AttackChains() {
                         <div className="font-mono text-sm text-muted-foreground py-6">
                             No attack chain data available. Run the forensics pipeline first.
                         </div>
-                    ) : chains.length === 0 ? (
+                    ) : filteredChains.length === 0 ? (
                         <div className="font-mono text-sm text-muted-foreground py-6 flex items-center gap-2">
                             <Shield className="w-4 h-4" />
-                            No ATT&CK chains reconstructed — no Sigma hits with attack.* tags found.
+                            No ATT&CK chains match the selected filters.
                         </div>
                     ) : (
                         <div className="space-y-3">
-                            {chains.map((chain) => (
+                            {filteredChains.map((chain) => (
                                 <ChainCard key={chain.id} chain={chain} />
                             ))}
                         </div>

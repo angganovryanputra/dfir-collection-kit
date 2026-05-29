@@ -17,7 +17,10 @@ func TestRegistrationPayloadOS(t *testing.T) {
 		AgentVersion: "1.0.0",
 	}
 
-	client := NewClient(cfg)
+	client, err := NewClient(cfg)
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
 	payload := client.buildRegistrationPayload()
 	if payload.OS != cfg.OS {
 		t.Fatalf("expected OS %s, got %s", cfg.OS, payload.OS)

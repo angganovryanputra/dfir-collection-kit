@@ -8,6 +8,25 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from app.api.v1.api import api_router
 from app.core.config import settings
 
+_SLOWAPI_AVAILABLE = False
+limiter = None
+_rate_limit_exceeded_handler = None
+RateLimitExceeded = Exception
+SlowAPIMiddleware = None
+
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler as _rleh  # type: ignore[assignment]
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded as _RLE  # type: ignore[assignment]
+    from slowapi.middleware import SlowAPIMiddleware as _SLAPI  # type: ignore[assignment]
+    _SLOWAPI_AVAILABLE = True
+    limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+    _rate_limit_exceeded_handler = _rleh
+    RateLimitExceeded = _RLE
+    SlowAPIMiddleware = _SLAPI
+except ImportError:
+    logging.getLogger(__name__).warning("slowapi not installed — API rate limiting disabled")
+
 logger = logging.getLogger(__name__)
 
 # Secrets that indicate an unconfigured deployment
@@ -94,5 +113,11 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Agent-Token"],
 )
 app.add_middleware(SecurityHeadersMiddleware)
+
+# Rate limiting — 120 req/min per IP by default; individual routes can override.
+if _SLOWAPI_AVAILABLE and limiter is not None:
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+    app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(api_router, prefix="/api/v1")

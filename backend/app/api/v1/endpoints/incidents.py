@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -46,15 +47,28 @@ PHASE_STEPS = [
 ]
 
 
-@router.get("/", response_model=list[IncidentOut])
+class IncidentListOut(BaseModel):
+    total: int
+    items: list[IncidentOut]
+
+
+@router.get("/", response_model=IncidentListOut)
 async def get_incidents(
     limit: int = Query(default=100, ge=1, le=1000),
     offset: int = Query(default=0, ge=0),
+    status: str | None = Query(default=None, description="Filter by status, e.g. ACTIVE"),
+    incident_type: str | None = Query(default=None, description="Filter by type"),
+    search: str | None = Query(default=None, description="Search incident ID or operator"),
+    operator: str | None = Query(default=None, description="Exact operator username"),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
-) -> list[IncidentOut]:
-    incidents = await list_incidents(db, limit=limit, offset=offset)
-    return [IncidentOut.model_validate(incident) for incident in incidents]
+) -> IncidentListOut:
+    incidents, total = await list_incidents(
+        db, limit=limit, offset=offset,
+        status=status, incident_type=incident_type,
+        search=search, operator=operator,
+    )
+    return IncidentListOut(total=total, items=[IncidentOut.model_validate(i) for i in incidents])
 
 
 @router.get("/{incident_id}", response_model=IncidentOut)
@@ -169,10 +183,20 @@ async def start_collection_endpoint(
     import re as _re
     from app.crud.job import get_job
 
-    # Default OS — derived from first target hostname for fallback module selection
+    # Resolve effective OS:
+    # 1. payload.os_override — user manually changed OS in UI (highest priority)
+    # 2. Device's registered OS from DB
+    # 3. Default "windows"
+    # os_override MUST be used when explicit module_ids are sent — without it
+    # validate_modules_for_os() will reject cross-OS modules with HTTP 400.
     target_hostnames = incident.target_endpoints or []
     os_name = "windows"
-    if target_hostnames:
+    if payload.os_override:
+        normalized_override = normalize_os_name(payload.os_override)
+        if normalized_override in {"windows", "linux", "macos"}:
+            os_name = normalized_override
+            logger.debug("OS override from request payload: %s", os_name)
+    elif target_hostnames:
         result_os = await db.execute(
             select(Device).where(Device.hostname == target_hostnames[0])
         )
@@ -193,6 +217,25 @@ async def start_collection_endpoint(
             modules = build_modules(os_name=os_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Append enabled custom user-authored modules for this OS
+    try:
+        from app.models.platform_features import CustomModule
+        custom_result = await db.execute(
+            select(CustomModule).where(
+                CustomModule.os == (os_name or "windows"),
+                CustomModule.enabled == True,  # noqa: E712
+            )
+        )
+        for cm in custom_result.scalars():
+            modules.append({
+                "module_id": cm.id,
+                "output_relpath": cm.output_relpath,
+                "params": {},
+                "command": cm.command,
+            })
+    except Exception as _cex:
+        logger.debug("Custom module fetch failed (non-fatal): %s", _cex)
 
     runtime_settings = await get_runtime_settings(db)
     if runtime_settings.max_concurrent_jobs > 0:
@@ -221,9 +264,15 @@ async def start_collection_endpoint(
 
     if devices:
         for device in devices:
-            dev_os = normalize_os_name(device.os) if device.os else os_name
-            if dev_os not in {"windows", "linux", "macos"}:
-                dev_os = os_name
+            # When os_override is set, use it for ALL devices — the analyst explicitly
+            # told us which OS these targets are running.  Without the override, auto-detect
+            # per device (useful for mixed-OS incidents where each device knows its own OS).
+            if payload.os_override:
+                dev_os = os_name  # already validated above
+            else:
+                dev_os = normalize_os_name(device.os) if device.os else os_name
+                if dev_os not in {"windows", "linux", "macos"}:
+                    dev_os = os_name
             try:
                 if payload.module_ids:
                     dev_modules = build_modules(module_ids=payload.module_ids, os_name=dev_os)

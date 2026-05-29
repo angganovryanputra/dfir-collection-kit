@@ -7,6 +7,7 @@ class JobModule(BaseModel):
     module_id: str
     output_relpath: str
     params: dict = Field(default_factory=dict)
+    command: str | None = None  # non-None for custom user-authored modules
 
 
 class JobCreate(BaseModel):

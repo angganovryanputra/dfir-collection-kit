@@ -115,11 +115,58 @@ export default function CollectionExecution() {
   const navigate = useNavigate();
   const { id: incidentId } = useParams<{ id: string }>();
   const location = useLocation();
-  const _rawModuleIds = (location.state as { selectedModuleIds?: unknown } | null)?.selectedModuleIds;
+  // Extract all collection parameters passed from CollectionSetup via navigation state.
+  // Fallback to sessionStorage so a page refresh doesn't lose the selection.
+  const locationState = location.state as {
+    selectedModuleIds?: unknown;
+    profile?: unknown;
+    osOverride?: unknown;
+    agentIds?: unknown;
+  } | null;
+
+  const _rawModuleIds = locationState?.selectedModuleIds;
   const selectedModuleIds: string[] | null =
     Array.isArray(_rawModuleIds) && _rawModuleIds.every((x) => typeof x === "string")
       ? (_rawModuleIds as string[])
+      : (() => {
+          // Fallback: try sessionStorage (survives page refresh)
+          try {
+            const stored = sessionStorage.getItem(`dfir_collect_modules_${incidentId}`);
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
+                return parsed as string[];
+              }
+            }
+          } catch { /* ignore */ }
+          return null;
+        })();
+
+  const _rawProfile = locationState?.profile;
+  const collectionProfile: string | null =
+    typeof _rawProfile === "string" ? _rawProfile : null;
+
+  const _rawOsOverride = locationState?.osOverride;
+  const osOverride: string | null =
+    typeof _rawOsOverride === "string" ? _rawOsOverride : null;
+
+  const _rawAgentIds = locationState?.agentIds;
+  const agentIds: string[] | null =
+    Array.isArray(_rawAgentIds) && _rawAgentIds.every((x) => typeof x === "string")
+      ? (_rawAgentIds as string[])
       : null;
+
+  // Persist selection to sessionStorage so refresh doesn't lose it
+  useEffect(() => {
+    if (incidentId && selectedModuleIds && selectedModuleIds.length > 0) {
+      try {
+        sessionStorage.setItem(
+          `dfir_collect_modules_${incidentId}`,
+          JSON.stringify(selectedModuleIds),
+        );
+      } catch { /* ignore quota errors */ }
+    }
+  }, [incidentId, selectedModuleIds]);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [phases, setPhases] = useState<CollectionPhase[]>(
     PHASES.map(({ id, name }) => ({ id, name, status: "pending" }))
@@ -138,6 +185,7 @@ export default function CollectionExecution() {
   const [completionMessage, setCompletionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [perHostJobs, setPerHostJobs] = useState<PerHostJobStatus[]>([]);
+  const [currentModule, setCurrentModule] = useState<string | null>(null);
   const [isStarting, setIsStarting] = useState(false);
   const [isAborting, setIsAborting] = useState(false);
   const isViewer = isViewerRole(getStoredRole());
@@ -152,7 +200,7 @@ export default function CollectionExecution() {
         return;
       }
       try {
-        const incidents = await apiGet<IncidentSummary[]>("/incidents");
+        const { items: incidents } = await apiGet<{ total: number; items: IncidentSummary[] }>("/incidents?limit=1000");
         const current = incidents.find((entry) => entry.id === incidentId) ?? null;
         setIncident(current);
 
@@ -180,24 +228,88 @@ export default function CollectionExecution() {
         setErrorMessage("Viewer accounts cannot start collections.");
         return;
       }
+
+      // RACE CONDITION FIX:
+      // Don't rely on `incident` state here — it loads asynchronously from a
+      // DIFFERENT useEffect.  If `incident` is null when this fires, the
+      // alreadyRunning check is skipped and we'd double-POST to /collect.
+      // Instead, fetch the current incident status directly before deciding.
+      try {
+        const currentIncident = await apiGet<IncidentSummary>(`/incidents/${incidentId}`).catch(() => null);
+        if (currentIncident) {
+          const status = currentIncident.status;
+          if (
+            status === "COLLECTION_IN_PROGRESS" ||
+            status === "COLLECTION_COMPLETE" ||
+            status === "COLLECTION_FAILED"
+          ) {
+            startedRef.current = true;
+            startedAtRef.current = Date.now();
+            if (status === "COLLECTION_IN_PROGRESS") {
+              setPollingEnabled(true);
+            } else if (status === "COLLECTION_COMPLETE") {
+              setIsComplete(true);
+              setCompletionMessage("Collection already complete.");
+              setPhases((prev) => prev.map((p) => ({ ...p, status: "complete", progress: 100 })));
+            } else {
+              setErrorMessage("Previous collection failed. Check logs and retry.");
+            }
+            return;
+          }
+        }
+      } catch {
+        // If we can't fetch status, proceed with start attempt
+      }
+
       setIsStarting(true);
       try {
-        const collectBody = selectedModuleIds
-          ? { module_ids: selectedModuleIds }
-          : {};
+        // Build the collection request body, passing all UI-selected parameters
+        // to the backend so module validation uses the correct OS.
+        const collectBody: Record<string, unknown> = {};
+        if (selectedModuleIds && selectedModuleIds.length > 0) {
+          collectBody.module_ids = selectedModuleIds;
+        } else if (collectionProfile) {
+          collectBody.profile = collectionProfile;
+        }
+        // CRITICAL: always send os_override when the user has changed the OS
+        // selector in CollectionSetup — without this the backend validates
+        // module IDs against the device's registered OS and returns HTTP 400.
+        if (osOverride) {
+          collectBody.os_override = osOverride;
+        }
+        // agent_ids: restrict collection to specific devices in multi-host incidents
+        if (agentIds && agentIds.length > 0) {
+          collectBody.agent_ids = agentIds;
+        }
         await apiPost(`/incidents/${incidentId}/collect`, collectBody);
         startedRef.current = true;
         startedAtRef.current = Date.now();
         setPollingEnabled(true);
         setErrorMessage(null);
-      } catch {
-        setErrorMessage("Unable to start collection.");
+      } catch (err) {
+        // Show the actual error from the backend (e.g. validation messages)
+        // rather than a generic "Unable to start" message.
+        let msg = "Unable to start collection.";
+        if (err instanceof Error) {
+          try {
+            const parsed = JSON.parse(err.message);
+            msg = parsed.detail ?? parsed.message ?? err.message;
+          } catch {
+            msg = err.message.slice(0, 300);
+          }
+        }
+        setErrorMessage(msg);
       } finally {
         setIsStarting(false);
       }
     };
 
     startCollection();
+    // Intentionally NOT including `incident` in the dependency array.
+    // The race condition was: `incident` loads async, so this effect would
+    // re-fire when it loaded and potentially double-POST to /collect.
+    // The race is fixed by fetching status directly inside startCollection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incidentId, isViewer]);
 
   const handlePoll = useCallback(async (): Promise<string | null> => {
@@ -208,14 +320,24 @@ export default function CollectionExecution() {
         {}
       );
       if (status.logs.length > 0) {
-        setLogs((prev) => [
-          ...prev,
-          ...status.logs.map((entry) => ({
-            timestamp: new Date(entry.timestamp).toLocaleTimeString("en-US", { hour12: false }),
-            level: entry.level,
-            message: entry.message,
-          })),
-        ]);
+        const newEntries = status.logs.map((entry) => ({
+          timestamp: new Date(entry.timestamp).toLocaleTimeString("en-US", { hour12: false }),
+          level: entry.level,
+          message: entry.message,
+        }));
+        setLogs((prev) => [...prev, ...newEntries]);
+        // Extract "currently executing" module from the latest log message
+        const latestMsg = status.logs[status.logs.length - 1]?.message ?? "";
+        const execMatch = latestMsg.match(/Executing module\s+(\S+)/i)
+          ?? latestMsg.match(/Starting module:\s+(\S+)/i);
+        if (execMatch) {
+          setCurrentModule(execMatch[1]);
+        }
+        // Clear current module when it completes
+        const completedMatch = latestMsg.match(/Completed module\s+(\S+)/i);
+        if (completedMatch) {
+          setCurrentModule(null);
+        }
       }
       if (status.jobs && status.jobs.length > 0) {
         setPerHostJobs(status.jobs);
@@ -306,15 +428,18 @@ export default function CollectionExecution() {
     try {
       type JobSummary = { id: string; status: string };
       const jobs = await apiGet<JobSummary[]>(`/jobs/incident/${incidentId}`);
-      const activeJob = jobs.find((j) =>
+      // Cancel ALL active jobs, not just the first one — multi-host incidents
+      // create one job per target device.
+      const activeJobs = jobs.filter((j) =>
         ["pending", "collecting", "in_progress", "running"].includes(j.status.toLowerCase())
       );
-      if (!activeJob) {
-        setErrorMessage("No active job found to abort.");
+      if (activeJobs.length === 0) {
+        setErrorMessage("No active jobs found to abort.");
         return;
       }
-      await apiPost(`/jobs/${activeJob.id}/cancel`, {});
-      setErrorMessage("Collection aborted by operator.");
+      // Cancel all in parallel
+      await Promise.allSettled(activeJobs.map((j) => apiPost(`/jobs/${j.id}/cancel`, {})));
+      setErrorMessage(`Collection aborted by operator. (${activeJobs.length} job(s) cancelled)`);
       setPollingEnabled(false);
     } catch {
       setErrorMessage("Failed to abort collection. Try again.");
@@ -406,7 +531,7 @@ export default function CollectionExecution() {
       <main className="flex-1 p-6 overflow-hidden">
         <div className="grid grid-cols-12 gap-6 h-full">
           {/* Left - Terminal Log */}
-          <div className="col-span-8 flex flex-col">
+          <div className="col-span-8 flex flex-col" style={{ minHeight: 0 }}>
             <TacticalPanel
               title="COLLECTION LOG"
               status="active"
@@ -417,7 +542,12 @@ export default function CollectionExecution() {
                 </span>
               }
             >
-              <TerminalLog entries={logs} className="flex-1" />
+              <TerminalLog
+                entries={logs}
+                className="flex-1"
+                searchable
+                autoScroll
+              />
             </TacticalPanel>
           </div>
 
@@ -440,6 +570,16 @@ export default function CollectionExecution() {
             {/* Collection Phases */}
             <TacticalPanel title="COLLECTION PHASES" status={isComplete ? "online" : "active"}>
               <ProgressPhase phases={phases} />
+              {/* Current module being executed — prominently displayed */}
+              {currentModule && !isComplete && (
+                <div className="mt-3 pt-3 border-t border-border/30 font-mono text-xs">
+                  <div className="text-muted-foreground uppercase tracking-wider mb-1">Current Module</div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-primary animate-pulse shrink-0" />
+                    <span className="text-primary font-bold truncate">{currentModule}</span>
+                  </div>
+                </div>
+              )}
             </TacticalPanel>
 
             {/* Per-host progress */}

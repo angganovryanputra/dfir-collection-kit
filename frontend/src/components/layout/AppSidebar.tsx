@@ -13,6 +13,13 @@ import {
   Server,
   ChevronLeft,
   ChevronRight,
+  GitMerge,
+  Database,
+  Users,
+  ClipboardList,
+  Clock,
+  Crosshair,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -23,6 +30,7 @@ interface NavItem {
   icon: React.ElementType;
   path: string;
   badge?: string;
+  adminOnly?: boolean;
 }
 
 const mainNavItems: NavItem[] = [
@@ -32,11 +40,21 @@ const mainNavItems: NavItem[] = [
   { label: "CHAIN OF CUSTODY", icon: FileText, path: "/chain-of-custody" },
 ];
 
+const intelligenceNavItems: NavItem[] = [
+  { label: "THREAT HUNT", icon: Crosshair, path: "/threat-hunt" },
+  { label: "CORRELATE", icon: GitMerge, path: "/correlate" },
+  { label: "THREAT INTEL", icon: Zap, path: "/threat-intel" },
+];
+
 const systemNavItems: NavItem[] = [
   { label: "COLLECTORS", icon: Server, path: "/collectors" },
   { label: "DEVICES", icon: Monitor, path: "/devices" },
   { label: "TEMPLATES", icon: FileStack, path: "/incident-templates" },
-  { label: "ADMIN SETTINGS", icon: Settings, path: "/admin/settings" },
+  { label: "SCHEDULED", icon: Clock, path: "/scheduled-collections" },
+  { label: "CUSTOM MODULES", icon: Database, path: "/admin/custom-modules", adminOnly: true },
+  { label: "AUDIT LOG", icon: ClipboardList, path: "/admin/audit-log", adminOnly: true },
+  { label: "USERS", icon: Users, path: "/admin/users", adminOnly: true },
+  { label: "SETTINGS", icon: Settings, path: "/admin/settings", adminOnly: true },
 ];
 
 interface AppSidebarProps {
@@ -66,10 +84,10 @@ export function AppSidebar({
       return null;
     }
   })();
-  const adminOnlyPaths = ["/admin/settings"];
-  const visibleSystemNavItems = authRole === "admin"
-    ? systemNavItems
-    : systemNavItems.filter((item) => !adminOnlyPaths.includes(item.path));
+  const isAdmin = authRole === "admin";
+  const visibleSystemNavItems = systemNavItems.filter(
+    (item) => !item.adminOnly || isAdmin
+  );
 
   const handleLogout = () => {
     void apiPost("/auth/logout", {}).catch(() => {
@@ -180,6 +198,22 @@ export function AppSidebar({
           {mainNavItems.map((item) => (
             <NavButton key={item.path} item={item} />
           ))}
+        </div>
+
+        {/* Intelligence Section */}
+        <div className="mt-6">
+          {!isCollapsed && (
+            <div className="px-3 mb-2">
+              <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">
+                Intelligence
+              </span>
+            </div>
+          )}
+          <div className="space-y-1">
+            {intelligenceNavItems.map((item) => (
+              <NavButton key={item.path} item={item} />
+            ))}
+          </div>
         </div>
 
         {/* System Section */}

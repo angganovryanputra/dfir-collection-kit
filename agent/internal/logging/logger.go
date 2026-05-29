@@ -2,30 +2,74 @@ package logging
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sync"
 )
 
 var (
-	logger *log.Logger
-	once   sync.Once
-	debug   bool
+	logger   *log.Logger
+	once     sync.Once
+	mu       sync.Mutex
+	debug    bool
+	quiet    bool
+	logFile  *os.File
 )
 
-// Init initializes the global logger
-// Debug mode can be enabled via DFIR_DEBUG environment variable
+// Init initialises the logger using stdout only.
+// Call InitWithOptions before any logging for file output.
 func Init() {
+	mu.Lock()
+	defer mu.Unlock()
 	once.Do(func() {
 		debug = os.Getenv("DFIR_DEBUG") == "true"
-
-		logFlags := log.Ldate | log.Ltime | log.Lshortfile
-		if debug {
-			logFlags |= log.Lshortfile
-		}
-
-		logger = log.New(os.Stdout, "DFIR-AGENT: ", logFlags)
+		quiet = os.Getenv("DFIR_QUIET") == "true"
+		logger = log.New(os.Stdout, "DFIR-AGENT: ", log.Ldate|log.Ltime)
 	})
+}
+
+// InitWithOptions configures the logger with an optional log file and quiet mode.
+// If logFilePath is set the logger writes to both stdout and the file.
+// In quiet mode only the file receives output (stdout is suppressed).
+func InitWithOptions(logFilePath string, quietMode bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	debug = os.Getenv("DFIR_DEBUG") == "true"
+	quiet = quietMode
+
+	var writers []io.Writer
+	if !quiet {
+		writers = append(writers, os.Stdout)
+	}
+	if logFilePath != "" {
+		f, err := os.OpenFile(logFilePath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0640)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[WARN] Cannot open log file %s: %v — stdout only\n", logFilePath, err)
+			if quiet {
+				writers = append(writers, os.Stdout)
+			}
+		} else {
+			logFile = f
+			writers = append(writers, f)
+		}
+	}
+	if len(writers) == 0 {
+		writers = []io.Writer{io.Discard}
+	}
+	logger = log.New(io.MultiWriter(writers...), "DFIR-AGENT: ", log.Ldate|log.Ltime)
+	once.Do(func() {}) // mark once done so Init() is a no-op after this
+}
+
+// Close flushes and closes the log file.
+func Close() {
+	mu.Lock()
+	defer mu.Unlock()
+	if logFile != nil {
+		_ = logFile.Sync()
+		_ = logFile.Close()
+		logFile = nil
+	}
 }
 
 // Info logs an informational message

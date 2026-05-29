@@ -34,11 +34,23 @@ celery_app.conf.update(
     enable_utc=True,
     task_reject_on_worker_lost=True,
     task_acks_late=True,
-    # One long forensics task per worker process at a time
     worker_prefetch_multiplier=1,
-    # Hard kill after 2 h; soft warning at 1 h 50 min (pipeline tasks)
     task_time_limit=7200,
     task_soft_time_limit=6600,
+    beat_schedule={
+        "check-scheduled-collections": {
+            "task": "dfir.check_scheduled_collections",
+            "schedule": 60.0,    # every minute
+        },
+        "expire-legal-holds": {
+            "task": "dfir.expire_legal_holds",
+            "schedule": 3600.0,  # every hour
+        },
+        "verify-evidence-integrity": {
+            "task": "dfir.verify_evidence_integrity",
+            "schedule": 21600.0,  # every 6 hours
+        },
+    },
 )
 
 
@@ -194,6 +206,234 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
                 job.error_message = str(exc)[:500]
                 await db.commit()
             raise
+
+
+@celery_app.task(name="dfir.check_scheduled_collections")
+def check_scheduled_collections_task() -> dict:
+    """Celery Beat task: dispatch pending scheduled collections whose next_run_at has passed."""
+    asyncio.run(_run_scheduled_collections())
+    return {"status": "checked"}
+
+
+async def _run_scheduled_collections() -> None:
+    """Find enabled scheduled collections that are due and trigger them."""
+    from datetime import datetime, timezone
+    from app.db.session import AsyncSessionLocal
+    from app.models.platform_features import ScheduledCollection
+    from sqlalchemy import select, update
+
+    try:
+        from croniter import croniter  # type: ignore[import]
+    except ImportError:
+        logger.warning("croniter not installed — scheduled collections disabled")
+        return
+
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ScheduledCollection).where(
+                ScheduledCollection.enabled == True,  # noqa: E712
+            )
+        )
+        schedules = list(result.scalars())
+        for sc in schedules:
+            # Compute next run time if not yet set
+            if sc.next_run_at is None:
+                try:
+                    cron = croniter(sc.cron_expr, now)
+                    sc.next_run_at = cron.get_next(datetime)
+                except Exception as exc:
+                    logger.warning("Invalid cron expression for SC %s: %s", sc.id, exc)
+                    continue
+
+            if sc.next_run_at > now:
+                continue  # not due yet
+
+            logger.info("Dispatching scheduled collection %s for incident %s", sc.id, sc.incident_id)
+            try:
+                # Trigger collection via HTTP to the backend (uses the same pipeline)
+                from app.services.system_settings_service import get_runtime_settings
+                # Just dispatch a Celery pipeline task directly
+                run_scheduled_collection_task.delay(sc.incident_id, sc.id)
+                # Update last_run_at and compute next_run_at
+                cron = croniter(sc.cron_expr, now)
+                await db.execute(
+                    update(ScheduledCollection)
+                    .where(ScheduledCollection.id == sc.id)
+                    .values(last_run_at=now, next_run_at=cron.get_next(datetime))
+                )
+                await db.commit()
+            except Exception as exc:
+                logger.error("Failed to dispatch scheduled collection %s: %s", sc.id, exc)
+
+
+@celery_app.task(bind=True, name="dfir.run_scheduled_collection", max_retries=1, time_limit=7200)
+def run_scheduled_collection_task(self, incident_id: str, schedule_id: str) -> dict:
+    """Trigger a collection for a scheduled collection entry."""
+    logger.info("Running scheduled collection %s for incident %s", schedule_id, incident_id)
+    try:
+        asyncio.run(_trigger_scheduled_collection(incident_id, schedule_id))
+        return {"status": "done", "schedule_id": schedule_id}
+    except Exception as exc:
+        logger.error("Scheduled collection %s failed: %s", schedule_id, exc, exc_info=True)
+        raise self.retry(exc=exc, countdown=300)
+
+
+async def _trigger_scheduled_collection(incident_id: str, schedule_id: str) -> None:
+    """Look up the ScheduledCollection and create a collection job for it."""
+    from app.db.session import AsyncSessionLocal
+    from app.models.platform_features import ScheduledCollection
+    from app.crud.incident import get_incident, update_incident
+    from app.crud.job import create_job
+    from app.schemas.incident import IncidentUpdate
+    from app.schemas.job import JobCreate
+    from app.core.modules import build_modules, get_profile_modules, normalize_os_name
+    from sqlalchemy import select
+
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ScheduledCollection).where(ScheduledCollection.id == schedule_id)
+        )
+        sc = result.scalar_one_or_none()
+        if not sc:
+            logger.warning("Scheduled collection %s not found", schedule_id)
+            return
+
+        incident = await get_incident(db, incident_id)
+        if not incident or incident.status in ("CLOSED",):
+            logger.warning("Incident %s not available for scheduled collection", incident_id)
+            return
+
+        os_name = normalize_os_name("windows")  # default
+        try:
+            if sc.module_ids:
+                modules = build_modules(module_ids=list(sc.module_ids), os_name=os_name)
+            elif sc.profile:
+                modules = build_modules(
+                    module_ids=get_profile_modules(sc.profile, os_name or "windows"),
+                    os_name=os_name,
+                )
+            else:
+                modules = build_modules(os_name=os_name)
+        except ValueError as exc:
+            logger.error("Scheduled collection %s: module build failed: %s", schedule_id, exc)
+            return
+
+        job_id = f"JOB-{incident_id}-SCHED-{schedule_id[:8]}"
+        await create_job(
+            db,
+            JobCreate(id=job_id, incident_id=incident_id),
+            modules,
+            f"{incident_id}/{job_id}",
+        )
+        await update_incident(db, incident_id, IncidentUpdate(status="COLLECTION_IN_PROGRESS"))
+        await db.commit()
+        logger.info("Scheduled collection job created: %s", job_id)
+
+
+@celery_app.task(name="dfir.expire_legal_holds")
+def expire_legal_holds_task() -> dict:
+    """Celery Beat task: mark expired legal holds as EXPIRED."""
+    asyncio.run(_expire_legal_holds())
+    return {"status": "checked"}
+
+
+async def _expire_legal_holds() -> None:
+    """Set status=EXPIRED for all ACTIVE holds whose expires_at has passed."""
+    from datetime import datetime, timezone
+    from app.db.session import AsyncSessionLocal
+    from app.models.platform_features import LegalHold
+    from sqlalchemy import update
+
+    now = datetime.now(timezone.utc)
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            update(LegalHold)
+            .where(
+                LegalHold.status == "ACTIVE",
+                LegalHold.expires_at != None,  # noqa: E711
+                LegalHold.expires_at <= now,
+            )
+            .values(status="EXPIRED")
+            .returning(LegalHold.id)
+        )
+        expired_ids = [row[0] for row in result]
+        if expired_ids:
+            await db.commit()
+            logger.info("Expired %d legal hold(s): %s", len(expired_ids), expired_ids)
+
+
+@celery_app.task(name="dfir.verify_evidence_integrity")
+def verify_evidence_integrity_task() -> dict:
+    """
+    Periodically re-hash all LOCKED evidence files and compare against the stored
+    manifest.  Any mismatch is logged as a TAMPER_DETECTED audit event.
+    """
+    asyncio.run(_verify_evidence_integrity())
+    return {"status": "done"}
+
+
+async def _verify_evidence_integrity() -> None:
+    """Re-hash all LOCKED evidence items and compare against DB hashes."""
+    import hashlib
+    from pathlib import Path
+    from app.db.session import AsyncSessionLocal
+    from app.services.system_settings_service import get_runtime_settings
+    from app.services.audit_log_service import safe_record_event
+    from sqlalchemy import select
+    from app.models.evidence import EvidenceItem
+
+    async with AsyncSessionLocal() as db:
+        runtime = await get_runtime_settings(db)
+        evidence_base = Path(runtime.evidence_storage_path)
+
+        result = await db.execute(
+            select(EvidenceItem).where(EvidenceItem.status.in_(["LOCKED", "HASH_VERIFIED"]))
+        )
+        items = list(result.scalars())
+        logger.info("Evidence integrity check: %d items to verify", len(items))
+
+        tamper_count = 0
+        for item in items:
+            if not item.hash:
+                continue
+            file_path = evidence_base / item.incident_id / item.name
+            if not file_path.exists():
+                continue
+            try:
+                h = hashlib.new(runtime.hash_algorithm.replace("-", "").lower())
+                with open(file_path, "rb") as fh:
+                    for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                        h.update(chunk)
+                computed = h.hexdigest()
+                if computed != item.hash:
+                    tamper_count += 1
+                    logger.error(
+                        "TAMPER DETECTED: %s/%s — expected %s got %s",
+                        item.incident_id, item.name, item.hash[:16], computed[:16],
+                    )
+                    await safe_record_event(
+                        db,
+                        event_type="evidence.tamper_detected",
+                        actor_type="system",
+                        actor_id="integrity_monitor",
+                        source="background",
+                        action="evidence hash mismatch",
+                        target_type="evidence",
+                        target_id=item.id,
+                        status="failure",
+                        message=f"Hash mismatch for {item.name}",
+                        metadata={
+                            "incident_id": item.incident_id,
+                            "expected_hash": item.hash,
+                            "computed_hash": computed,
+                        },
+                    )
+                    await db.commit()
+            except Exception as exc:
+                logger.warning("Integrity check failed for %s: %s", item.id, exc)
+
+        logger.info("Evidence integrity check complete: %d tamper(s) detected in %d items", tamper_count, len(items))
 
 
 @celery_app.task(bind=True, name="dfir.run_super_timeline", max_retries=1, time_limit=3600, soft_time_limit=3300)

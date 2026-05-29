@@ -31,6 +31,10 @@ import {
     FileText,
     XCircle,
     Upload,
+    Target,
+    Lock,
+    Clock,
+    Share2,
 } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { getStoredAuth, getStoredRole } from "@/lib/auth";
@@ -81,6 +85,8 @@ interface LateralMovementOut {
     target_host: string;
     actor: string | null;
     confidence: number;
+    first_seen?: string;
+    last_seen?: string;
 }
 
 interface EvidenceFolderOut {
@@ -139,7 +145,7 @@ async function apiGetOrNull<T>(path: string): Promise<T | null> {
     }
 }
 
-// ─── Lateral Movement Table ───────────────────────────────────────────────────
+// ─── Lateral Movement Labels ─────────────────────────────────────────────────
 
 const LM_DT_LABEL: Record<string, { label: string; color: string }> = {
     account_pivot:    { label: "ACCOUNT PIVOT",  color: "border-red-500/40 bg-red-500/10 text-red-400" },
@@ -659,40 +665,74 @@ export default function IncidentHub() {
                     </div>
                 )}
 
-                {/* ── LM Detections List ───────────────────────────────────── */}
+                {/* ── Lateral movement grid summary ───────────────────────── */}
                 {stDone && lmDetections && lmDetections.length > 0 && (
-                    <div className="border border-red-500/25 bg-red-500/5 rounded-sm overflow-hidden">
-                        <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-red-500/15">
-                            <Network className="w-3.5 h-3.5 text-red-400 shrink-0" />
-                            <span className="font-mono text-xs font-bold text-red-400 uppercase tracking-wider">
-                                LATERAL MOVEMENT DETECTIONS
-                            </span>
-                            <span className="font-mono text-[10px] text-red-400/50 border border-red-500/20 px-1.5 py-0.5 rounded-sm">
-                                {lmDetections.length} DETECTION{lmDetections.length !== 1 ? "S" : ""}
-                            </span>
-                        </div>
-                        <div className="divide-y divide-red-500/10">
-                            {lmDetections.map((det) => {
-                                const meta = LM_DT_LABEL[det.detection_type];
-                                return (
-                                    <div key={det.id} className="flex items-center gap-3 px-4 py-2 font-mono text-xs flex-wrap">
-                                        <span className={`px-2 py-0.5 rounded-sm border text-[10px] font-bold shrink-0 ${meta?.color ?? "border-border/40 text-muted-foreground"}`}>
-                                            {meta?.label ?? det.detection_type.replace(/_/g, " ").toUpperCase()}
+                    <TacticalPanel title={`LATERAL MOVEMENT DETECTED (${lmDetections.length})`} status="offline">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {lmDetections.map((det) => (
+                                <div
+                                    key={det.id}
+                                    className="p-3 border border-border/60 bg-secondary/15 rounded-sm space-y-3 font-mono"
+                                >
+                                    <div className="flex items-center justify-between gap-2">
+                                        <span className={cn(
+                                            "px-2 py-0.5 border text-[10px] rounded-sm uppercase font-bold",
+                                            det.detection_type === "account_pivot" ? "border-red-500/40 bg-red-500/10 text-red-400" :
+                                            det.detection_type === "process_spread" ? "border-orange-500/40 bg-orange-500/10 text-orange-400" :
+                                            "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
+                                        )}>
+                                            {det.detection_type.replace(/_/g, " ")}
                                         </span>
-                                        <span className="text-foreground font-bold">{det.source_host}</span>
-                                        <span className="text-muted-foreground">→</span>
-                                        <span className="text-red-400 font-bold">{det.target_host}</span>
-                                        {det.actor && (
-                                            <span className="text-muted-foreground">actor: <span className="text-foreground">{det.actor}</span></span>
-                                        )}
-                                        <span className="ml-auto text-muted-foreground/60">
-                                            {Math.round(det.confidence * 100)}% confidence
+                                        <span className={cn(
+                                            "text-[10px]",
+                                            det.confidence >= 0.8 ? "text-red-400" :
+                                            det.confidence >= 0.5 ? "text-orange-400" :
+                                            "text-yellow-400"
+                                        )}>
+                                            {Math.round(det.confidence * 100)}% CONF
                                         </span>
                                     </div>
-                                );
-                            })}
+
+                                    <div className="flex items-center gap-3 justify-center py-1">
+                                        <div className="text-center">
+                                            <div className="text-[10px] text-muted-foreground uppercase mb-1">Source</div>
+                                            <div className="px-2 py-1 border border-border bg-card rounded-sm text-xs">
+                                                {det.source_host}
+                                            </div>
+                                        </div>
+                                        <ArrowRight className="w-4 h-4 text-muted-foreground mt-4" />
+                                        <div className="text-center">
+                                            <div className="text-[10px] text-muted-foreground uppercase mb-1">Target</div>
+                                            <div className="px-2 py-1 border border-border bg-card rounded-sm text-xs">
+                                                {det.target_host}
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {det.actor && (
+                                        <div className="flex items-center gap-2 text-[10px] text-muted-foreground bg-secondary/30 p-1.5 rounded-sm">
+                                            <Shield className="w-3 h-3" />
+                                            ACTOR: <span className="text-foreground">{det.actor}</span>
+                                        </div>
+                                    )}
+
+                                    <div className="flex justify-between text-[9px] text-muted-foreground/70 pt-1">
+                                        <span>FIRST: {det.first_seen ? new Date(det.first_seen).toLocaleTimeString() : "—"}</span>
+                                        <span>LAST: {det.last_seen ? new Date(det.last_seen).toLocaleTimeString() : "—"}</span>
+                                    </div>
+                                </div>
+                            ))}
                         </div>
-                    </div>
+                        <Button
+                            variant="outline"
+                            size="sm"
+                            className="w-full font-mono text-[10px] mt-4 h-8"
+                            onClick={() => navigate(`/incidents/${incidentId}/super-timeline`)}
+                        >
+                            <Layers className="w-3.5 h-3.5 mr-2" />
+                            INVESTIGATE IN SUPER TIMELINE
+                        </Button>
+                    </TacticalPanel>
                 )}
 
                 {/* ── Retry feedback banners ──────────────────────────────── */}
@@ -913,6 +953,43 @@ export default function IncidentHub() {
                             disabled={!collectionDone}
                         />
 
+                        {/* Attack Hypothesis Builder */}
+                        <ActionCard
+                            icon={<Target className="w-5 h-5" />}
+                            title="HYPOTHESES"
+                            status="ready"
+                            description="ATT&CK-framed investigation hypotheses"
+                            onClick={() => navigate(`/incidents/${incidentId}/hypotheses`)}
+                        />
+
+                        {/* Legal Holds */}
+                        <ActionCard
+                            icon={<Lock className="w-5 h-5" />}
+                            title="LEGAL HOLDS"
+                            status="ready"
+                            description="Retention policies and legal hold management"
+                            onClick={() => navigate(`/incidents/${incidentId}/legal-holds`)}
+                        />
+
+                        {/* Scheduled Collections */}
+                        <ActionCard
+                            icon={<Clock className="w-5 h-5" />}
+                            title="SCHEDULED"
+                            status="ready"
+                            description="Cron-based automated re-collection"
+                            onClick={() => navigate(`/incidents/${incidentId}/scheduled`)}
+                        />
+
+                        {/* SIEM Export */}
+                        <ActionCard
+                            icon={<Share2 className="w-5 h-5" />}
+                            title="SIEM EXPORT"
+                            status={procDone ? "ready" : "unavailable"}
+                            description={procDone ? "Push timeline to Splunk / Elastic / Timesketch" : "Available after processing"}
+                            onClick={() => navigate(`/incidents/${incidentId}/siem-export`)}
+                            disabled={!procDone}
+                        />
+
                         {/* Collection Setup / Recollect */}
                         <ActionCard
                             icon={<Users className="w-5 h-5" />}
@@ -1030,52 +1107,6 @@ export default function IncidentHub() {
                         />
                     </div>
                 </TacticalPanel>
-
-                {/* ── Lateral movement summary ─────────────────────────────── */}
-                {stDone && lmDetections && lmDetections.length > 0 && (
-                    <TacticalPanel title="LATERAL MOVEMENT SUMMARY" status="offline">
-                        <div className="space-y-2">
-                            {lmDetections.map((det) => (
-                                <div
-                                    key={det.id}
-                                    className="flex items-center gap-3 p-3 border border-border/50 bg-secondary/20 rounded-sm"
-                                >
-                                    <Network className="w-4 h-4 text-red-400 shrink-0" />
-                                    <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
-                                        <span className="px-1.5 py-0.5 border border-red-500/30 bg-red-500/10 text-red-400 font-mono text-[10px] rounded-sm uppercase font-bold">
-                                            {det.detection_type.replace(/_/g, " ")}
-                                        </span>
-                                        <span className="font-mono text-xs">{det.source_host}</span>
-                                        <ArrowRight className="w-3 h-3 text-muted-foreground shrink-0" />
-                                        <span className="font-mono text-xs">{det.target_host}</span>
-                                        {det.actor && (
-                                            <span className="font-mono text-xs text-muted-foreground">
-                                                via <span className="text-foreground">{det.actor}</span>
-                                            </span>
-                                        )}
-                                    </div>
-                                    <span className={cn(
-                                        "font-mono text-xs shrink-0",
-                                        det.confidence >= 0.8 ? "text-red-400" :
-                                        det.confidence >= 0.5 ? "text-orange-400" :
-                                        "text-yellow-400"
-                                    )}>
-                                        {Math.round(det.confidence * 100)}% CONF
-                                    </span>
-                                </div>
-                            ))}
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                className="w-full font-mono text-xs mt-2"
-                                onClick={() => navigate(`/incidents/${incidentId}/super-timeline`)}
-                            >
-                                <Layers className="w-3.5 h-3.5 mr-2" />
-                                OPEN SUPER TIMELINE FOR FULL ANALYSIS
-                            </Button>
-                        </div>
-                    </TacticalPanel>
-                )}
 
             </div>
         </AppLayout>

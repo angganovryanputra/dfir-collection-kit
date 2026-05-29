@@ -29,6 +29,30 @@ logger = logging.getLogger(__name__)
 _SUBPROCESS_TIMEOUT = 600  # 10 minutes per tool
 
 
+# ── Processing log helper — writes to collection_logs so the frontend sees it ─
+
+async def _pipeline_log(
+    db: AsyncSession,
+    incident_id: str,
+    message: str,
+    level: str = "info",
+) -> None:
+    """Persist a pipeline progress message to collection_logs.
+
+    These entries are polled by the ProcessingStatus page and displayed in the
+    processing terminal so analysts see what EZ Tools, Sigma detection, and
+    timeline export are doing in real time.
+    """
+    from app.crud.collection_log import create_log_entries, get_last_sequence
+
+    try:
+        seq = await get_last_sequence(db, incident_id) + 1
+        await create_log_entries(db, incident_id, seq, [{"level": level, "message": message}])
+        await db.flush()
+    except Exception as exc:
+        logger.debug("_pipeline_log flush failed (non-fatal): %s", exc)
+
+
 # ── Phase checkpoint helpers ──────────────────────────────────────────────────
 
 def _phase_marker(base_path: Path, phase: int) -> Path:
@@ -88,6 +112,39 @@ async def _run_subprocess(cmd: list[str]) -> tuple[bool, str]:
         return False, f"Binary not found: {cmd[0]}"
     except Exception as exc:
         return False, str(exc)[:500]
+
+
+async def _run_parsing_phase_with_logs(
+    extracted_dir: Path,
+    parsed_dir: Path,
+    ez_tools_path: str,
+    db: AsyncSession,
+    incident_id: str,
+) -> dict[str, int]:
+    """Wrap _run_parsing_phase with per-tool progress log entries."""
+    # Log which artifact types exist before starting
+    artifact_counts: dict[str, int] = {
+        "EVTX": len(list(extracted_dir.rglob("*.evtx"))),
+        "MFT": len([f for f in extracted_dir.rglob("*") if f.name in ("MFT", "$MFT")]),
+        "Registry (.hve)": len(list(extracted_dir.rglob("*.hve"))),
+        "Prefetch (.pf)": len(list(extracted_dir.rglob("*.pf"))),
+        "LNK (.lnk)": len(list(extracted_dir.rglob("*.lnk"))),
+        "JumpLists": len(list(extracted_dir.rglob("*.automaticDestinations-ms"))),
+    }
+    for artifact, count in artifact_counts.items():
+        if count > 0:
+            await _pipeline_log(db, incident_id, f"  Found {count} {artifact} file(s) to parse")
+
+    stats = await _run_parsing_phase(extracted_dir, parsed_dir, ez_tools_path)
+
+    # Log results per tool
+    for tool, count in stats.items():
+        if count > 0:
+            await _pipeline_log(db, incident_id, f"  ✓ {tool}: processed {count} file(s)", "success")
+        else:
+            await _pipeline_log(db, incident_id, f"  ⚠ {tool}: 0 files processed", "warning")
+
+    return stats
 
 
 def _tool_dll(tool_name: str, ez_tools_path: str) -> Path | None:
@@ -558,10 +615,31 @@ async def run_parsing_pipeline(
         # ── Phase 1: EZ Tools ──────────────────────────────────────────────
         if _phase_is_done(base_path, 1):
             logger.info("Phase 1 (EZ Tools) already done for job %s — skipping", job_id)
+            await _pipeline_log(db, incident_id, "Phase 1 (artifact parsing) already complete — skipping")
         else:
             ez_tools_path = getattr(settings, "ez_tools_path", "") or ""
-            parsing_stats = await _run_parsing_phase(extracted_dir, parsed_dir, ez_tools_path)
+            await _pipeline_log(db, incident_id, "─── Phase 1: Artifact Parsing (EZ Tools) ───")
+            if not ez_tools_path:
+                await _pipeline_log(db, incident_id, "EZ Tools path not configured — skipping EZ Tools parsing", "warning")
+            else:
+                await _pipeline_log(db, incident_id, f"EZ Tools path: {ez_tools_path}")
+            # Count artifacts to give user a preview
+            evtx_count = len(list(extracted_dir.rglob("*.evtx")))
+            mft_count = len([f for f in extracted_dir.rglob("*") if f.name in ("MFT", "$MFT")])
+            hve_count = len(list(extracted_dir.rglob("*.hve")))
+            pf_count = len(list(extracted_dir.rglob("*.pf")))
+            await _pipeline_log(
+                db, incident_id,
+                f"Artifacts detected: {evtx_count} EVTX, {mft_count} MFT, {hve_count} registry hives, {pf_count} prefetch files",
+            )
+            parsing_stats = await _run_parsing_phase_with_logs(extracted_dir, parsed_dir, ez_tools_path, db, incident_id)
             total_parsed = sum(parsing_stats.values())
+            stats_str = ", ".join(f"{k}: {v}" for k, v in parsing_stats.items() if v > 0)
+            await _pipeline_log(
+                db, incident_id,
+                f"Phase 1 complete — {total_parsed} artifacts parsed: {stats_str or 'no tools ran'}",
+                "success" if total_parsed > 0 else "warning",
+            )
             logger.info("Parsing complete for job %s: %s", job_id, parsing_stats)
             await _add_coc_entry(
                 db, incident_id,
@@ -577,16 +655,28 @@ async def run_parsing_pipeline(
 
         if _phase_is_done(base_path, 2):
             logger.info("Phase 2 (Sigma) already done for job %s — skipping", job_id)
+            await _pipeline_log(db, incident_id, "Phase 2 (Sigma detection) already complete — skipping")
             hits_count = 0
         else:
             chainsaw_path = getattr(settings, "chainsaw_path", "") or ""
             sigma_rules_path = getattr(settings, "sigma_rules_path", "") or ""
             hayabusa_path = getattr(settings, "hayabusa_path", "") or ""
+            await _pipeline_log(db, incident_id, "─── Phase 2: Sigma Detection ───")
+            if not chainsaw_path and not hayabusa_path:
+                await _pipeline_log(db, incident_id, "No Sigma tools configured (Chainsaw/Hayabusa) — Sigma detection skipped", "warning")
+            else:
+                tools_str = ", ".join(t for t in [chainsaw_path and "Chainsaw", hayabusa_path and "Hayabusa"] if t)
+                await _pipeline_log(db, incident_id, f"Running Sigma detection with: {tools_str}")
             hits_count = await _run_sigma_phase(
                 extracted_dir, sigma_dir,
                 chainsaw_path, sigma_rules_path,
                 hayabusa_path,
                 incident_id, proc_job_id, db,
+            )
+            await _pipeline_log(
+                db, incident_id,
+                f"Phase 2 complete — {hits_count} Sigma hit(s) detected",
+                "warning" if hits_count > 0 else "success",
             )
             logger.info("Sigma phase complete for job %s: %d hits", job_id, hits_count)
 
@@ -625,8 +715,16 @@ async def run_parsing_pipeline(
 
         if _phase_is_done(base_path, 3):
             logger.info("Phase 3 (Timeline) already done for job %s — skipping", job_id)
+            await _pipeline_log(db, incident_id, "Phase 3 (timeline build) already complete — skipping")
         else:
+            await _pipeline_log(db, incident_id, "─── Phase 3: Timeline Build ───")
+            await _pipeline_log(db, incident_id, "Merging parsed CSV files into Timesketch-compatible JSONL...")
             entries = await export_to_jsonl(parsed_dir, sigma_dir, timeline_dir, incident_id)
+            await _pipeline_log(
+                db, incident_id,
+                f"Phase 3 complete — {entries} timeline entries written to timeline.jsonl",
+                "success",
+            )
             logger.info("Timeline phase complete for job %s: %d entries", job_id, entries)
             await _add_coc_entry(
                 db, incident_id,
@@ -637,6 +735,7 @@ async def run_parsing_pipeline(
             _mark_phase_done(base_path, 3)
 
         # ── Phase 4: Advanced analytics (best-effort — never fail pipeline) ─
+        await _pipeline_log(db, incident_id, "─── Phase 4: Advanced Analytics ───")
         await update_processing_job(db, proc_job_id, phase="analytics")
         await db.commit()
 
@@ -665,6 +764,12 @@ async def run_parsing_pipeline(
             sev_counts = await count_sigma_hits_by_severity(db, incident_id)
             total_sigma = sum(sev_counts.values())
             _, ioc_total = await list_ioc_matches(db, incident_id, None, 1, 0)
+            # Pipeline complete summary log — visible in processing terminal
+            await _pipeline_log(
+                db, incident_id,
+                f"═══ PIPELINE COMPLETE ═══  Sigma: {total_sigma} hits | IOCs: {ioc_total} matches",
+                "success",
+            )
 
             runtime = await get_runtime_settings(db)
             webhook_url = getattr(runtime, "webhook_url", None) or ""

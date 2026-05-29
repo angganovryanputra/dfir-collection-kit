@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react"; // useCallback used in fetchPipelineLogs
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -6,7 +6,10 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { KeyValueRow } from "@/components/common/KeyValueRow";
-import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug, Layers, ChevronDown, ChevronUp, Info } from "lucide-react";
+import { TerminalLog } from "@/components/TerminalLog";
+import type { LogEntry } from "@/components/TerminalLog";
+import { useAdaptivePolling } from "@/lib/useAdaptivePolling";
+import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug, Layers, ChevronDown, ChevronUp, Info, Clock } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
 import { useToast } from "@/components/ui/use-toast";
@@ -82,15 +85,88 @@ export default function ProcessingStatus() {
     const [errorExpanded, setErrorExpanded] = useState(false);
     const { toast } = useToast();
 
-    const { data: job, isLoading, error } = useQuery<ProcessingJobOut>({
+    // Pipeline terminal log state
+    const [pipelineLogs, setPipelineLogs] = useState<LogEntry[]>([]);
+    const lastLogSeqRef = useRef(0);
+    const startedAtRef = useRef<number | null>(null);
+    const [elapsedSec, setElapsedSec] = useState(0);
+
+    // Adaptive polling for job status (replaces hardcoded 2000ms refetchInterval)
+    const { data: job, isLoading, error, refetch } = useQuery<ProcessingJobOut>({
         queryKey: ["processing-status", incidentId],
         queryFn: () => apiGet<ProcessingJobOut>(`/processing/incident/${incidentId}/status`),
-        refetchInterval: (query) => {
-            const status = query.state.data?.status;
-            return status === "RUNNING" || status === "PENDING" ? 2000 : false;
-        },
         retry: false,
+        refetchInterval: false, // controlled by useAdaptivePolling below
     });
+
+    const isRunning = job?.status === "RUNNING" || job?.status === "PENDING";
+    const isDone = job?.status === "DONE";
+    const isFailed = job?.status === "FAILED";
+
+    useAdaptivePolling({
+        enabled: isRunning,
+        onPoll: async () => {
+            await refetch();
+            return job ? `${job.status}:${job.phase}` : null;
+        },
+        initialInterval: 2000,
+        maxInterval: 15_000,
+        backoffFactor: 1.3,
+    });
+
+    // Fetch pipeline logs (collection_logs written during processing phases)
+    const fetchPipelineLogs = useCallback(async () => {
+        if (!incidentId) return;
+        try {
+            const data = await apiGet<{
+                logs: Array<{ sequence: number; level: string; message: string; timestamp: string }>;
+                last_sequence: number;
+            }>(`/processing/incident/${incidentId}/logs?since_sequence=${lastLogSeqRef.current}&limit=100`);
+            if (data.logs.length > 0) {
+                setPipelineLogs((prev) => [
+                    ...prev,
+                    ...data.logs.map((e) => ({
+                        timestamp: new Date(e.timestamp).toLocaleTimeString("en-US", { hour12: false }),
+                        level: e.level as LogEntry["level"],
+                        message: e.message,
+                    })),
+                ]);
+                lastLogSeqRef.current = data.last_sequence;
+            }
+        } catch {
+            // best-effort
+        }
+    }, [incidentId]);
+
+    useAdaptivePolling({
+        enabled: isRunning,
+        onPoll: async () => {
+            await fetchPipelineLogs();
+            return isRunning ? "running" : null;
+        },
+        initialInterval: 2000,
+        maxInterval: 10_000,
+        backoffFactor: 1.2,
+    });
+
+    // Elapsed time counter while running
+    useEffect(() => {
+        if (isRunning && !startedAtRef.current) {
+            startedAtRef.current = Date.now();
+        }
+        if (!isRunning) return;
+        const timer = setInterval(() => {
+            if (startedAtRef.current) {
+                setElapsedSec(Math.floor((Date.now() - startedAtRef.current) / 1000));
+            }
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [isRunning]);
+
+    const formatElapsed = (s: number) => {
+        const m = Math.floor(s / 60);
+        return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
+    };
 
     const role = getStoredRole();
     const { data: toolsStatus } = useQuery<ToolsStatus>({
@@ -99,10 +175,6 @@ export default function ProcessingStatus() {
         enabled: role === "admin",
         staleTime: 5 * 60 * 1000,
     });
-
-    const isDone = job?.status === "DONE";
-    const isFailed = job?.status === "FAILED";
-    const isRunning = job?.status === "RUNNING" || job?.status === "PENDING";
 
     return (
         <AppLayout
@@ -139,11 +211,19 @@ export default function ProcessingStatus() {
                                     label={job.status}
                                     pulse={isRunning}
                                 />
-                                {isRunning && (
-                                    <span className="text-xs text-muted-foreground animate-pulse">
-                                        AUTO-REFRESH ACTIVE
-                                    </span>
-                                )}
+                                <div className="flex items-center gap-3">
+                                    {isRunning && elapsedSec > 0 && (
+                                        <span className="flex items-center gap-1 text-xs text-muted-foreground font-mono">
+                                            <Clock className="w-3 h-3" />
+                                            {formatElapsed(elapsedSec)}
+                                        </span>
+                                    )}
+                                    {isRunning && (
+                                        <span className="text-xs text-muted-foreground animate-pulse">
+                                            AUTO-REFRESH
+                                        </span>
+                                    )}
+                                </div>
                             </div>
                             <div className="grid grid-cols-2 gap-x-8 gap-y-1 pt-2">
                                 <KeyValueRow label="JOB ID:" value={job.id} />
@@ -176,6 +256,29 @@ export default function ProcessingStatus() {
                         </div>
                     ) : null}
                 </TacticalPanel>
+
+                {/* Pipeline terminal — live output from EZ Tools, Sigma, Timeline build */}
+                {(isRunning || pipelineLogs.length > 0) && (
+                    <TacticalPanel
+                        title={`PIPELINE LOG${pipelineLogs.length > 0 ? ` — ${pipelineLogs.length} entries` : ""}`}
+                        status={isRunning ? "active" : "online"}
+                        className="flex flex-col"
+                        headerActions={
+                            <span className="font-mono text-xs text-muted-foreground">
+                                {isRunning ? "Live" : "Completed"}
+                            </span>
+                        }
+                    >
+                        <div className="h-72 flex flex-col min-h-0">
+                            <TerminalLog
+                                entries={pipelineLogs}
+                                className="flex-1"
+                                searchable
+                                autoScroll={isRunning}
+                            />
+                        </div>
+                    </TacticalPanel>
+                )}
 
                 {/* Phase Progress */}
                 <TacticalPanel title="PIPELINE PHASES">

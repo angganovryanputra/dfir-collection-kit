@@ -5,17 +5,25 @@ from pydantic import BaseModel
 
 class CollectionStartRequest(BaseModel):
     """
-    Optional body for POST /incidents/{id}/collect.
+    Body for POST /incidents/{id}/collect.
 
-    If module_ids is provided, only those modules are collected.
-    If profile is provided (e.g. "triage", "ransomware", "full"), the profile's modules are used.
-    If neither is provided, all modules for the detected OS are collected.
-    agent_ids, if provided, restricts collection to the specified device IDs instead of
-    looking up devices by hostname from incident.target_endpoints.
+    Priority for module selection:
+      1. module_ids — explicit list overrides everything
+      2. profile    — named profile (triage / ransomware / insider_threat / full)
+      3. Neither    — all modules for the detected / overridden OS
+
+    agent_ids restricts to specific registered device IDs instead of resolving
+    by hostname from incident.target_endpoints.
+
+    os_override forces a specific OS for module validation, bypassing the
+    auto-detection from the registered device record.  REQUIRED when the
+    user has manually changed the OS selector in the UI — without it,
+    validate_modules_for_os() will reject the selected modules with HTTP 400.
     """
     module_ids: list[str] | None = None
     profile: str | None = None
-    agent_ids: list[str] | None = None  # explicit agent device IDs to target
+    agent_ids: list[str] | None = None
+    os_override: str | None = None  # "windows" | "linux" | "macos"
 
 
 class CollectionStartResponse(BaseModel):

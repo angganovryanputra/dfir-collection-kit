@@ -68,20 +68,33 @@ async def download_agent_binary(
         )
 
     ext = ".exe" if os_lower == "windows" else ""
-    filename = f"agent-{os_lower}-{arch_lower}{ext}"
-    binary_path = binary_dir / filename
+    # Accept both naming conventions:
+    #   dfir-agent-<os>-<arch>.exe  (Makefile output)
+    #   agent-<os>-<arch>.exe       (legacy)
+    candidates = [
+        f"dfir-agent-{os_lower}-{arch_lower}{ext}",
+        f"agent-{os_lower}-{arch_lower}{ext}",
+    ]
+    binary_path = None
+    filename = candidates[0]
+    for candidate in candidates:
+        p = binary_dir / candidate
+        if p.exists():
+            binary_path = p
+            filename = candidate
+            break
 
-    if not binary_path.exists():
+    if binary_path is None:
         raise HTTPException(
             status_code=404,
             detail=(
-                f"Binary '{filename}' not found. "
-                f"Build with: cd agent && GOOS={os_lower} GOARCH={arch_lower} "
-                f"go build -o {filename} ./cmd/agent/"
+                f"Binary not found in {binary_base}. "
+                f"Build with: cd agent && make {os_lower}  "
+                f"then copy the binary here."
             ),
         )
 
-    logger.info("Agent binary download: %s", filename)
+    logger.info("Agent binary download: %s (%s)", filename, binary_path)
     return FileResponse(
         path=str(binary_path),
         filename=filename,

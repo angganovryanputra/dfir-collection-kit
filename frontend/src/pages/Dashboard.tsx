@@ -88,10 +88,16 @@ export default function Dashboard() {
   const [collectors, setCollectors] = useState<Collector[]>([]);
   const [evidenceFolders, setEvidenceFolders] = useState<EvidenceFolderResponse[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [incidentSearch, setIncidentSearch] = useState("");
+  const [incidentStatusFilter, setIncidentStatusFilter] = useState("");
 
-  const incidentsQuery = useQuery<IncidentResponse[]>({
-    queryKey: ["incidents"],
-    queryFn: () => apiGet<IncidentResponse[]>("/incidents"),
+  const incidentParams = new URLSearchParams({ limit: "1000" });
+  if (incidentSearch) incidentParams.set("search", incidentSearch);
+  if (incidentStatusFilter) incidentParams.set("status", incidentStatusFilter);
+
+  const incidentsQuery = useQuery<{ total: number; items: IncidentResponse[] }>({
+    queryKey: ["incidents", incidentSearch, incidentStatusFilter],
+    queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>(`/incidents?${incidentParams.toString()}`),
   });
 
   const collectorsQuery = useQuery<CollectorResponse[]>({
@@ -135,7 +141,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (incidentsQuery.data) {
-      setIncidents(incidentsQuery.data.map(mapIncident));
+      setIncidents(incidentsQuery.data.items.map(mapIncident));
       setErrorMessage(null);
     }
   }, [incidentsQuery.data]);
@@ -330,10 +336,32 @@ export default function Dashboard() {
               status="active"
               headerActions={
                 <span className="font-mono text-xs text-primary">
-                  {activeIncidents} ACTIVE
+                  {activeIncidents} ACTIVE · {incidentsQuery.data?.total ?? incidents.length} TOTAL
                 </span>
               }
             >
+              {/* Search + filter bar */}
+              <div className="flex items-center gap-2 mb-3">
+                <input
+                  className="flex-1 h-7 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  placeholder="Search incident ID or operator..."
+                  value={incidentSearch}
+                  onChange={e => setIncidentSearch(e.target.value)}
+                />
+                <select
+                  className="h-7 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none"
+                  value={incidentStatusFilter}
+                  onChange={e => setIncidentStatusFilter(e.target.value)}
+                >
+                  <option value="">ALL STATUS</option>
+                  <option value="PENDING">PENDING</option>
+                  <option value="ACTIVE">ACTIVE</option>
+                  <option value="COLLECTION_IN_PROGRESS">COLLECTING</option>
+                  <option value="COLLECTION_COMPLETE">COMPLETE</option>
+                  <option value="COLLECTION_FAILED">FAILED</option>
+                  <option value="CLOSED">CLOSED</option>
+                </select>
+              </div>
               <div className="space-y-3">
                 {paginatedIncidents.length === 0 ? (
                   <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">

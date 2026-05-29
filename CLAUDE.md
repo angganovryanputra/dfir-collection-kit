@@ -37,7 +37,14 @@ alembic upgrade head                                    # Apply all migrations
 alembic revision --autogenerate -m "description"        # Create new migration
 ```
 
-Migration chain: `20260101_initial_schema` → `20260117_add_incident_collection_state` → `20260122_add_incident_template_id` → `20260303_add_concurrency_limit` → `20260401_processing_pipeline` → `20260402_processing_settings` → `20260403_phase2_analytics` → `20260501_super_timeline` → `79fe3e192d10` → `20260502_notifications_and_binary` → `20260503_device_datetime_fix` → `20260601_platform_features`. When adding a new migration, set `down_revision` to `20260601_platform_features`.
+Migration chain: `20260101_initial_schema` → `20260117_add_incident_collection_state` → `20260122_add_incident_template_id` → `20260303_add_concurrency_limit` → `20260401_processing_pipeline` → `20260402_processing_settings` → `20260403_phase2_analytics` → `20260501_super_timeline` → `79fe3e192d10` → `20260502_notifications_and_binary` → `20260503_device_datetime_fix` → `20260601_platform_features` → `20260602_performance_indexes`. When adding a new migration, set `down_revision` to `20260602_performance_indexes`.
+
+## New API Routers (api/v1/api.py)
+- `/platform` — platform_features (custom modules, hypotheses, scheduled, threat hunt, legal holds, correlation, SIEM export)
+- `/agent-commands` — live agent WebSocket command interface
+- `/threat-intel` — VirusTotal + MISP IOC enrichment
+- `/ai` — LLM-powered event annotation, incident summary, NL query
+- `/case` — TheHive, Jira, Slack case management export
 
 `app/seed.py` contains the seeding logic. `app/seed_run.py` calls `create_all` (no-op if tables exist) then runs seed. Do not use `seed_run.py` to create tables in production — use Alembic.
 

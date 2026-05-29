@@ -1,0 +1,61 @@
+# DFIR Agent — Configuration File
+# =================================
+# Copy to dfir-agent.conf and place NEXT TO dfir-agent.exe
+# The agent reads this file automatically on startup.
+#
+# Priority: CLI flags > this file > environment variables > defaults
+# Lines starting with # or ; are comments.
+
+# ── Required ──────────────────────────────────────────────────────────────────
+
+backend = https://dfir.corp.com/api/v1
+secret  = REPLACE_WITH_AGENT_SHARED_SECRET
+
+# ── Agent Identity (optional) ─────────────────────────────────────────────────
+
+# hostname  = DC01          ; override OS hostname
+# type      = workstation   ; workstation | server | dc
+# agent_id  = DFIR-DC01-001 ; persistent ID (default: auto-generated UUID)
+
+# ── Enterprise Network / TLS ──────────────────────────────────────────────────
+#
+# Most enterprise networks intercept TLS (Zscaler, BlueCoat, Palo Alto, etc.)
+# and re-sign certificates with a corporate CA.  The agent will fail with
+# "certificate signed by unknown authority" without one of these settings.
+#
+# Option A — custom corporate CA bundle (recommended):
+# ca_cert = C:\dfir\corp-root-ca.pem
+#
+# Option B — skip TLS verification (for trusted internal networks):
+# tls_skip_verify = true
+
+# Explicit proxy (leave blank to use HTTP_PROXY/HTTPS_PROXY env vars):
+# proxy = http://proxy.corp.com:8080
+
+# ── Timeouts ──────────────────────────────────────────────────────────────────
+
+# connect_timeout    = 10    ; TCP dial timeout in seconds
+# upload_timeout_min = 120   ; evidence upload timeout (0 = no limit)
+
+# ── Retry on startup (handles boot-time VPN / DHCP delays) ───────────────────
+
+# max_retries   = 0   ; 0 = retry forever (recommended for services)
+# retry_interval = 15  ; seconds between retries
+
+# ── Storage Paths ─────────────────────────────────────────────────────────────
+
+# data_dir = C:\dfir-agent     ; agent_id.json location (default: dir of exe)
+# work_dir = C:\Windows\Temp   ; evidence collection working dir (default: OS temp)
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+
+# log_file = C:\Windows\Temp\dfir-agent.log   ; recommended for SCCM/GPO/service
+# quiet    = false                             ; suppress non-critical stdout
+
+# ── Minimal enterprise example ────────────────────────────────────────────────
+#
+# backend         = https://dfir.corp.com/api/v1
+# secret          = MyStrongSharedSecret123!
+# tls_skip_verify = true
+# proxy           = http://proxy.corp.com:8080
+# log_file        = C:\Windows\Temp\dfir-agent.log

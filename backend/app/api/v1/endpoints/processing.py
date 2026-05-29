@@ -158,6 +158,38 @@ async def get_latest_processing_status_for_incident(
     return ProcessingJobOut.model_validate(proc_job)
 
 
+@router.get("/incident/{incident_id}/logs")
+async def get_processing_logs(
+    incident_id: str,
+    since_sequence: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """Return collection_log entries written by the processing pipeline.
+
+    ProcessingStatus polls this to show a live terminal: EZ Tools progress,
+    Sigma detection counts, timeline build status, analytics results.
+    """
+    from app.crud.collection_log import list_logs
+
+    entries = (await list_logs(db, incident_id, since_sequence=since_sequence))[:limit]
+    last_seq = entries[-1].sequence if entries else since_sequence
+    return {
+        "incident_id": incident_id,
+        "last_sequence": last_seq,
+        "logs": [
+            {
+                "sequence": e.sequence,
+                "level": e.level,
+                "message": e.message,
+                "timestamp": e.created_at.isoformat() if e.created_at else "",
+            }
+            for e in entries
+        ],
+    }
+
+
 @router.get("/incident/{incident_id}/sigma-hits", response_model=SigmaHitListOut)
 async def get_sigma_hits_for_incident(
     incident_id: str,

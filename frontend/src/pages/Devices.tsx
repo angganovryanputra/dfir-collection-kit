@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,7 @@ import {
   Download,
   Loader2,
   Info,
+  Terminal,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
 import { getStoredAuth, getStoredRole } from "@/lib/auth";
@@ -306,6 +308,8 @@ export default function Devices() {
     }
   };
 
+  const navigate = useNavigate();
+
   const toggleDeviceStatus = async (device: Device) => {
     if (!isAdmin) {
       setErrorMessage("Only admin accounts can update devices.");
@@ -572,6 +576,16 @@ export default function Devices() {
                     {getCollectionStatus(device.collectionStatus)}
                   </div>
                   <div className="col-span-1 flex items-center gap-1">
+                    {device.status === "online" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        title="Live Console"
+                        onClick={() => navigate(`/agents/${device.id}/console`)}
+                      >
+                        <Terminal className="w-3 h-3 text-primary" />
+                      </Button>
+                    )}
                     <Button variant="ghost" size="sm" title="Configure" disabled={!isAdmin}>
                       <Settings className="w-3 h-3" />
                     </Button>
