@@ -12,6 +12,7 @@ from app.api.v1.endpoints import (
     incidents,
     jobs,
     modules,
+    platform_features,
     processing,
     settings,
     status,
@@ -37,3 +38,4 @@ api_router.include_router(jobs.router, prefix="/jobs", tags=["jobs"])
 api_router.include_router(modules.router, prefix="/modules", tags=["modules"])
 api_router.include_router(processing.router, prefix="/processing", tags=["processing"])
 api_router.include_router(agent_binary.router, prefix="/agent-binary", tags=["agent-binary"])
+api_router.include_router(platform_features.router, prefix="/platform", tags=["platform-features"])

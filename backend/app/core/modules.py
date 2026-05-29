@@ -357,6 +357,13 @@ MODULE_REGISTRY = {
         "output_relpath": "artifacts/windows/ntfs/MFT",
         "params": {},
     },
+    "windows_vss_enumerate": {
+        "os": "windows",
+        "category": "artifacts",
+        "priority": 2,
+        "output_relpath": "artifacts/windows/vss/shadow_copies.txt",
+        "params": {},
+    },
     "windows_usnjrnl_vss": {
         "os": "windows",
         "category": "artifacts",
@@ -738,6 +745,129 @@ MODULE_REGISTRY = {
     },
 }
 
+# Estimated compressed collection size per module in MiB.
+# Values are order-of-magnitude guidance for sizing; actual sizes vary.
+_MODULE_SIZES: dict[str, float] = {
+    # Windows — volatile
+    "windows_process_list": 0.2,
+    "windows_network_connections": 0.2,
+    "windows_listening_ports": 0.1,
+    "windows_dns_cache": 0.1,
+    "windows_memory_acquisition": 8192.0,
+    # Windows — logs
+    "windows_eventlog_security": 100.0,
+    "windows_eventlog_system": 50.0,
+    "windows_eventlog_application": 50.0,
+    "windows_eventlog_powershell_operational": 20.0,
+    "windows_eventlog_sysmon_operational": 200.0,
+    "windows_defender_events": 50.0,
+    "windows_firewall_logs": 20.0,
+    "windows_eventlog_task_scheduler": 20.0,
+    # Windows — persistence
+    "windows_scheduled_tasks": 0.5,
+    "windows_services": 0.5,
+    "windows_registry_run_keys": 0.1,
+    "windows_startup_folders": 0.1,
+    "windows_wmi_event_subscriptions": 0.5,
+    "windows_scheduled_tasks_xml": 1.0,
+    # Windows — system
+    "windows_local_users": 0.1,
+    "windows_logged_on_users": 0.1,
+    "windows_system_info": 0.1,
+    "windows_installed_patches": 1.0,
+    "windows_timezone": 0.1,
+    "windows_boot_time": 0.1,
+    "windows_firewall_rules": 0.5,
+    "windows_env_vars": 0.1,
+    "windows_network_shares": 0.1,
+    # Windows — artifacts
+    "windows_registry_hives": 50.0,
+    "windows_ntuser_dat": 20.0,
+    "windows_prefetch": 5.0,
+    "windows_amcache": 10.0,
+    "windows_shimcache": 1.0,
+    "windows_lnk_files": 2.0,
+    "windows_jump_lists": 2.0,
+    "windows_browser_chrome": 50.0,
+    "windows_browser_edge": 50.0,
+    "windows_browser_firefox": 50.0,
+    "windows_bits_jobs": 0.5,
+    "windows_recycle_bin": 1.0,
+    "windows_thumbcache": 20.0,
+    "windows_shellbags": 0.5,
+    "windows_mru": 0.5,
+    "windows_usb_history": 0.5,
+    "windows_mft_vss": 200.0,
+    "windows_usnjrnl_vss": 300.0,
+    "windows_powershell_history": 0.5,
+    "windows_user_assist": 0.5,
+    "windows_rdp_history": 0.5,
+    "windows_srum": 10.0,
+    "windows_wmi_repository": 30.0,
+    "windows_typed_urls": 0.1,
+    "windows_vss_enumerate": 0.1,
+    # Linux — volatile
+    "linux_process_list": 0.2,
+    "linux_network_connections": 0.2,
+    "linux_memory_acquisition": 8192.0,
+    "linux_lsof": 0.5,
+    "linux_containers": 0.5,
+    # Linux — logs
+    "linux_journalctl": 50.0,
+    "linux_syslog": 30.0,
+    "linux_auth_logs": 5.0,
+    "linux_wtmp": 0.5,
+    "linux_btmp": 0.5,
+    "linux_audit_log": 50.0,
+    "linux_dmesg": 0.5,
+    # Linux — persistence
+    "linux_cron": 0.1,
+    "linux_systemd_units": 0.5,
+    "linux_systemd_timers": 0.1,
+    "linux_rc_local": 0.1,
+    "linux_authorized_keys": 0.1,
+    "linux_sudoers": 0.1,
+    "linux_ld_preload": 0.1,
+    "linux_pam_config": 0.1,
+    # Linux — system
+    "linux_ip_config": 0.1,
+    "linux_resolv_conf": 0.1,
+    "linux_bash_history": 0.2,
+    "linux_logged_in_users": 0.1,
+    "linux_installed_packages": 1.0,
+    "linux_kernel_version": 0.1,
+    "linux_shadow": 0.1,
+    "linux_passwd_groups": 0.1,
+    "linux_hosts": 0.1,
+    "linux_sysctl": 0.2,
+    "linux_lsmod": 0.2,
+    "linux_zsh_history": 0.2,
+    "linux_sshd_config": 0.1,
+    "linux_environment": 0.1,
+    # macOS — volatile
+    "macos_process_list": 0.2,
+    "macos_network_connections": 0.2,
+    # macOS — logs
+    "macos_unified_log": 100.0,
+    "macos_install_log": 5.0,
+    # macOS — persistence
+    "macos_launchd_agents": 0.5,
+    "macos_launchd_daemons": 0.5,
+    "macos_login_items": 0.1,
+    "macos_cron": 0.1,
+    # macOS — system
+    "macos_system_info": 0.2,
+    "macos_users": 0.2,
+    "macos_bash_history": 0.2,
+    "macos_zsh_history": 0.2,
+    "macos_installed_apps": 0.5,
+    # macOS — artifacts
+    "macos_safari_history": 20.0,
+    "macos_chrome_history": 30.0,
+    "macos_quarantine_events": 2.0,
+    "macos_ssh_known_hosts": 0.1,
+}
+
 SUPPORTED_OS = {"windows", "linux", "macos"}
 
 # ── Collection Profiles (KAPE-style compound targets) ──────────────────────
@@ -1027,6 +1157,7 @@ def get_modules_by_category(os_name: str | None = None) -> dict[str, list[dict]]
                 "category": entry["category"],
                 "priority": entry["priority"],
                 "output_relpath": entry["output_relpath"],
+                "estimated_size_mb": _MODULE_SIZES.get(module_id, 1.0),
             }
         )
     # Sort each category by priority then module_id for stable ordering

@@ -19,6 +19,36 @@ from app.services.system_settings_service import get_runtime_settings, set_runti
 router = APIRouter()
 
 
+def _validate_yara_rules_dir(yara_dir: Path) -> None:
+    """Try to compile all .yar/.yara files in *yara_dir*.
+
+    Raises ValueError with the first compilation error found so the admin
+    knows which rule is malformed before it can crash the pipeline scanner.
+    """
+    try:
+        import yara  # type: ignore[import]
+    except ImportError:
+        # yara-python not installed in this environment — skip validation
+        logger.debug("yara-python not installed; skipping YARA rule pre-validation")
+        return
+
+    rule_files = list(yara_dir.glob("**/*.yar")) + list(yara_dir.glob("**/*.yara"))
+    if not rule_files:
+        return  # no rules to validate
+
+    for rule_path in rule_files:
+        try:
+            yara.compile(str(rule_path))
+        except yara.SyntaxError as exc:
+            raise ValueError(
+                f"YARA rule compile error in {rule_path.name}: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise ValueError(
+                f"YARA rule validation failed for {rule_path.name}: {exc}"
+            ) from exc
+
+
 @router.get("/", response_model=SystemSettingsApiOut | None, dependencies=[Depends(require_roles("admin"))])
 async def get_system_settings(db: AsyncSession = Depends(get_db)) -> SystemSettingsApiOut | None:
     settings = await get_settings(db)
@@ -54,6 +84,17 @@ async def put_system_settings(
     # error message explicit for API consumers that bypass schema validation.
     if payload.timesketch_url and not payload.timesketch_url.startswith(("http://", "https://")):
         raise HTTPException(status_code=400, detail="timesketch_url must start with http:// or https://")
+
+    # YARA rule pre-validation: attempt to compile rules before accepting the path.
+    # This prevents the pipeline from failing later with cryptic YARA parse errors.
+    if payload.yara_rules_path:
+        yara_dir = Path(payload.yara_rules_path)
+        if yara_dir.is_dir():
+            try:
+                _validate_yara_rules_dir(yara_dir)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     current = await get_settings(db)
     settings = await upsert_settings(db, payload)
     settings_out = SystemSettingsOut.model_validate(settings)
@@ -111,12 +152,22 @@ async def verify_tools_endpoint(
             return {"ok": False, "status": "not_found", "path": path}
         return {"ok": True, "status": "ok", "path": path}
 
+    def _check_yara_dir(path: str | None) -> dict:
+        base = _check_dir(path)
+        if not base["ok"] or not path:
+            return base
+        try:
+            _validate_yara_rules_dir(Path(path))
+            return {"ok": True, "status": "ok", "path": path}
+        except ValueError as exc:
+            return {"ok": False, "status": "compile_error", "path": path, "detail": str(exc)[:200]}
+
     result = {
         "ez_tools": _check_dir(settings.ez_tools_path),
         "chainsaw": _check_exe(settings.chainsaw_path),
         "hayabusa": _check_exe(settings.hayabusa_path),
         "sigma_rules": _check_dir(settings.sigma_rules_path),
-        "yara_rules": _check_dir(settings.yara_rules_path),
+        "yara_rules": _check_yara_dir(settings.yara_rules_path),
     }
     all_ok = all(v["ok"] for v in result.values())
     await safe_record_event(

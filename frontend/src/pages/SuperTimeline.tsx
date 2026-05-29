@@ -36,6 +36,7 @@ import {
     BarChart2,
     Globe,
     HelpCircle,
+    ZoomIn,
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 
@@ -1921,15 +1922,35 @@ export default function SuperTimeline() {
                     >
                         {/* Histogram */}
                         {!showBookmarks && timelineData && timelineData.data.length > 0 && (
-                            <EventHistogram
-                                data={timelineData.data}
-                                onSelectWindow={(from, to) => {
-                                    setDateFrom(from);
-                                    setDateTo(to);
-                                    setDateFilterActive(true);
-                                    setPage(1);
-                                }}
-                            />
+                            <div className="relative">
+                                <EventHistogram
+                                    data={timelineData.data}
+                                    onSelectWindow={(from, to) => {
+                                        setDateFrom(from);
+                                        setDateTo(to);
+                                        setDateFilterActive(true);
+                                        setPage(1);
+                                    }}
+                                />
+                                {dateFilterActive && (dateFrom || dateTo) && (
+                                    <div className="flex items-center gap-2 px-3 py-1.5 bg-primary/10 border-t border-primary/30 font-mono text-xs">
+                                        <ZoomIn className="w-3 h-3 text-primary shrink-0" />
+                                        <span className="text-primary font-bold">ZOOMED:</span>
+                                        <span className="text-muted-foreground truncate">
+                                            {dateFrom ? new Date(dateFrom).toLocaleDateString() : "—"}
+                                            {" → "}
+                                            {dateTo ? new Date(dateTo).toLocaleDateString() : "—"}
+                                        </span>
+                                        <button
+                                            className="ml-auto flex items-center gap-1 text-primary hover:text-foreground transition-colors shrink-0"
+                                            onClick={() => { clearDateFilter(); }}
+                                        >
+                                            <X className="w-3 h-3" />
+                                            CLEAR ZOOM
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
                         )}
 
                         {/* Bookmarks view */}

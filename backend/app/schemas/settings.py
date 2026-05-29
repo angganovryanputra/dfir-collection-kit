@@ -25,6 +25,7 @@ class SystemSettingsBase(BaseModel):
     auto_process: bool = True
     # Notification settings
     webhook_url: str | None = None
+    webhook_secret: str | None = None
     notification_email: str | None = None
     agent_binary_path: str | None = None
     # S3 Object Storage Settings for Evidence Vault
@@ -69,7 +70,7 @@ class SystemSettingsApiOut(SystemSettingsBase):
     """API response schema — masks timesketch_token so it is never returned in plaintext."""
     id: str
 
-    @field_serializer("timesketch_token", "s3_secret_key")
+    @field_serializer("timesketch_token", "s3_secret_key", "webhook_secret")
     def _mask_token(self, v: str | None) -> str | None:
         return "***" if v else None
 

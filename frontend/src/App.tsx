@@ -28,6 +28,11 @@ import IncidentHub from "./pages/IncidentHub";
 import IncidentReport from "./pages/IncidentReport";
 import Collectors from "./pages/Collectors";
 import UserManagement from "./pages/UserManagement";
+import HypothesisBuilder from "./pages/HypothesisBuilder";
+import LegalHolds from "./pages/LegalHolds";
+import ThreatHuntLibrary from "./pages/ThreatHuntLibrary";
+import CustomModules from "./pages/CustomModules";
+import CorrelationView from "./pages/CorrelationView";
 
 const queryClient = new QueryClient();
 
@@ -179,6 +184,11 @@ const App = () => {
                 <Route path="/incidents/:id/yara-matches" element={<ProtectedRoute><RouteBoundary><YaraMatches /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/super-timeline" element={<ProtectedRoute><RouteBoundary><SuperTimeline /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/report" element={<ProtectedRoute><RouteBoundary><IncidentReport /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/incidents/:id/hypotheses" element={<ProtectedRoute><RouteBoundary><HypothesisBuilder /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/incidents/:id/legal-holds" element={<ProtectedRoute><RouteBoundary><LegalHolds /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/threat-hunt" element={<ProtectedRoute><RouteBoundary><ThreatHuntLibrary /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/admin/custom-modules" element={<ProtectedRoute><RouteBoundary><CustomModules /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/correlate" element={<ProtectedRoute><RouteBoundary><CorrelationView /></RouteBoundary></ProtectedRoute>} />
 
                 <Route path="*" element={<NotFound />} />
               </Routes>

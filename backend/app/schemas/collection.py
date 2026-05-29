@@ -37,6 +37,15 @@ class CollectionPollRequest(BaseModel):
     since_sequence: int = 0
 
 
+class PerHostJobStatus(BaseModel):
+    """Status summary for a single collection job (one per target host)."""
+    job_id: str
+    hostname: str | None = None
+    status: str
+    module_count: int = 0
+    message: str | None = None
+
+
 class CollectionStatusResponse(BaseModel):
     incident_id: str
     status: str
@@ -44,3 +53,4 @@ class CollectionStatusResponse(BaseModel):
     phase: str
     last_log_index: int
     logs: list[CollectionLogEntry]
+    jobs: list[PerHostJobStatus] = []

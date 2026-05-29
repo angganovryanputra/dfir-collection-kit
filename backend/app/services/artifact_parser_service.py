@@ -605,7 +605,8 @@ async def run_parsing_pipeline(
                         _wh2 = getattr(_runtime2, "webhook_url", None) or ""
                         if _wh2:
                             await notify_critical_sigma_hit(
-                                incident_id, proc_job_id, _top.rule_name, _top.severity, _wh2
+                                incident_id, proc_job_id, _top.rule_name, _top.severity, _wh2,
+                                getattr(_runtime2, "webhook_secret", None),
                             )
             except Exception as _sex:
                 logger.debug("Sigma notification failed (non-fatal): %s", _sex)
@@ -668,7 +669,10 @@ async def run_parsing_pipeline(
             runtime = await get_runtime_settings(db)
             webhook_url = getattr(runtime, "webhook_url", None) or ""
             if webhook_url:
-                await notify_pipeline_complete(incident_id, job_id, total_sigma, ioc_total, webhook_url)
+                await notify_pipeline_complete(
+                    incident_id, job_id, total_sigma, ioc_total, webhook_url,
+                    getattr(runtime, "webhook_secret", None),
+                )
         except Exception as _exc:
             logger.debug("Notification failed (non-fatal): %s", _exc)
 
@@ -690,7 +694,10 @@ async def run_parsing_pipeline(
             _runtime = await _get_settings(db)
             _webhook = getattr(_runtime, "webhook_url", None) or ""
             if _webhook:
-                await notify_pipeline_failed(incident_id, job_id, str(exc)[:300], _webhook)
+                await notify_pipeline_failed(
+                    incident_id, job_id, str(exc)[:300], _webhook,
+                    getattr(_runtime, "webhook_secret", None),
+                )
         except Exception as _nex:
             logger.debug("Notification failed (non-fatal): %s", _nex)
 

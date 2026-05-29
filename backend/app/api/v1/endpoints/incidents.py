@@ -15,11 +15,11 @@ from app.crud.collection_log import create_log_entries, delete_logs_for_incident
 from app.crud.chain_of_custody import create_entry
 from app.crud.evidence import has_evidence_for_incident, lock_evidence_for_incident
 from app.crud.incident import create_incident, delete_incident, get_incident, list_incidents, update_incident
-from app.crud.job import count_active_jobs, create_job
+from app.crud.job import count_active_jobs, create_job, list_jobs_for_incident
 from app.models.device import Device
 from app.models.user import User
 from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
-from app.schemas.collection import CollectionLogEntry, CollectionStartRequest, CollectionStartResponse, CollectionStatusResponse
+from app.schemas.collection import CollectionLogEntry, CollectionStartRequest, CollectionStartResponse, CollectionStatusResponse, PerHostJobStatus
 from app.schemas.incident import IncidentCreate, IncidentOut, IncidentUpdate
 from app.schemas.job import JobCreate
 from app.services.audit_log_service import safe_record_event
@@ -331,6 +331,33 @@ async def poll_collection_endpoint(
                 IncidentUpdate(last_log_index=last_sequence),
             )
 
+    # Per-host job breakdown — best-effort, never fails the response
+    per_host: list[PerHostJobStatus] = []
+    try:
+        jobs = await list_jobs_for_incident(db, incident_id)
+        if jobs:
+            # Fetch hostnames for all agent_ids in one query
+            agent_ids = [j.agent_id for j in jobs if j.agent_id]
+            hostname_map: dict[str, str] = {}
+            if agent_ids:
+                dev_result = await db.execute(
+                    select(Device).where(Device.id.in_(agent_ids))
+                )
+                for dev in dev_result.scalars():
+                    hostname_map[dev.id] = dev.hostname
+
+            for job in jobs:
+                hostname = hostname_map.get(job.agent_id or "") if job.agent_id else None
+                per_host.append(PerHostJobStatus(
+                    job_id=job.id,
+                    hostname=hostname,
+                    status=job.status,
+                    module_count=len(job.modules) if job.modules else 0,
+                    message=job.message,
+                ))
+    except Exception as _exc:
+        logger.debug("Per-host job status lookup failed (non-fatal): %s", _exc)
+
     return CollectionStatusResponse(
         incident_id=incident.id,
         status=incident.status,
@@ -346,6 +373,7 @@ async def poll_collection_endpoint(
             )
             for entry in log_entries
         ],
+        jobs=per_host,
     )
 
 
@@ -469,7 +497,7 @@ async def get_incident_report(
     incident_id: str,
     format: str = Query(default="html", description="Report format: html or pdf"),
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> Response:
     from app.services.report_service import generate_incident_report
     try:
@@ -478,8 +506,23 @@ async def get_incident_report(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in incident_id)
+    fmt = format.lower()
 
-    if format.lower() == "pdf":
+    await safe_record_event(
+        db,
+        event_type="report.generated",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="backend",
+        action="generate incident report",
+        target_type="incident",
+        target_id=incident_id,
+        status="success",
+        message=f"Incident report generated in {fmt} format",
+        metadata={"format": fmt},
+    )
+
+    if fmt == "pdf":
         pdf_bytes = await _render_pdf(html_content)
         return Response(
             content=pdf_bytes,
@@ -505,6 +548,21 @@ async def delete_incident_endpoint(
 ) -> dict:
     if await has_evidence_for_incident(db, incident_id):
         raise HTTPException(status_code=409, detail="Incident has evidence; deletion blocked")
+
+    # Block deletion if an active legal hold exists for this incident
+    from app.models.platform_features import LegalHold
+    hold_result = await db.execute(
+        select(LegalHold.id).where(
+            LegalHold.incident_id == incident_id,
+            LegalHold.status == "ACTIVE",
+        ).limit(1)
+    )
+    if hold_result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=409,
+            detail="Incident has an active legal hold; release it before deletion",
+        )
+
     deleted = await delete_incident(db, incident_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Incident not found")

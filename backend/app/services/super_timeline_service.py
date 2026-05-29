@@ -618,7 +618,8 @@ async def build_super_timeline_background(
                 _wh = getattr(_rt, "webhook_url", None) or ""
             if _wh:
                 await notify_super_timeline_complete(
-                    incident_id, len(host_set), event_count, _wh
+                    incident_id, len(host_set), event_count, _wh,
+                    getattr(_rt, "webhook_secret", None),
                 )
         except Exception as _nex:
             logger.debug("SuperTimeline notification failed (non-fatal): %s", _nex)

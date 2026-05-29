@@ -6,7 +6,7 @@ from jwt import InvalidTokenError as JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
-from app.core.security import decode_access_token
+from app.core.security import decode_access_token, is_token_revoked
 from app.services.audit_log_service import safe_record_event
 from app.crud.user import get_user_by_username
 from app.db.session import AsyncSessionLocal
@@ -50,6 +50,9 @@ async def get_current_user(
     subject = payload.get("sub")
     if not subject:
         raise HTTPException(status_code=401, detail="Invalid token")
+    jti = payload.get("jti")
+    if jti and is_token_revoked(jti):
+        raise HTTPException(status_code=401, detail="Token has been revoked")
     user = await get_user_by_username(db, str(subject))
     if not user:
         raise HTTPException(status_code=401, detail="User not found")

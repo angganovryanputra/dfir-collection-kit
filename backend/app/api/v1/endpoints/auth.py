@@ -38,8 +38,12 @@ def _check_ip_rate_limit(client_ip: str) -> None:
             headers={"Retry-After": str(_IP_WINDOW_SEC)},
         )
 
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 from app.core.deps import get_current_user, get_db
-from app.core.security import create_access_token, verify_password
+from app.core.security import create_access_token, verify_password, revoke_token, decode_access_token
+
+_bearer = HTTPBearer(auto_error=False)
 from app.crud.audit_log import count_recent_login_failures
 from app.crud.user import get_user_by_username, update_last_login
 from app.models.user import User
@@ -175,9 +179,21 @@ async def login(
 
 @router.post("/logout", status_code=204)
 async def logout(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    # Revoke the presented token so it cannot be reused after logout
+    if credentials:
+        try:
+            payload = decode_access_token(credentials.credentials)
+            jti = payload.get("jti")
+            exp = payload.get("exp", 0)
+            if jti:
+                revoke_token(jti, float(exp))
+        except Exception:
+            pass  # best-effort — don't fail the logout if revocation fails
+
     await safe_record_event(
         db,
         event_type="auth.logout",

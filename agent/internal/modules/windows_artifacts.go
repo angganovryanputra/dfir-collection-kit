@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -602,6 +603,41 @@ func (m *WindowsUSNJrnlVSS) Run(ctx context.Context, mctx ModuleContext, params 
 		msg := fmt.Sprintf("VSS $UsnJrnl:$J copy failed: %v", copyErr)
 		_ = WriteNotFound(outputPath+".error.txt", msg)
 		return NewWarningError(msg)
+	}
+	return nil
+}
+
+// ── VSS Shadow Copy Enumeration ───────────────────────────────────────────────
+// Lists all Volume Shadow Copies using vssadmin. Output is plain text that
+// captures the shadow ID, origin volume, creation time, and provider for each
+// snapshot — useful for reconstructing the timeline of VSS activity and
+// assessing whether ransomware cleared snapshots.
+
+type WindowsVSSEnumerate struct{ BaseWindowsModule }
+
+func NewWindowsVSSEnumerate() *WindowsVSSEnumerate {
+	return &WindowsVSSEnumerate{BaseWindowsModule{Module: NewModule(
+		"windows_vss_enumerate",
+		"artifacts/windows/vss/shadow_copies.txt",
+	)}}
+}
+
+func (m *WindowsVSSEnumerate) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
+		return fmt.Errorf("failed to create output dir: %w", err)
+	}
+
+	cmd := exec.CommandContext(ctx, "vssadmin", "list", "shadows", "/for=C:")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		// vssadmin may not exist (Server Core) or may require elevation.
+		note := fmt.Sprintf("vssadmin list shadows failed: %v\nOutput: %s", err, strings.TrimSpace(string(out)))
+		_ = WriteNotFound(outputPath, note)
+		return NewWarningError(note)
+	}
+
+	if writeErr := os.WriteFile(outputPath, out, 0644); writeErr != nil {
+		return fmt.Errorf("failed to write VSS enumeration output: %w", writeErr)
 	}
 	return nil
 }

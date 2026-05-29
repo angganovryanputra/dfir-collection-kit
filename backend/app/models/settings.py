@@ -30,6 +30,7 @@ class SystemSettings(Base):
     auto_process: Mapped[bool] = mapped_column(Boolean, server_default="true", default=True)
     # Notification settings
     webhook_url: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    webhook_secret: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     notification_email: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     agent_binary_path: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     # S3 Object Storage Settings for Evidence Vault

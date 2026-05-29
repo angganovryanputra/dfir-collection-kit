@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
+import { useAdaptivePolling } from "@/lib/useAdaptivePolling";
 import { Button } from "@/components/ui/button";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { WarningBanner } from "@/components/WarningBanner";
@@ -20,7 +21,7 @@ import { getStoredRole, isViewerRole } from "@/lib/auth";
 
 
 type IncidentSummary = {
-  id: string; A
+  id: string;
   type: string;
   status: string;
   target_endpoints: string[];
@@ -58,6 +59,14 @@ type CollectionLogResponse = {
   timestamp: string;
 };
 
+type PerHostJobStatus = {
+  job_id: string;
+  hostname: string | null;
+  status: string;
+  module_count: number;
+  message: string | null;
+};
+
 type CollectionStatusResponse = {
   incident_id: string;
   status: string;
@@ -65,6 +74,7 @@ type CollectionStatusResponse = {
   phase: string | null;
   logs: CollectionLogResponse[];
   last_log_index: number;
+  jobs: PerHostJobStatus[];
 };
 
 type EvidenceFolderResponse = {
@@ -127,10 +137,11 @@ export default function CollectionExecution() {
   });
   const [completionMessage, setCompletionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [perHostJobs, setPerHostJobs] = useState<PerHostJobStatus[]>([]);
   const [isStarting, setIsStarting] = useState(false);
   const [isAborting, setIsAborting] = useState(false);
   const isViewer = isViewerRole(getStoredRole());
-  const pollerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [pollingEnabled, setPollingEnabled] = useState(false);
   const startedRef = useRef(false);
   const startedAtRef = useRef<number | null>(null);
 
@@ -177,6 +188,7 @@ export default function CollectionExecution() {
         await apiPost(`/incidents/${incidentId}/collect`, collectBody);
         startedRef.current = true;
         startedAtRef.current = Date.now();
+        setPollingEnabled(true);
         setErrorMessage(null);
       } catch {
         setErrorMessage("Unable to start collection.");
@@ -188,85 +200,80 @@ export default function CollectionExecution() {
     startCollection();
   }, [incidentId, isViewer]);
 
-  useEffect(() => {
-    const pollStatus = async () => {
-      if (!incidentId || !startedRef.current) return;
-      try {
-        const status = await apiPost<CollectionStatusResponse>(
-          `/incidents/${incidentId}/collect/poll`,
-          {}
+  const handlePoll = useCallback(async (): Promise<string | null> => {
+    if (!incidentId || !startedRef.current) return null;
+    try {
+      const status = await apiPost<CollectionStatusResponse>(
+        `/incidents/${incidentId}/collect/poll`,
+        {}
+      );
+      if (status.logs.length > 0) {
+        setLogs((prev) => [
+          ...prev,
+          ...status.logs.map((entry) => ({
+            timestamp: new Date(entry.timestamp).toLocaleTimeString("en-US", { hour12: false }),
+            level: entry.level,
+            message: entry.message,
+          })),
+        ]);
+      }
+      if (status.jobs && status.jobs.length > 0) {
+        setPerHostJobs(status.jobs);
+      }
+      setElapsedTime(() => {
+        if (startedAtRef.current) {
+          return Math.floor((Date.now() - startedAtRef.current) / 1000);
+        }
+        return 0;
+      });
+      if (status.status === "COLLECTION_COMPLETE") {
+        setIsComplete(true);
+        setCompletionMessage("Collection complete. Evidence locked and chain-of-custody updated.");
+        setPhases((prev) =>
+          prev.map((phase) => ({ ...phase, status: "complete", progress: 100 }))
         );
-        if (status.logs.length > 0) {
-          setLogs((prev) => [
-            ...prev,
-            ...status.logs.map((entry) => ({
-              timestamp: new Date(entry.timestamp).toLocaleTimeString("en-US", { hour12: false }),
-              level: entry.level,
-              message: entry.message,
-            })),
-          ]);
-        }
-        setElapsedTime(() => {
-          if (startedAtRef.current) {
-            return Math.floor((Date.now() - startedAtRef.current) / 1000);
-          }
-          return 0;
-        });
-        if (status.status === "COLLECTION_COMPLETE") {
-          setIsComplete(true);
-          setCompletionMessage("Collection complete. Evidence locked and chain-of-custody updated.");
-          setPhases((prev) =>
-            prev.map((phase) => ({ ...phase, status: "complete", progress: 100 }))
-          );
-          if (pollerRef.current) {
-            clearInterval(pollerRef.current);
-            pollerRef.current = null;
-          }
-        } else if (status.status === "COLLECTION_FAILED") {
-          setIsComplete(false);
-          setErrorMessage("Collection failed. Review logs for details.");
-          setCompletionMessage(null);
-          setPhases((prev) =>
-            prev.map((phase) =>
-              phase.status === "active" ? { ...phase, status: "error" } : phase
-            )
-          );
-          if (pollerRef.current) {
-            clearInterval(pollerRef.current);
-            pollerRef.current = null;
-          }
-        } else {
-          const activePhaseId = resolveActivePhaseId(status.phase);
-          setPhases((prev) =>
-            prev.map((phase) => {
-              const phaseIdx = PHASES.findIndex((p) => p.id === phase.id);
-              const activeIdx = PHASES.findIndex((p) => p.id === activePhaseId);
-              if (phaseIdx < activeIdx) return { ...phase, status: "complete", progress: 100 };
-              if (phase.id === activePhaseId) {
-                const prog = phase.id === "collecting" ? status.progress : undefined;
-                return { ...phase, status: "active", progress: prog };
-              }
-              return { ...phase, status: "pending", progress: undefined };
-            })
-          );
-        }
-      } catch {
-        setErrorMessage("Unable to poll collection status.");
+        setPollingEnabled(false);
+        return null;
       }
-    };
-
-    if (incidentId) {
-      pollStatus();
-      pollerRef.current = setInterval(pollStatus, 3000);
+      if (status.status === "COLLECTION_FAILED") {
+        setIsComplete(false);
+        setErrorMessage("Collection failed. Review logs for details.");
+        setCompletionMessage(null);
+        setPhases((prev) =>
+          prev.map((phase) =>
+            phase.status === "active" ? { ...phase, status: "error" } : phase
+          )
+        );
+        setPollingEnabled(false);
+        return null;
+      }
+      const activePhaseId = resolveActivePhaseId(status.phase);
+      setPhases((prev) =>
+        prev.map((phase) => {
+          const phaseIdx = PHASES.findIndex((p) => p.id === phase.id);
+          const activeIdx = PHASES.findIndex((p) => p.id === activePhaseId);
+          if (phaseIdx < activeIdx) return { ...phase, status: "complete", progress: 100 };
+          if (phase.id === activePhaseId) {
+            const prog = phase.id === "collecting" ? status.progress : undefined;
+            return { ...phase, status: "active", progress: prog };
+          }
+          return { ...phase, status: "pending", progress: undefined };
+        })
+      );
+      return `${status.status}:${status.phase ?? ""}`;
+    } catch {
+      setErrorMessage("Unable to poll collection status.");
+      return null;
     }
-
-    return () => {
-      if (pollerRef.current) {
-        clearInterval(pollerRef.current);
-        pollerRef.current = null;
-      }
-    };
   }, [incidentId]);
+
+  useAdaptivePolling({
+    enabled: pollingEnabled,
+    onPoll: handlePoll,
+    initialInterval: 2000,
+    maxInterval: 30_000,
+    backoffFactor: 1.5,
+  });
 
   useEffect(() => {
     const fetchExistingEvidence = async () => {
@@ -308,10 +315,7 @@ export default function CollectionExecution() {
       }
       await apiPost(`/jobs/${activeJob.id}/cancel`, {});
       setErrorMessage("Collection aborted by operator.");
-      if (pollerRef.current) {
-        clearInterval(pollerRef.current);
-        pollerRef.current = null;
-      }
+      setPollingEnabled(false);
     } catch {
       setErrorMessage("Failed to abort collection. Try again.");
     } finally {
@@ -437,6 +441,33 @@ export default function CollectionExecution() {
             <TacticalPanel title="COLLECTION PHASES" status={isComplete ? "online" : "active"}>
               <ProgressPhase phases={phases} />
             </TacticalPanel>
+
+            {/* Per-host progress */}
+            {perHostJobs.length > 1 && (
+              <TacticalPanel title="PER-HOST STATUS">
+                <div className="space-y-1.5 font-mono text-xs">
+                  {perHostJobs.map((job) => {
+                    const st = job.status.toLowerCase();
+                    const isOk = st === "done" || st === "complete";
+                    const isErr = st === "failed" || st === "cancelled";
+                    return (
+                      <div key={job.job_id} className="flex items-center gap-2 py-1 border-b border-border/30 last:border-0">
+                        <div className={`w-2 h-2 rounded-full shrink-0 ${isOk ? "bg-primary" : isErr ? "bg-destructive" : "bg-yellow-500 animate-pulse"}`} />
+                        <span className="truncate flex-1 text-foreground">
+                          {job.hostname ?? job.job_id.split("-").pop() ?? job.job_id}
+                        </span>
+                        <span className={`shrink-0 uppercase tracking-wider ${isOk ? "text-primary" : isErr ? "text-destructive" : "text-muted-foreground"}`}>
+                          {job.status}
+                        </span>
+                        <span className="shrink-0 text-muted-foreground">
+                          {job.module_count}m
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </TacticalPanel>
+            )}
 
             {/* Actions */}
             <div className="space-y-3">

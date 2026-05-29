@@ -123,6 +123,7 @@ func Init() error {
 	Register(NewWindowsUSBHistory())
 	Register(NewWindowsMFTVSS())
 	Register(NewWindowsUSNJrnlVSS())
+	Register(NewWindowsVSSEnumerate())
 
 	// Register additional Windows modules (execution history, user activity, Defender, firewall, SRUM)
 	Register(NewWindowsPowerShellHistory())
