@@ -28,6 +28,33 @@ logger = logging.getLogger(__name__)
 
 _SUBPROCESS_TIMEOUT = 600  # 10 minutes per tool
 
+
+# ── Phase checkpoint helpers ──────────────────────────────────────────────────
+
+def _phase_marker(base_path: Path, phase: int) -> Path:
+    return base_path / f".phase{phase}_done"
+
+
+def _phase_is_done(base_path: Path, phase: int) -> bool:
+    return _phase_marker(base_path, phase).exists()
+
+
+def _mark_phase_done(base_path: Path, phase: int) -> None:
+    try:
+        _phase_marker(base_path, phase).write_text(datetime.now(timezone.utc).isoformat())
+    except OSError as exc:
+        logger.warning("Failed to write phase marker %d: %s", phase, exc)
+
+
+def _clear_phase_markers(base_path: Path) -> None:
+    for phase in range(1, 4):
+        marker = _phase_marker(base_path, phase)
+        if marker.exists():
+            try:
+                marker.unlink()
+            except OSError as exc:
+                logger.warning("Failed to remove phase marker %d: %s", phase, exc)
+
 # EZ Tools DLL paths relative to ez_tools_path root directory
 _EZ_TOOLS_DLLS: dict[str, str] = {
     "EvtxECmd": "EvtxECmd/EvtxECmd.dll",
@@ -488,10 +515,14 @@ async def run_parsing_pipeline(
     job_id: str,
     base_path: Path,
     db: AsyncSession,
+    *,
+    force: bool = False,
 ) -> str:
     """
     Run the full three-phase pipeline for a completed evidence collection.
     Creates a ProcessingJob record and updates it throughout.
+    Phase checkpointing: on FAILED re-trigger, completed phases are skipped.
+    Set force=True to ignore phase markers and re-run everything from scratch.
     Returns the ProcessingJob ID.
     """
     from app.services.system_settings_service import get_runtime_settings
@@ -501,6 +532,9 @@ async def run_parsing_pipeline(
     if existing and existing.status in ("RUNNING", "DONE"):
         logger.info("Pipeline already %s for job %s — skipping", existing.status, job_id)
         return existing.id
+
+    if force:
+        _clear_phase_markers(base_path)
 
     proc_job_id = f"proc-{job_id}"
     if not existing:
@@ -522,72 +556,84 @@ async def run_parsing_pipeline(
 
     try:
         # ── Phase 1: EZ Tools ──────────────────────────────────────────────
-        ez_tools_path = getattr(settings, "ez_tools_path", "") or ""
-        parsing_stats = await _run_parsing_phase(extracted_dir, parsed_dir, ez_tools_path)
-        total_parsed = sum(parsing_stats.values())
-        logger.info("Parsing complete for job %s: %s", job_id, parsing_stats)
-        await _add_coc_entry(
-            db, incident_id,
-            "ARTIFACT PARSING COMPLETE",
-            f"{total_parsed} artifacts parsed via EZ Tools",
-        )
-        await db.commit()
+        if _phase_is_done(base_path, 1):
+            logger.info("Phase 1 (EZ Tools) already done for job %s — skipping", job_id)
+        else:
+            ez_tools_path = getattr(settings, "ez_tools_path", "") or ""
+            parsing_stats = await _run_parsing_phase(extracted_dir, parsed_dir, ez_tools_path)
+            total_parsed = sum(parsing_stats.values())
+            logger.info("Parsing complete for job %s: %s", job_id, parsing_stats)
+            await _add_coc_entry(
+                db, incident_id,
+                "ARTIFACT PARSING COMPLETE",
+                f"{total_parsed} artifacts parsed via EZ Tools",
+            )
+            await db.commit()
+            _mark_phase_done(base_path, 1)
 
         # ── Phase 2: Sigma detection ────────────────────────────────────────
         await update_processing_job(db, proc_job_id, phase="sigma")
         await db.commit()
 
-        chainsaw_path = getattr(settings, "chainsaw_path", "") or ""
-        sigma_rules_path = getattr(settings, "sigma_rules_path", "") or ""
-        hayabusa_path = getattr(settings, "hayabusa_path", "") or ""
-        hits_count = await _run_sigma_phase(
-            extracted_dir, sigma_dir,
-            chainsaw_path, sigma_rules_path,
-            hayabusa_path,
-            incident_id, proc_job_id, db,
-        )
-        logger.info("Sigma phase complete for job %s: %d hits", job_id, hits_count)
+        if _phase_is_done(base_path, 2):
+            logger.info("Phase 2 (Sigma) already done for job %s — skipping", job_id)
+            hits_count = 0
+        else:
+            chainsaw_path = getattr(settings, "chainsaw_path", "") or ""
+            sigma_rules_path = getattr(settings, "sigma_rules_path", "") or ""
+            hayabusa_path = getattr(settings, "hayabusa_path", "") or ""
+            hits_count = await _run_sigma_phase(
+                extracted_dir, sigma_dir,
+                chainsaw_path, sigma_rules_path,
+                hayabusa_path,
+                incident_id, proc_job_id, db,
+            )
+            logger.info("Sigma phase complete for job %s: %d hits", job_id, hits_count)
 
-        # Fire notification for critical/high Sigma hits (best-effort)
-        try:
-            if hits_count > 0:
-                from app.services.notification_service import notify_critical_sigma_hit
-                from app.crud.processing import list_sigma_hits
+            # Fire notification for critical/high Sigma hits (best-effort)
+            try:
+                if hits_count > 0:
+                    from app.services.notification_service import notify_critical_sigma_hit
+                    from app.crud.processing import list_sigma_hits
 
-                # Find the most severe hit to report
-                _hits, _ = await list_sigma_hits(db, incident_id, "critical", 1, 0)
-                if not _hits:
-                    _hits, _ = await list_sigma_hits(db, incident_id, "high", 1, 0)
-                if _hits:
-                    _top = _hits[0]
-                    _runtime2 = await get_runtime_settings(db)
-                    _wh2 = getattr(_runtime2, "webhook_url", None) or ""
-                    if _wh2:
-                        await notify_critical_sigma_hit(
-                            incident_id, proc_job_id, _top.rule_name, _top.severity, _wh2
-                        )
-        except Exception as _sex:
-            logger.debug("Sigma notification failed (non-fatal): %s", _sex)
+                    _hits, _ = await list_sigma_hits(db, incident_id, "critical", 1, 0)
+                    if not _hits:
+                        _hits, _ = await list_sigma_hits(db, incident_id, "high", 1, 0)
+                    if _hits:
+                        _top = _hits[0]
+                        _runtime2 = await get_runtime_settings(db)
+                        _wh2 = getattr(_runtime2, "webhook_url", None) or ""
+                        if _wh2:
+                            await notify_critical_sigma_hit(
+                                incident_id, proc_job_id, _top.rule_name, _top.severity, _wh2
+                            )
+            except Exception as _sex:
+                logger.debug("Sigma notification failed (non-fatal): %s", _sex)
 
-        await _add_coc_entry(
-            db, incident_id,
-            "SIGMA DETECTION COMPLETE",
-            f"{hits_count} sigma hits detected",
-        )
-        await db.commit()
+            await _add_coc_entry(
+                db, incident_id,
+                "SIGMA DETECTION COMPLETE",
+                f"{hits_count} sigma hits detected",
+            )
+            await db.commit()
+            _mark_phase_done(base_path, 2)
 
         # ── Phase 3: Timeline export ────────────────────────────────────────
         await update_processing_job(db, proc_job_id, phase="timeline")
         await db.commit()
 
-        entries = await export_to_jsonl(parsed_dir, sigma_dir, timeline_dir, incident_id)
-        logger.info("Timeline phase complete for job %s: %d entries", job_id, entries)
-        await _add_coc_entry(
-            db, incident_id,
-            "TIMELINE GENERATED",
-            f"{entries} entries written to timeline.jsonl",
-        )
-        await db.commit()
+        if _phase_is_done(base_path, 3):
+            logger.info("Phase 3 (Timeline) already done for job %s — skipping", job_id)
+        else:
+            entries = await export_to_jsonl(parsed_dir, sigma_dir, timeline_dir, incident_id)
+            logger.info("Timeline phase complete for job %s: %d entries", job_id, entries)
+            await _add_coc_entry(
+                db, incident_id,
+                "TIMELINE GENERATED",
+                f"{entries} entries written to timeline.jsonl",
+            )
+            await db.commit()
+            _mark_phase_done(base_path, 3)
 
         # ── Phase 4: Advanced analytics (best-effort — never fail pipeline) ─
         await update_processing_job(db, proc_job_id, phase="analytics")

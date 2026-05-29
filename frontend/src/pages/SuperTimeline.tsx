@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -436,7 +436,7 @@ function detectIOCs(text: string): DetectedIOC[] {
 
 // ─── Event Histogram ─────────────────────────────────────────────────────────
 
-function EventHistogram({
+const EventHistogram = memo(function EventHistogram({
     data,
     onSelectWindow,
 }: {
@@ -523,7 +523,7 @@ function EventHistogram({
             </div>
         </div>
     );
-}
+});
 
 // ─── Compare Panel ────────────────────────────────────────────────────────────
 
@@ -1010,7 +1010,7 @@ export default function SuperTimeline() {
         const shouldPoll =
             stStatus?.status === "BUILDING" || stStatus?.status === "PENDING";
         if (shouldPoll) {
-            pollingRef.current = setInterval(fetchStatus, 3000);
+            pollingRef.current = setInterval(fetchStatus, 5000);
         } else {
             if (pollingRef.current !== null) {
                 clearInterval(pollingRef.current);
@@ -1376,6 +1376,32 @@ export default function SuperTimeline() {
         );
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [rows, debouncedSearch]);
+
+    // O(1) set for lateral-movement window membership — avoids Array.some() per row render.
+    const lmWindowSet = useMemo(() => {
+        const set = new Set<object>();
+        if (lmWindows.length === 0) return set;
+        for (const row of rows) {
+            const dtMs = new Date(String(row["datetime"] ?? row["timestamp"] ?? "")).getTime();
+            const host = String(row["host"] ?? row["computer"] ?? "UNKNOWN");
+            if (!isNaN(dtMs) && lmWindows.some(
+                (w) => dtMs >= w.firstMs && dtMs <= w.lastMs && (w.srcHost === host || w.tgtHost === host)
+            )) {
+                set.add(row);
+            }
+        }
+        return set;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [rows, lmWindows]);
+
+    // Tag filter applied once per {rows, tagFilterActive, eventTags} — not inline per render.
+    const filteredRows = useMemo(() => {
+        if (!tagFilterActive) return rows;
+        return rows.filter((row) => {
+            const h = eventHashCache.get(row) ?? hashEvent(row);
+            return eventTags[h] === tagFilterActive;
+        });
+    }, [rows, tagFilterActive, eventTags, eventHashCache]);
 
     useEffect(() => {
         if (!isDone) return;
@@ -2029,11 +2055,7 @@ export default function SuperTimeline() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {timelineData.data.filter((row) => {
-                                            if (!tagFilterActive) return true;
-                                            const h = eventHashCache.get(row) ?? hashEvent(row);
-                                            return eventTags[h] === tagFilterActive;
-                                        }).map((row, i) => {
+                                        {filteredRows.map((row, i) => {
                                             const eventSeq   = row["event_seq"] != null ? Number(row["event_seq"]) + 1 : ((page - 1) * pageSize + i + 1);
                                             const host       = String(row["host"] ?? row["computer"] ?? "UNKNOWN");
                                             const color      = getHostColor(host, knownHosts);
@@ -2053,11 +2075,7 @@ export default function SuperTimeline() {
 
                                             // Row styling
                                             const isSigma = srcShort === "SIGMA" || srcShort === "HAYABUSA";
-                                            const dtMs = new Date(datetime).getTime();
-                                            const isInLmWindow = !isNaN(dtMs) && lmWindows.some(
-                                                (w) => dtMs >= w.firstMs && dtMs <= w.lastMs &&
-                                                       (w.srcHost === host || w.tgtHost === host)
-                                            );
+                                            const isInLmWindow = lmWindowSet.has(row);
 
                                             const rowCls = isSigma
                                                 ? "border-b border-red-500/20 bg-red-500/5 hover:bg-red-500/10"

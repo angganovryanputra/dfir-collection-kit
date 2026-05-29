@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -457,68 +458,128 @@ func sanitizeParams(logJob logging.JobLogger, params map[string]interface{}) map
 	return clean
 }
 
+// evidenceFile holds an inventory entry for a single evidence file.
+type evidenceFile struct {
+	abs  string
+	rel  string
+	size int64
+}
+
 // createEvidenceZip creates a ZIP archive of all collected evidence files.
+// If the total uncompressed size exceeds MaxEvidenceZipBytes the largest files
+// are dropped until the total fits, and an excluded_files.txt manifest is written
+// so investigators know which files were omitted rather than losing all evidence.
 func (e *Executor) createEvidenceZip(ctx context.Context, job *Job) error {
 	log := logging.WithJob(job.ID)
 	zipPath := filepath.Join(job.WorkDir, "collection.zip")
+	manifestPath := filepath.Join(job.WorkDir, "excluded_files.txt")
 	log.Info("Creating evidence ZIP: %s", zipPath)
 
-	zipFile, err := os.Create(zipPath)
-	if err != nil {
-		return fmt.Errorf("failed to create ZIP file: %w", err)
-	}
+	// ── Phase 1: inventory all files ──────────────────────────────────────────
+	var inventory []evidenceFile
+	var totalSize int64
 
-	w := zip.NewWriter(zipFile)
-
-	var zipSize int64
-	err = filepath.Walk(job.WorkDir, func(path string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	walkErr := filepath.Walk(job.WorkDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
 		}
-		// Skip directories and the ZIP file itself
-		if info.IsDir() || path == zipPath {
+		if info.IsDir() || path == zipPath || path == manifestPath {
 			return nil
-		}
-		// Respect context cancellation between files
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
 		}
 		relPath, err := filepath.Rel(job.WorkDir, path)
 		if err != nil {
 			return fmt.Errorf("failed to compute relative path for %s: %w", path, err)
 		}
-		fw, err := w.Create(relPath)
-		if err != nil {
-			return fmt.Errorf("failed to create ZIP entry %s: %w", relPath, err)
-		}
-		f, err := os.Open(path)
-		if err != nil {
-			return fmt.Errorf("failed to open file %s: %w", path, err)
-		}
-		defer f.Close()
-		n, err := io.Copy(fw, f)
-		if err != nil {
-			return fmt.Errorf("failed to write file %s to ZIP: %w", relPath, err)
-		}
-		zipSize += n
-		if zipSize > MaxEvidenceZipBytes {
-			return fmt.Errorf("evidence ZIP exceeds maximum size limit (%d GB)", MaxEvidenceZipBytes/1024/1024/1024)
-		}
+		inventory = append(inventory, evidenceFile{abs: path, rel: relPath, size: info.Size()})
+		totalSize += info.Size()
 		return nil
 	})
+	if walkErr != nil {
+		return fmt.Errorf("failed to inventory evidence directory: %w", walkErr)
+	}
 
-	// Close the writer and file before checking walk error so we can clean up.
+	// ── Phase 2: trim oversized collections ───────────────────────────────────
+	if totalSize > MaxEvidenceZipBytes {
+		log.Warning(
+			"Evidence total %d bytes exceeds ZIP limit (%d GB) — trimming largest files",
+			totalSize, MaxEvidenceZipBytes/1024/1024/1024,
+		)
+		// Sort largest-first so we drop the fewest files to get under the limit.
+		sort.Slice(inventory, func(i, j int) bool {
+			return inventory[i].size > inventory[j].size
+		})
+		var excluded []evidenceFile
+		for totalSize > MaxEvidenceZipBytes && len(inventory) > 0 {
+			drop := inventory[0]
+			inventory = inventory[1:]
+			totalSize -= drop.size
+			excluded = append(excluded, drop)
+			log.Warning("Excluding oversized file from ZIP: %s (%d bytes)", drop.rel, drop.size)
+		}
+		// Write exclusion manifest so analysts know what was omitted.
+		mf, err := os.Create(manifestPath)
+		if err == nil {
+			fmt.Fprintf(mf, "# Files excluded from collection.zip due to %d GB ZIP size limit\n", MaxEvidenceZipBytes/1024/1024/1024)
+			for _, f := range excluded {
+				fmt.Fprintf(mf, "%s\t%d\n", f.rel, f.size)
+			}
+			mf.Close()
+			// Include the manifest itself in the ZIP.
+			inventory = append(inventory, evidenceFile{
+				abs:  manifestPath,
+				rel:  "excluded_files.txt",
+				size: 0,
+			})
+		} else {
+			log.Warning("Failed to write exclusion manifest: %v", err)
+		}
+	}
+
+	// ── Phase 3: create ZIP from selected files ────────────────────────────────
+	zipFile, err := os.Create(zipPath)
+	if err != nil {
+		return fmt.Errorf("failed to create ZIP file: %w", err)
+	}
+	w := zip.NewWriter(zipFile)
+
+	var writeErr error
+	for _, ef := range inventory {
+		select {
+		case <-ctx.Done():
+			writeErr = ctx.Err()
+			goto closeZip
+		default:
+		}
+		func() {
+			fw, err := w.Create(ef.rel)
+			if err != nil {
+				writeErr = fmt.Errorf("failed to create ZIP entry %s: %w", ef.rel, err)
+				return
+			}
+			f, err := os.Open(ef.abs)
+			if err != nil {
+				writeErr = fmt.Errorf("failed to open file %s: %w", ef.abs, err)
+				return
+			}
+			defer f.Close()
+			if _, err = io.Copy(fw, f); err != nil {
+				writeErr = fmt.Errorf("failed to write %s to ZIP: %w", ef.rel, err)
+			}
+		}()
+		if writeErr != nil {
+			goto closeZip
+		}
+	}
+
+closeZip:
 	w.Close()
 	zipFile.Close()
 
-	if err != nil {
-		// Remove the incomplete/corrupt ZIP so a future retry starts clean.
+	if writeErr != nil {
 		if removeErr := os.Remove(zipPath); removeErr != nil && !os.IsNotExist(removeErr) {
 			log.Warning("Failed to remove incomplete ZIP %s: %v", zipPath, removeErr)
 		}
-		return fmt.Errorf("failed to create evidence ZIP: %w", err)
+		return fmt.Errorf("failed to create evidence ZIP: %w", writeErr)
 	}
 
 	log.Info("ZIP created successfully: %s", zipPath)

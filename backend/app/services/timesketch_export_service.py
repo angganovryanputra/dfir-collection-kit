@@ -1,6 +1,7 @@
 """Convert parsed EZ Tools CSVs, Sigma hits, and Linux text logs to Timesketch JSONL format."""
 from __future__ import annotations
 
+import asyncio
 import csv
 import json
 import logging
@@ -776,6 +777,70 @@ def _sigma_hits_to_entries(sigma_dir: Path, incident_id: str) -> list[dict]:
     return entries
 
 
+def _sort_in_memory(timeline_path: Path) -> int:
+    """Fallback: read JSONL, sort in memory, rewrite. Only used when DuckDB is unavailable."""
+    entries: list[dict] = []
+    try:
+        with timeline_path.open(encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    try:
+                        entries.append(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        entries.sort(key=lambda e: e.get("datetime") or "")
+        with timeline_path.open("w", encoding="utf-8") as fh:
+            for entry in entries:
+                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        return len(entries)
+    except Exception as exc:
+        logger.warning("In-memory sort failed: %s", exc)
+        return 0
+
+
+def _sort_and_finalize(timeline_path: Path, timeline_dir: Path) -> int:
+    """Sort timeline.jsonl via DuckDB disk-spilling ORDER BY, then rebuild DuckDB store."""
+    try:
+        import duckdb  # type: ignore[import]
+    except ImportError:
+        return _sort_in_memory(timeline_path)
+
+    sorted_tmp = timeline_path.with_suffix(".tmp.jsonl")
+    try:
+        path_str = str(timeline_path).replace("\\", "/")
+        tmp_str = str(sorted_tmp).replace("\\", "/")
+        con = duckdb.connect()
+        con.execute(
+            f"""
+            COPY (
+                SELECT * FROM read_json_auto(
+                    '{path_str}', format='newline_delimited', ignore_errors=true
+                )
+                ORDER BY datetime NULLS LAST
+            )
+            TO '{tmp_str}'
+            (FORMAT JSON, ARRAY FALSE)
+            """
+        )
+        count = con.execute(
+            f"SELECT COUNT(*) FROM read_json_auto('{tmp_str}', format='newline_delimited', ignore_errors=true)"
+        ).fetchone()[0]
+        con.close()
+        sorted_tmp.replace(timeline_path)
+        logger.info("DuckDB sort: %d rows → %s", count, timeline_path)
+        _build_duckdb_store(timeline_path, timeline_dir)
+        return count
+    except Exception as exc:
+        logger.warning("DuckDB sort failed (%s) — falling back to in-memory sort", exc)
+        if sorted_tmp.exists():
+            try:
+                sorted_tmp.unlink()
+            except OSError:
+                pass
+        return _sort_in_memory(timeline_path)
+
+
 async def export_to_jsonl(
     parsed_dir: Path,
     sigma_dir: Path,
@@ -784,72 +849,74 @@ async def export_to_jsonl(
 ) -> int:
     """
     Merge all parsed CSVs and sigma hits into a single Timesketch JSONL file.
+    Streams entries directly to disk (no in-memory accumulation) then sorts
+    via DuckDB disk-spilling ORDER BY to handle 1M+ event datasets without OOM.
     Returns number of entries written.
     """
     timeline_dir.mkdir(parents=True, exist_ok=True)
     timeline_path = timeline_dir / "timeline.jsonl"
+    count = 0
 
-    all_entries: list[dict] = []
-
-    # Collect entries from each parsed artifact subdirectory (EZ Tools CSVs)
-    if parsed_dir.exists():
-        for source_dir in sorted(parsed_dir.iterdir()):
-            if not source_dir.is_dir():
-                continue
-            source_key = source_dir.name  # e.g. "evtx", "mft", "prefetch"
-            for csv_file in sorted(source_dir.glob("*.csv")):
-                entries = _csv_to_entries(csv_file, source_key, incident_id)
-                all_entries.extend(entries)
-                logger.info(
-                    "Timeline: %d entries from %s/%s",
-                    len(entries), source_key, csv_file.name,
-                )
-
-    # Parse Linux text logs (auth.log, audit.log, syslog, journalctl, bash/zsh history)
-    # extracted_dir is the parent of parsed_dir
-    extracted_dir = parsed_dir.parent / "extracted"
-    if extracted_dir.exists():
-        linux_entries = _linux_logs_to_entries(extracted_dir, incident_id)
-        if linux_entries:
-            logger.info("Linux log entries: %d total", len(linux_entries))
-        all_entries.extend(linux_entries)
-
-        windows_text_entries = _windows_text_artifacts_to_entries(extracted_dir, incident_id)
-        if windows_text_entries:
-            logger.info("Windows text artifact entries: %d total", len(windows_text_entries))
-        all_entries.extend(windows_text_entries)
-
-        # Ingest agent-side parsed outputs (EVTX JSONL, Prefetch, LNK, Browser)
-        agent_entries = _agent_parsed_to_entries(extracted_dir, incident_id)
-        if agent_entries:
-            logger.info("Agent-parsed entries: %d total", len(agent_entries))
-        all_entries.extend(agent_entries)
-
-    # Add sigma hits
-    sigma_entries = _sigma_hits_to_entries(sigma_dir, incident_id)
-    all_entries.extend(sigma_entries)
-
-    # Sort by datetime (best-effort)
-    def _sort_key(e: dict) -> str:
-        return e.get("datetime") or ""
-
-    all_entries.sort(key=_sort_key)
-
-    # Write JSONL
     try:
         with timeline_path.open("w", encoding="utf-8") as fh:
-            for entry in all_entries:
-                fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            def _write_batch(entries: list[dict]) -> int:
+                for entry in entries:
+                    fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+                return len(entries)
+
+            # EZ Tools CSVs — one batch per file
+            if parsed_dir.exists():
+                for source_dir in sorted(parsed_dir.iterdir()):
+                    if not source_dir.is_dir():
+                        continue
+                    source_key = source_dir.name
+                    for csv_file in sorted(source_dir.glob("*.csv")):
+                        entries = _csv_to_entries(csv_file, source_key, incident_id)
+                        batch_count = _write_batch(entries)
+                        count += batch_count
+                        logger.info(
+                            "Timeline: %d entries from %s/%s",
+                            batch_count, source_key, csv_file.name,
+                        )
+
+            # Linux/Windows text logs and agent-parsed outputs
+            extracted_dir = parsed_dir.parent / "extracted"
+            if extracted_dir.exists():
+                linux_entries = _linux_logs_to_entries(extracted_dir, incident_id)
+                count += _write_batch(linux_entries)
+                if linux_entries:
+                    logger.info("Linux log entries: %d total", len(linux_entries))
+
+                windows_text_entries = _windows_text_artifacts_to_entries(extracted_dir, incident_id)
+                count += _write_batch(windows_text_entries)
+                if windows_text_entries:
+                    logger.info("Windows text artifact entries: %d total", len(windows_text_entries))
+
+                agent_entries = _agent_parsed_to_entries(extracted_dir, incident_id)
+                count += _write_batch(agent_entries)
+                if agent_entries:
+                    logger.info("Agent-parsed entries: %d total", len(agent_entries))
+
+            # Sigma hits
+            sigma_entries = _sigma_hits_to_entries(sigma_dir, incident_id)
+            count += _write_batch(sigma_entries)
+
     except OSError as exc:
         logger.error("Failed to write timeline.jsonl: %s", exc)
         raise
 
-    logger.info("Timeline export complete: %d entries → %s", len(all_entries), timeline_path)
+    logger.info("Timeline stream-write complete: %d entries → %s", count, timeline_path)
 
-    # Build persistent DuckDB store for fast ad-hoc queries
-    _build_duckdb_store(timeline_path, timeline_dir)
+    # Sort via DuckDB (disk-spilling) and rebuild DuckDB store
+    final_count = await asyncio.to_thread(_sort_and_finalize, timeline_path, timeline_dir)
+    if final_count != count:
+        logger.warning(
+            "Timeline count mismatch after sort: written=%d, final=%d", count, final_count
+        )
+        count = final_count
 
-    return len(all_entries)
+    logger.info("Timeline export complete: %d entries", count)
+    return count
 
 
 def _build_duckdb_store(timeline_path: Path, timeline_dir: Path) -> None:
