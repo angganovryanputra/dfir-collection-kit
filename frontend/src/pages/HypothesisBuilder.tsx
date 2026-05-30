@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -41,6 +41,7 @@ const CONFIDENCE_COLORS: Record<string, string> = {
 export default function HypothesisBuilder() {
   const navigate = useNavigate();
   const { id: incidentId } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
   const qc = useQueryClient();
   const { toast } = useToast();
   const role = getStoredRole();
@@ -57,6 +58,20 @@ export default function HypothesisBuilder() {
     status: "OPEN",
     evidence_refs: "",
   });
+
+  // Handle pre-filled data from URL
+  useEffect(() => {
+    const preTitle = searchParams.get("title");
+    const preEvidence = searchParams.get("evidence");
+    if (preTitle || preEvidence) {
+      setForm((prev) => ({
+        ...prev,
+        title: preTitle || prev.title,
+        evidence_refs: preEvidence || prev.evidence_refs,
+      }));
+      setShowForm(true);
+    }
+  }, [searchParams]);
 
   const { data: hypotheses = [], isLoading } = useQuery<Hypothesis[]>({
     queryKey: ["hypotheses", incidentId],
@@ -301,3 +316,35 @@ export default function HypothesisBuilder() {
     </AppLayout>
   );
 }
+ Here is the updated code:
+...
+import { useState, useEffect } from "react";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { AppLayout } from "@/components/layout/AppLayout";
+...
+  const navigate = useNavigate();
+  const { id: incidentId } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const qc = useQueryClient();
+  const { toast } = useToast();
+...
+    evidence_refs: "",
+  });
+
+  // Handle pre-filled data from URL
+  useEffect(() => {
+    const preTitle = searchParams.get("title");
+    const preEvidence = searchParams.get("evidence");
+    if (preTitle || preEvidence) {
+      setForm((prev) => ({
+        ...prev,
+        title: preTitle || prev.title,
+        evidence_refs: preEvidence || prev.evidence_refs,
+      }));
+      setShowForm(true);
+    }
+  }, [searchParams]);
+
+  const { data: hypotheses = [], isLoading } = useQuery<Hypothesis[]>({
+...

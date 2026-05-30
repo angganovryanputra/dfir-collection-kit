@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { 
-    X, Server, Clock, User, Shield, ExternalLink, Bookmark as BookmarkIcon, Check, Copy, Tag, MessageSquare
+    X, Server, Clock, User, Shield, ExternalLink, Bookmark as BookmarkIcon, Check, Copy, Tag, MessageSquare, Target
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { 
@@ -25,6 +26,7 @@ export function EventDetailPanel({
     event, knownHosts, onClose, onFilterSearch, incidentId,
     isBookmarked, onBookmarkToggle, onNavigateIOC
 }: EventDetailPanelProps) {
+    const navigate = useNavigate();
     const [noteInput, setNoteInput] = useState("");
     const [copied, setCopied] = useState<string | null>(null);
 
@@ -37,6 +39,16 @@ export function EventDetailPanel({
         navigator.clipboard.writeText(val);
         setCopied(label);
         setTimeout(() => setCopied(null), 2000);
+    };
+
+    const handlePivotHypothesis = () => {
+        const title = `Investigation: ${truncate(message, 50)}`;
+        const evidence = `Event at ${event["datetime"]} on ${host}\nSource: ${event["source"]}\nMessage: ${message}`;
+        const params = new URLSearchParams({
+            title,
+            evidence,
+        });
+        navigate(`/incidents/${incidentId}/hypotheses?${params.toString()}`);
     };
 
     return (
@@ -63,6 +75,18 @@ export function EventDetailPanel({
                     <div className="text-sm font-bold text-foreground leading-relaxed">
                         {message}
                     </div>
+                </div>
+
+                <div className="flex gap-2 shrink-0">
+                    <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="flex-1 h-8 text-[10px] font-bold gap-2"
+                        onClick={handlePivotHypothesis}
+                    >
+                        <Target className="w-3.5 h-3.5" />
+                        ADD TO HYPOTHESIS
+                    </Button>
                 </div>
 
                 {/* Artifact Metadata */}
@@ -216,3 +240,62 @@ export function ComparePanel({
         </div>
     );
 }
+ Here is the updated code:
+...
+import React, { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import { 
+    X, Server, Clock, User, Shield, ExternalLink, Bookmark as BookmarkIcon, Check, Copy, Tag, MessageSquare, Target
+} from "lucide-react";
+import { Button } from "@/components/ui/button";
+...
+    onBookmarkToggle: (event: Record<string, unknown>, note: string) => void;
+    onNavigateIOC: (value: string, type: string) => void;
+}
+
+export function EventDetailPanel({
+    event, knownHosts, onClose, onFilterSearch, incidentId,
+    isBookmarked, onBookmarkToggle, onNavigateIOC
+}: EventDetailPanelProps) {
+    const navigate = useNavigate();
+    const [noteInput, setNoteInput] = useState("");
+    const [copied, setCopied] = useState<string | null>(null);
+...
+    const handleCopy = (val: string, label: string) => {
+        navigator.clipboard.writeText(val);
+        setCopied(label);
+        setTimeout(() => setCopied(null), 2000);
+    };
+
+    const handlePivotHypothesis = () => {
+        const title = `Investigation: ${truncate(message, 50)}`;
+        const evidence = `Event at ${event["datetime"]} on ${host}\nSource: ${event["source"]}\nMessage: ${message}`;
+        const params = new URLSearchParams({
+            title,
+            evidence,
+        });
+        navigate(`/incidents/${incidentId}/hypotheses?${params.toString()}`);
+    };
+
+    return (
+...
+                    <div className="text-sm font-bold text-foreground leading-relaxed">
+                        {message}
+                    </div>
+                </div>
+
+                <div className="flex gap-2 shrink-0">
+                    <Button 
+                        variant="outline" 
+                        size="sm" 
+                        className="flex-1 h-8 text-[10px] font-bold gap-2"
+                        onClick={handlePivotHypothesis}
+                    >
+                        <Target className="w-3.5 h-3.5" />
+                        ADD TO HYPOTHESIS
+                    </Button>
+                </div>
+
+                {/* Artifact Metadata */}
+                <div className="space-y-2">
+...

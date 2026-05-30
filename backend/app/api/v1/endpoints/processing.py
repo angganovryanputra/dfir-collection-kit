@@ -196,6 +196,7 @@ async def get_sigma_hits_for_incident(
     severity: str | None = Query(default=None),
     limit: int = Query(default=100, le=500),
     offset: int = Query(default=0),
+    q: str | None = Query(default=None, description="Text search across rule_name and artifact_file"),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> SigmaHitListOut:
@@ -205,7 +206,7 @@ async def get_sigma_hits_for_incident(
         raise HTTPException(status_code=400, detail=f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}")
     if severity is not None:
         severity = severity.lower()
-    hits, total = await list_sigma_hits(db, incident_id, severity, limit, offset)
+    hits, total = await list_sigma_hits(db, incident_id, severity, limit, offset, q=q)
     severity_counts = await count_sigma_hits_by_severity(db, incident_id)
 
     return SigmaHitListOut(

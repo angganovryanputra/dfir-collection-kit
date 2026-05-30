@@ -5,7 +5,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, Plus, Trash2, ToggleLeft, ToggleRight, Clock } from "lucide-react";
-import { apiGet, apiPost, apiDelete } from "@/lib/api";
+import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
 import { useToast } from "@/components/ui/use-toast";
 import { KeyValueRow } from "@/components/common/KeyValueRow";
@@ -88,7 +88,7 @@ export default function ScheduledCollections() {
 
   const toggleMutation = useMutation({
     mutationFn: (id: string) =>
-      apiPost(`/platform/scheduled-collections/${id}/toggle`, {}),
+      apiPatch(`/platform/scheduled-collections/${id}/toggle`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey }),
     onError: () => toast({ title: "Toggle failed", variant: "destructive" }),
   });

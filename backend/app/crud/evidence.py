@@ -6,8 +6,13 @@ from app.schemas.evidence import EvidenceFolderCreate, EvidenceItemCreate
 
 
 
-async def list_folders(db: AsyncSession, limit: int = 1000) -> list[EvidenceFolder]:
-    result = await db.execute(select(EvidenceFolder).order_by(EvidenceFolder.date.desc()).limit(limit))
+async def list_folders(
+    db: AsyncSession, incident_id: str | None = None, limit: int = 1000
+) -> list[EvidenceFolder]:
+    stmt = select(EvidenceFolder)
+    if incident_id:
+        stmt = stmt.where(EvidenceFolder.incident_id == incident_id)
+    result = await db.execute(stmt.order_by(EvidenceFolder.date.desc()).limit(limit))
     return list(result.scalars().all())
 
 

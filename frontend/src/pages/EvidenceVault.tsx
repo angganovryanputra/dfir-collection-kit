@@ -115,8 +115,13 @@ export default function EvidenceVault() {
   }, [incidentId, folders]);
 
   const foldersQuery = useQuery<EvidenceFolderResponse[]>({
-    queryKey: ["evidence-folders"],
-    queryFn: () => apiGet<EvidenceFolderResponse[]>("/evidence/folders"),
+    queryKey: ["evidence-folders", incidentId ?? "all"],
+    queryFn: () => {
+      const url = incidentId
+        ? `/evidence/folders?incident_id=${encodeURIComponent(incidentId)}`
+        : "/evidence/folders";
+      return apiGet<EvidenceFolderResponse[]>(url);
+    },
   });
 
   const diagnosticsQuery = useQuery<DiagnosticsResponse>({

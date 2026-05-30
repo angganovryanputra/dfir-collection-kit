@@ -73,8 +73,9 @@ async def list_sigma_hits(
     severity: str | None = None,
     limit: int = 200,
     offset: int = 0,
+    q: str | None = None,
 ) -> tuple[list[SigmaHit], int]:
-    from sqlalchemy import func
+    from sqlalchemy import func, or_
 
     stmt = select(SigmaHit).where(SigmaHit.incident_id == incident_id)
     count_stmt = select(func.count()).select_from(SigmaHit).where(
@@ -84,6 +85,15 @@ async def list_sigma_hits(
     if severity:
         stmt = stmt.where(SigmaHit.severity == severity)
         count_stmt = count_stmt.where(SigmaHit.severity == severity)
+
+    if q:
+        pattern = f"%{q}%"
+        text_filter = or_(
+            SigmaHit.rule_name.ilike(pattern),
+            SigmaHit.artifact_file.ilike(pattern),
+        )
+        stmt = stmt.where(text_filter)
+        count_stmt = count_stmt.where(text_filter)
 
     stmt = stmt.order_by(SigmaHit.detected_at.desc()).limit(limit).offset(offset)
 

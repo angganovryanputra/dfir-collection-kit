@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -12,6 +12,7 @@ import {
     Activity,
     ChevronRight,
     X,
+    Search,
 } from "lucide-react";
 import { apiGet } from "@/lib/api";
 
@@ -66,14 +67,17 @@ export default function SigmaHits() {
     const [selectedHit, setSelectedHit] = useState<SigmaHitOut | null>(null);
     const [search, setSearch] = useState("");
 
+    useEffect(() => { setOffset(0); }, [search, selectedSeverity]);
+
     const { data, isLoading, error } = useQuery<SigmaHitListOut>({
-        queryKey: ["sigma-hits", incidentId, selectedSeverity, offset],
+        queryKey: ["sigma-hits", incidentId, selectedSeverity, offset, search],
         queryFn: () => {
             const params = new URLSearchParams({
                 limit: String(LIMIT),
                 offset: String(offset),
             });
             if (selectedSeverity) params.set("severity", selectedSeverity);
+            if (search.trim()) params.set("q", search.trim());
             return apiGet<SigmaHitListOut>(
                 `/processing/incident/${incidentId}/sigma-hits?${params}`
             );
@@ -83,14 +87,7 @@ export default function SigmaHits() {
     const totalPages = data ? Math.ceil(data.total / LIMIT) : 0;
     const currentPage = Math.floor(offset / LIMIT) + 1;
 
-    const filteredItems = search
-        ? (data?.items ?? []).filter(
-              (h) =>
-                  h.rule_name?.toLowerCase().includes(search.toLowerCase()) ||
-                  h.artifact_file?.toLowerCase().includes(search.toLowerCase()) ||
-                  (h.rule_tags ?? []).some((t) => t.toLowerCase().includes(search.toLowerCase()))
-          )
-        : (data?.items ?? []);
+    const filteredItems = data?.items ?? [];
 
     return (
         <AppLayout
@@ -276,10 +273,10 @@ export default function SigmaHits() {
                     onClick={() => setSelectedHit(null)}
                 >
                     <div
-                        className="bg-card border border-border rounded-sm shadow-2xl w-full max-w-2xl max-h-[80vh] overflow-auto"
+                        className="bg-card border border-border rounded-sm shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col"
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+                        <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
                             <div className="font-mono text-sm font-bold uppercase tracking-wider">
                                 DETECTION DETAIL
                             </div>
@@ -290,7 +287,7 @@ export default function SigmaHits() {
                                 <X className="w-4 h-4" />
                             </button>
                         </div>
-                        <div className="p-5 space-y-4 font-mono text-xs">
+                        <div className="p-5 space-y-4 font-mono text-xs overflow-auto flex-1">
                             <div className="flex items-center gap-3">
                                 {severityBadge(selectedHit.severity)}
                                 <span className="font-bold text-sm">{selectedHit.rule_name}</span>
@@ -298,7 +295,7 @@ export default function SigmaHits() {
                             {selectedHit.description && (
                                 <p className="text-muted-foreground">{selectedHit.description}</p>
                             )}
-                            <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+                            <div className="grid grid-cols-2 gap-x-6 gap-y-2 border-b border-border/40 pb-4">
                                 <div>
                                     <span className="text-muted-foreground">RULE ID: </span>
                                     {selectedHit.rule_id}
@@ -336,11 +333,35 @@ export default function SigmaHits() {
                             {selectedHit.event_data && (
                                 <div>
                                     <div className="text-muted-foreground mb-1">EVENT DATA:</div>
-                                    <pre className="bg-secondary border border-border p-3 rounded-sm overflow-auto text-xs max-h-60">
+                                    <pre className="bg-secondary border border-border p-3 rounded-sm overflow-auto text-[10px] max-h-80">
                                         {JSON.stringify(selectedHit.event_data, null, 2)}
                                     </pre>
                                 </div>
                             )}
+                        </div>
+                        <div className="px-5 py-3 border-t border-border flex justify-end gap-2 shrink-0">
+                            <Button
+                                variant="tactical"
+                                size="sm"
+                                className="h-8"
+                                onClick={() => {
+                                    const ed = selectedHit.event_data || {};
+                                    const host = (ed.Computer || ed.ComputerName || ed.host || ed.Hostname || "");
+                                    const q = host ? `host:${host} rule:"${selectedHit.rule_name}"` : `rule:"${selectedHit.rule_name}"`;
+                                    navigate(`/incidents/${incidentId}/super-timeline?q=${encodeURIComponent(q)}`);
+                                }}
+                            >
+                                <Search className="w-3.5 h-3.5 mr-2" />
+                                SEARCH IN TIMELINE
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8"
+                                onClick={() => setSelectedHit(null)}
+                            >
+                                CLOSE
+                            </Button>
                         </div>
                     </div>
                 </div>

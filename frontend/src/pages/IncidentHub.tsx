@@ -189,10 +189,8 @@ function ActionCard({
     const bgColor =
         highlight
             ? "bg-primary/5 hover:bg-primary/10"
-            : status === "warning"
-            ? "bg-red-500/5 hover:bg-red-500/8"
-            : status === "unavailable"
-            ? "bg-secondary/10"
+            : status === "warning" ? "bg-red-500/5 hover:bg-red-500/8"
+            : status === "unavailable" ? "bg-secondary/10"
             : "bg-secondary/20 hover:bg-secondary/40";
 
     return (
@@ -339,8 +337,12 @@ export default function IncidentHub() {
     });
 
     const { data: evidenceFolders } = useQuery<EvidenceFolderOut[]>({
-        queryKey: ["evidence-folders-all"],
-        queryFn: () => apiGet<EvidenceFolderOut[]>("/evidence/folders"),
+        queryKey: ["evidence-folders", incidentId],
+        queryFn: () => apiGet<EvidenceFolderOut[]>(
+            incidentId
+                ? `/evidence/folders?incident_id=${encodeURIComponent(incidentId)}`
+                : "/evidence/folders"
+        ),
         enabled: !!incidentId,
     });
 
@@ -672,7 +674,16 @@ export default function IncidentHub() {
                             {lmDetections.map((det) => (
                                 <div
                                     key={det.id}
-                                    className="p-3 border border-border/60 bg-secondary/15 rounded-sm space-y-3 font-mono"
+                                    className="p-3 border border-border/60 bg-secondary/15 rounded-sm space-y-3 font-mono cursor-pointer hover:border-primary/50 hover:bg-secondary/30 transition-all group"
+                                    onClick={() => {
+                                        const q = `host:${det.source_host} OR host:${det.target_host}`;
+                                        const start = det.first_seen ? det.first_seen.replace(" ", "T") : "";
+                                        const end = det.last_seen ? det.last_seen.replace(" ", "T") : "";
+                                        const params = new URLSearchParams({ q });
+                                        if (start) params.append("start_date", start);
+                                        if (end) params.append("end_date", end);
+                                        navigate(`/incidents/${incidentId}/super-timeline?${params.toString()}`);
+                                    }}
                                 >
                                     <div className="flex items-center justify-between gap-2">
                                         <span className={cn(
@@ -696,14 +707,14 @@ export default function IncidentHub() {
                                     <div className="flex items-center gap-3 justify-center py-1">
                                         <div className="text-center">
                                             <div className="text-[10px] text-muted-foreground uppercase mb-1">Source</div>
-                                            <div className="px-2 py-1 border border-border bg-card rounded-sm text-xs">
+                                            <div className="px-2 py-1 border border-border bg-card rounded-sm text-xs group-hover:border-primary/30">
                                                 {det.source_host}
                                             </div>
                                         </div>
-                                        <ArrowRight className="w-4 h-4 text-muted-foreground mt-4" />
+                                        <ArrowRight className="w-4 h-4 text-muted-foreground mt-4 group-hover:text-primary" />
                                         <div className="text-center">
                                             <div className="text-[10px] text-muted-foreground uppercase mb-1">Target</div>
-                                            <div className="px-2 py-1 border border-border bg-card rounded-sm text-xs">
+                                            <div className="px-2 py-1 border border-border bg-card rounded-sm text-xs group-hover:border-primary/30">
                                                 {det.target_host}
                                             </div>
                                         </div>
@@ -716,9 +727,12 @@ export default function IncidentHub() {
                                         </div>
                                     )}
 
-                                    <div className="flex justify-between text-[9px] text-muted-foreground/70 pt-1">
-                                        <span>FIRST: {det.first_seen ? new Date(det.first_seen).toLocaleTimeString() : "—"}</span>
-                                        <span>LAST: {det.last_seen ? new Date(det.last_seen).toLocaleTimeString() : "—"}</span>
+                                    <div className="flex justify-between items-center text-[9px] text-muted-foreground/70 pt-1">
+                                        <div className="flex flex-col">
+                                            <span>FIRST: {det.first_seen ? new Date(det.first_seen).toLocaleTimeString() : "—"}</span>
+                                            <span>LAST: {det.last_seen ? new Date(det.last_seen).toLocaleTimeString() : "—"}</span>
+                                        </div>
+                                        <span className="text-primary opacity-0 group-hover:opacity-100 transition-opacity font-bold">PIVOT →</span>
                                     </div>
                                 </div>
                             ))}

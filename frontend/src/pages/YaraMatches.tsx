@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, ShieldCheck, Bug, AlertTriangle } from "lucide-react";
+import { ChevronLeft, ChevronRight, ShieldCheck, Bug, AlertTriangle, Search } from "lucide-react";
 import { apiGet } from "@/lib/api";
 
 interface YaraMatchString {
@@ -220,10 +220,10 @@ export default function YaraMatches() {
                     onClick={() => setSelected(null)}
                 >
                     <div
-                        className="bg-card border border-border rounded-sm shadow-2xl w-full max-w-xl max-h-[80vh] overflow-auto"
+                        className="bg-card border border-border rounded-sm shadow-2xl w-full max-w-xl max-h-[80vh] flex flex-col"
                         onClick={(e) => e.stopPropagation()}
                     >
-                        <div className="flex items-center justify-between px-5 py-4 border-b border-border">
+                        <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
                             <div className="font-mono text-sm font-bold uppercase tracking-wider">
                                 YARA MATCH DETAIL
                             </div>
@@ -234,7 +234,7 @@ export default function YaraMatches() {
                                 ✕ CLOSE
                             </button>
                         </div>
-                        <div className="p-5 space-y-4 font-mono text-xs">
+                        <div className="p-5 space-y-4 font-mono text-xs overflow-auto flex-1">
                             <div className="flex items-center gap-3">
                                 <span
                                     className={`px-2 py-0.5 border rounded-sm uppercase text-xs ${
@@ -278,9 +278,9 @@ export default function YaraMatches() {
                             {selected.strings.length > 0 && (
                                 <div>
                                     <div className="text-muted-foreground mb-1">MATCHED STRINGS ({selected.strings.length}):</div>
-                                    <div className="bg-secondary border border-border p-2 rounded-sm space-y-1 max-h-40 overflow-auto">
+                                    <div className="bg-secondary border border-border p-2 rounded-sm space-y-1 max-h-40 overflow-auto text-[10px]">
                                         {selected.strings.map((s, i) => (
-                                            <div key={i} className="text-[10px] font-mono">
+                                            <div key={i} className="font-mono">
                                                 <span className="text-muted-foreground">{s.name} @0x{s.offset.toString(16)}: </span>
                                                 <span className="text-primary break-all">{s.data}</span>
                                             </div>
@@ -288,6 +288,29 @@ export default function YaraMatches() {
                                     </div>
                                 </div>
                             )}
+                        </div>
+                        <div className="px-5 py-3 border-t border-border flex justify-end gap-2 shrink-0">
+                            <Button
+                                variant="tactical"
+                                size="sm"
+                                className="h-8"
+                                onClick={() => {
+                                    const fileName = selected.matched_file.split(/[\\/]/).pop();
+                                    const q = fileName ? `"${fileName}"` : `rule:"${selected.rule_name}"`;
+                                    navigate(`/incidents/${incidentId}/super-timeline?q=${encodeURIComponent(q)}`);
+                                }}
+                            >
+                                <Search className="w-3.5 h-3.5 mr-2" />
+                                SEARCH IN TIMELINE
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8"
+                                onClick={() => setSelected(null)}
+                            >
+                                CLOSE
+                            </Button>
                         </div>
                     </div>
                 </div>

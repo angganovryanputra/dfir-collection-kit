@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -31,18 +31,23 @@ import {
 export default function SuperTimeline() {
     const navigate = useNavigate();
     const { id: incidentId } = useParams<{ id: string }>();
+    const [searchParams] = useSearchParams();
     const queryClient = useQueryClient();
 
     // ─── UI State ────────────────────────────────────────────────────────────
+    const initialQ = searchParams.get("q") || "";
+    const initialStart = searchParams.get("start_date") || "";
+    const initialEnd = searchParams.get("end_date") || "";
+    
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState<number>(PAGE_SIZE_OPTIONS[0]);
     const [sortBy, setSortBy] = useState<SortKey>("datetime");
     const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-    const [searchInput, setSearchInput] = useState("");
-    const [debouncedSearch, setDebouncedSearch] = useState("");
-    const [dateFrom, setDateFrom] = useState("");
-    const [dateTo, setDateTo] = useState("");
-    const [dateFilterActive, setDateFilterActive] = useState(false);
+    const [searchInput, setSearchInput] = useState(initialQ);
+    const [debouncedSearch, setDebouncedSearch] = useState(initialQ);
+    const [dateFrom, setDateFrom] = useState(initialStart);
+    const [dateTo, setDateTo] = useState(initialEnd);
+    const [dateFilterActive, setDateFilterActive] = useState(!!(initialStart || initialEnd));
     const [activeQuickFilter, setActiveQuickFilter] = useState<string | null>(null);
 
     const [activeHosts, setActiveHosts] = useState<Set<string>>(new Set());

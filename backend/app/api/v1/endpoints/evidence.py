@@ -180,10 +180,23 @@ def _require_signature(export_path: Path, signature: str | None) -> None:
 
 @router.get("/folders", response_model=list[EvidenceFolderOut])
 async def get_folders(
+    incident_id: str | None = Query(default=None, description="Filter by incident ID"),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> list[EvidenceFolderOut]:
-    folders = await list_folders(db)
+    safe_incident_id = _validate_identifier(incident_id, "incident_id") if incident_id else None
+    folders = await list_folders(db, incident_id=safe_incident_id)
+    return [EvidenceFolderOut.model_validate(folder) for folder in folders]
+
+
+@router.get("/folders/{incident_id}", response_model=list[EvidenceFolderOut])
+async def get_folders_by_incident(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[EvidenceFolderOut]:
+    safe_incident_id = _validate_identifier(incident_id, "incident_id")
+    folders = await list_folders(db, incident_id=safe_incident_id)
     return [EvidenceFolderOut.model_validate(folder) for folder in folders]
 
 
