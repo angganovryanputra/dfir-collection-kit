@@ -88,6 +88,12 @@ _EZ_TOOLS_DLLS: dict[str, str] = {
     "LECmd": "LECmd/LECmd.dll",
     "WxTCmd": "WxTCmd/WxTCmd.dll",
     "AmcacheParser": "AmcacheParser/AmcacheParser.dll",
+    "SrumECmd": "SrumECmd/SrumECmd.dll",
+    "AppCompatCacheParser": "AppCompatCacheParser/AppCompatCacheParser.dll",
+    "SBECmd": "SBECmd/SBECmd.dll",
+    "JLECmd": "JLECmd/JLECmd.dll",
+    "RBCmd": "RBCmd/RBCmd.dll",
+    "SQLECmd": "SQLECmd/SQLECmd.dll",
 }
 
 
@@ -123,13 +129,20 @@ async def _run_parsing_phase_with_logs(
 ) -> dict[str, int]:
     """Wrap _run_parsing_phase with per-tool progress log entries."""
     # Log which artifact types exist before starting
+    srudb = extracted_dir / "artifacts" / "windows" / "srum" / "SRUDB.dat"
     artifact_counts: dict[str, int] = {
         "EVTX": len(list(extracted_dir.rglob("*.evtx"))),
         "MFT": len([f for f in extracted_dir.rglob("*") if f.name in ("MFT", "$MFT")]),
         "Registry (.hve)": len(list(extracted_dir.rglob("*.hve"))),
         "Prefetch (.pf)": len(list(extracted_dir.rglob("*.pf"))),
         "LNK (.lnk)": len(list(extracted_dir.rglob("*.lnk"))),
-        "JumpLists": len(list(extracted_dir.rglob("*.automaticDestinations-ms"))),
+        "JumpLists": len(
+            list(extracted_dir.rglob("*.automaticDestinations-ms"))
+            + list(extracted_dir.rglob("*.customDestinations-ms"))
+        ),
+        "ShellBag hives": len(list(extracted_dir.rglob("UsrClass.dat"))),
+        "RecycleBin items": len(list(extracted_dir.rglob("$I*"))),
+        "SRUDB.dat": 1 if srudb.exists() else 0,
     }
     for artifact, count in artifact_counts.items():
         if count > 0:
@@ -137,12 +150,19 @@ async def _run_parsing_phase_with_logs(
 
     stats = await _run_parsing_phase(extracted_dir, parsed_dir, ez_tools_path)
 
-    # Log results per tool
+    # Log results per tool.
+    # count == -1 is a sentinel: tool was configured but its DLL was not found.
     for tool, count in stats.items():
         if count > 0:
             await _pipeline_log(db, incident_id, f"  ✓ {tool}: processed {count} file(s)", "success")
+        elif count == -1:
+            await _pipeline_log(
+                db, incident_id,
+                f"  ✗ {tool}: path configured but DLL not found — check EZ Tools path in Settings",
+                "error",
+            )
         else:
-            await _pipeline_log(db, incident_id, f"  ⚠ {tool}: 0 files processed", "warning")
+            await _pipeline_log(db, incident_id, f"  ⚠ {tool}: no matching files", "warning")
 
     return stats
 
@@ -185,8 +205,9 @@ async def _run_parsing_phase(
 
             results = await asyncio.gather(*[_parse_evtx(f) for f in evtx_files])
             stats["EvtxECmd"] = sum(1 for r in results if r)
-        else:
-            logger.info("EvtxECmd not found at %s — skipping", ez_tools_path)
+        elif ez_tools_path:
+            stats["EvtxECmd"] = -1  # path configured but DLL missing
+            logger.warning("EvtxECmd DLL not found in %s", ez_tools_path)
 
     # $MFT — agent saves as "MFT" (ntfs/MFT); also accept legacy "$MFT" name
     mft_files = [f for f in extracted_dir.rglob("*") if f.name in ("MFT", "$MFT") and not f.suffix]
@@ -200,6 +221,9 @@ async def _run_parsing_phase(
             stats["MFTECmd_mft"] = 1 if ok else 0
             if not ok:
                 logger.warning("MFTECmd ($MFT) failed: %s", err)
+        elif ez_tools_path:
+            stats["MFTECmd_mft"] = -1
+            logger.warning("MFTECmd DLL not found in %s", ez_tools_path)
 
     # $UsnJrnl:$J — agent saves as "UsnJrnl_$J"; also accept legacy "$J" name
     usnjrnl_files = [f for f in extracted_dir.rglob("*") if f.name in ("UsnJrnl_$J", "$J")]
@@ -213,6 +237,8 @@ async def _run_parsing_phase(
             stats["MFTECmd_usnjrnl"] = 1 if ok else 0
             if not ok:
                 logger.warning("MFTECmd ($J) failed: %s", err)
+        elif ez_tools_path:
+            stats["MFTECmd_usnjrnl"] = -1
 
     # Amcache.hve (must run before generic *.hve to avoid double-processing)
     amcache_files = list(extracted_dir.rglob("Amcache.hve"))
@@ -226,6 +252,9 @@ async def _run_parsing_phase(
             stats["AmcacheParser"] = 1 if ok else 0
             if not ok:
                 logger.warning("AmcacheParser failed: %s", err)
+        elif ez_tools_path:
+            stats["AmcacheParser"] = -1
+            logger.warning("AmcacheParser DLL not found in %s", ez_tools_path)
 
     # Registry hives (*.hve, excluding Amcache.hve) — parallel per-file
     hve_files = [f for f in extracted_dir.rglob("*.hve") if f.name != "Amcache.hve"]
@@ -244,6 +273,9 @@ async def _run_parsing_phase(
 
             hve_results = await asyncio.gather(*[_parse_hve(f) for f in hve_files])
             stats["RECmd"] = sum(1 for r in hve_results if r)
+        elif ez_tools_path:
+            stats["RECmd"] = -1
+            logger.warning("RECmd DLL not found in %s", ez_tools_path)
 
     # Prefetch (*.pf) — pass directory to PECmd
     prefetch_dirs = {f.parent for f in extracted_dir.rglob("*.pf")}
@@ -258,6 +290,9 @@ async def _run_parsing_phase(
                 if not ok:
                     logger.warning("PECmd failed on %s: %s", d.name, err)
             stats["PECmd"] = len(prefetch_dirs)
+        elif ez_tools_path:
+            stats["PECmd"] = -1
+            logger.warning("PECmd DLL not found in %s", ez_tools_path)
 
     # LNK files (*.lnk) — pass parent directories to LECmd
     lnk_dirs = {f.parent for f in extracted_dir.rglob("*.lnk")}
@@ -272,6 +307,9 @@ async def _run_parsing_phase(
                 if not ok:
                     logger.warning("LECmd failed on %s: %s", d.name, err)
             stats["LECmd"] = len(lnk_dirs)
+        elif ez_tools_path:
+            stats["LECmd"] = -1
+            logger.warning("LECmd DLL not found in %s", ez_tools_path)
 
     # Jump lists
     jl_dirs = {f.parent for f in extracted_dir.rglob("*.automaticDestinations-ms")}
@@ -286,6 +324,143 @@ async def _run_parsing_phase(
                 if not ok:
                     logger.warning("WxTCmd failed on %s: %s", d.name, err)
             stats["WxTCmd"] = len(jl_dirs)
+        elif ez_tools_path:
+            stats["WxTCmd"] = -1
+            logger.warning("WxTCmd DLL not found in %s", ez_tools_path)
+
+    # SRUM (Software Resource Usage Monitor) — SRUDB.dat binary ESE database
+    # Provides per-app CPU/network usage with timestamps even after log clearing.
+    srudb_path = extracted_dir / "artifacts" / "windows" / "srum" / "SRUDB.dat"
+    if srudb_path.exists():
+        dll = _tool_dll("SrumECmd", ez_tools_path)
+        if dll:
+            out = parsed_dir / "srum"
+            out.mkdir(parents=True, exist_ok=True)
+            cmd = ["dotnet", str(dll), "-f", str(srudb_path), "--csv", str(out)]
+            # Pass SOFTWARE hive for app-name resolution if collected alongside SRUDB
+            software_hive = srudb_path.parent.parent / "registry" / "SOFTWARE"
+            if software_hive.exists():
+                cmd.extend(["-r", str(software_hive)])
+            ok, err = await _run_subprocess(cmd)
+            stats["SrumECmd"] = 1 if ok else 0
+            if not ok:
+                logger.warning("SrumECmd failed: %s", err)
+        elif ez_tools_path:
+            stats["SrumECmd"] = -1
+            logger.warning("SrumECmd DLL not found in %s", ez_tools_path)
+
+    # AppCompatCache (ShimCache) — parse SYSTEM hive for execution history
+    # Complements the agent's inline PowerShell parser for offline hive analysis.
+    registry_dir = extracted_dir / "artifacts" / "windows" / "registry"
+    if registry_dir.exists():
+        system_hive = next(
+            (f for f in registry_dir.iterdir() if f.is_file() and f.name.upper() == "SYSTEM"),
+            None,
+        )
+        if system_hive:
+            dll = _tool_dll("AppCompatCacheParser", ez_tools_path)
+            if dll:
+                out = parsed_dir / "shimcache"
+                out.mkdir(parents=True, exist_ok=True)
+                cmd = [
+                    "dotnet", str(dll),
+                    "-f", str(system_hive),
+                    "--csv", str(out),
+                    "--csvf", "shimcache.csv",
+                ]
+                ok, err = await _run_subprocess(cmd)
+                stats["AppCompatCacheParser"] = 1 if ok else 0
+                if not ok:
+                    logger.warning("AppCompatCacheParser failed: %s", err)
+            elif ez_tools_path:
+                stats["AppCompatCacheParser"] = -1
+                logger.warning("AppCompatCacheParser DLL not found in %s", ez_tools_path)
+
+    # ShellBags (SBECmd) — UsrClass.dat and NTUSER.DAT hives
+    shellbag_hives = list(extracted_dir.rglob("UsrClass.dat")) + [
+        f for f in extracted_dir.rglob("NTUSER.DAT") if "ntuser" in f.name.lower()
+    ]
+    if shellbag_hives:
+        dll = _tool_dll("SBECmd", ez_tools_path)
+        if dll:
+            out = parsed_dir / "shellbags"
+            out.mkdir(parents=True, exist_ok=True)
+
+            async def _parse_shellbag(f: Path) -> bool:
+                cmd = ["dotnet", str(dll), "-f", str(f), "--csv", str(out), "--csvf", f"shellbags_{f.stem}.csv"]
+                ok, err = await _run_subprocess(cmd)
+                if not ok:
+                    logger.warning("SBECmd failed on %s: %s", f.name, err)
+                return ok
+
+            sb_results = await asyncio.gather(*[_parse_shellbag(f) for f in shellbag_hives])
+            stats["SBECmd"] = sum(1 for r in sb_results if r)
+        elif ez_tools_path:
+            stats["SBECmd"] = -1
+            logger.warning("SBECmd DLL not found in %s", ez_tools_path)
+
+    # Jump Lists (JLECmd) — .automaticDestinations-ms and .customDestinations-ms
+    jl_files = (
+        list(extracted_dir.rglob("*.automaticDestinations-ms"))
+        + list(extracted_dir.rglob("*.customDestinations-ms"))
+    )
+    if jl_files:
+        dll = _tool_dll("JLECmd", ez_tools_path)
+        if dll:
+            out = parsed_dir / "jumplists_parsed"
+            out.mkdir(parents=True, exist_ok=True)
+            for d in {f.parent for f in jl_files}:
+                cmd = ["dotnet", str(dll), "-d", str(d), "--csv", str(out), "--csvf", "jumplists.csv"]
+                ok, err = await _run_subprocess(cmd)
+                if not ok:
+                    logger.warning("JLECmd failed on %s: %s", d.name, err)
+            stats["JLECmd"] = len(jl_files)
+        elif ez_tools_path:
+            stats["JLECmd"] = -1
+            logger.warning("JLECmd DLL not found in %s", ez_tools_path)
+
+    # Recycle Bin (RBCmd) — $I* metadata files
+    recyclebin_dirs = {f.parent for f in extracted_dir.rglob("$I*")}
+    if recyclebin_dirs:
+        dll = _tool_dll("RBCmd", ez_tools_path)
+        if dll:
+            out = parsed_dir / "recyclebin"
+            out.mkdir(parents=True, exist_ok=True)
+            for d in recyclebin_dirs:
+                cmd = ["dotnet", str(dll), "-d", str(d), "--csv", str(out), "--csvf", "recyclebin.csv"]
+                ok, err = await _run_subprocess(cmd)
+                if not ok:
+                    logger.warning("RBCmd failed on %s: %s", d.name, err)
+            stats["RBCmd"] = len(recyclebin_dirs)
+        elif ez_tools_path:
+            stats["RBCmd"] = -1
+            logger.warning("RBCmd DLL not found in %s", ez_tools_path)
+
+    # SQLite databases (SQLECmd) — ActivitiesCache.db and other collected SQLite files
+    sqlite_dbs = list({
+        f for f in (
+            list(extracted_dir.rglob("ActivitiesCache.db"))
+            + list(extracted_dir.rglob("WebCacheV01.dat"))
+        )
+    })
+    if sqlite_dbs:
+        dll = _tool_dll("SQLECmd", ez_tools_path)
+        if dll:
+            out = parsed_dir / "sqlite"
+            out.mkdir(parents=True, exist_ok=True)
+
+            async def _parse_sqlite(f: Path) -> bool:
+                cmd = ["dotnet", str(dll), "-f", str(f), "--csv", str(out), "--csvf", f"sqlite_{f.stem}.csv"]
+                ok, err = await _run_subprocess(cmd)
+                if not ok:
+                    logger.warning("SQLECmd failed on %s: %s", f.name, err)
+                return ok
+
+            sql_results = await asyncio.gather(*[_parse_sqlite(f) for f in sqlite_dbs])
+            stats["SQLECmd"] = sum(1 for r in sql_results if r)
+        elif ez_tools_path:
+            stats["SQLECmd"] = -1
+            logger.warning("SQLECmd DLL not found in %s", ez_tools_path)
 
     return stats
 

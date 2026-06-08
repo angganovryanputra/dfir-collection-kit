@@ -156,14 +156,30 @@ func NewWindowsShimCache() *WindowsShimCache {
 }
 
 func (m *WindowsShimCache) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	// Parse AppCompatCache binary inline for Win 8.1/10 (signature 0xEE0BDCCA).
+	// Outputs CSV: Index,Path,LastModifiedUTC,Executed
+	// Lines starting with '#' are comments; CSV header line enables backend parsing.
 	command := `$key = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\AppCompatCache';` +
-		`if (Test-Path $key) {` +
-		`  $val = (Get-ItemProperty -Path $key -Name AppCompatCache -ErrorAction SilentlyContinue).AppCompatCache;` +
-		`  if ($val) {` +
-		`    "AppCompatCache binary length: " + $val.Length + " bytes";` +
-		`    "Raw hive exported — use ShimCacheParser or AppCompatCacheParser for analysis."` +
-		`  } else { "AppCompatCache value not found in registry." }` +
-		`} else { "AppCompatCache key not accessible." }`
+		`$raw = (Get-ItemProperty -Path $key -Name AppCompatCache -EA SilentlyContinue).AppCompatCache;` +
+		`if (-not $raw -or $raw.Length -lt 8) { Write-Output '# AppCompatCache not found or empty'; return };` +
+		`$b = [byte[]]$raw;` +
+		`if (-not ($b[0] -eq 0xCA -and $b[1] -eq 0xDC -and $b[2] -eq 0x0B -and $b[3] -eq 0xEE)) {` +
+		`  Write-Output ('# Unknown format (sig=' + [BitConverter]::ToInt32($b,0).ToString('X8') + ' size=' + $b.Length + ') - use AppCompatCacheParser');` +
+		`  return };` +
+		`$count = [BitConverter]::ToInt32($b, 4);` +
+		`Write-Output '# AppCompatCache Win10 format entries: '$count;` +
+		`Write-Output 'Index,Path,LastModifiedUTC,Executed';` +
+		`$off = 128;` +
+		`for ($i = 0; $i -lt $count -and $off + 16 -le $b.Length; $i++) {` +
+		`  $plen = [BitConverter]::ToInt16($b, $off);` +
+		`  if ($plen -le 0 -or $plen -gt 2000 -or $off + 16 + $plen -gt $b.Length) { break };` +
+		`  $flags = [BitConverter]::ToInt32($b, $off + 4);` +
+		`  $ft    = [BitConverter]::ToInt64($b, $off + 8);` +
+		`  $dt    = if ($ft -gt 0) { try { [datetime]::FromFileTimeUtc($ft).ToString('yyyy-MM-ddTHH:mm:ssZ') } catch { '' } } else { '' };` +
+		`  $path  = [Text.Encoding]::Unicode.GetString($b, $off + 16, $plen) -replace '"','';` +
+		`  $exec  = if ($flags -band 2) { 'Yes' } else { 'Unknown' };` +
+		`  Write-Output "$i,""$path"",""$dt"",""$exec""";` +
+		`  $off += 16 + $plen }`
 	return runPowerShellToFile(ctx, command, outputPath, params)
 }
 

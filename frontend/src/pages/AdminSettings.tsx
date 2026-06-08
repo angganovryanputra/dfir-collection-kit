@@ -210,8 +210,20 @@ export default function AdminSettings() {
   const [iocTotal, setIocTotal] = useState(0);
   const [newIoc, setNewIoc] = useState({ ioc_type: "ip", value: "", description: "", severity: "high" });
   const [isAddingIoc, setIsAddingIoc] = useState(false);
-  const [toolStatus, setToolStatus] = useState<Record<string, { ok: boolean; status: string; path: string | null }> | null>(null);
+  interface ToolResult {
+    ok: boolean;
+    status: string;
+    path: string | null;
+    found_count?: number;
+    total_count?: number;
+    dlls?: Record<string, { found: boolean; path: string }>;
+    detail?: string;
+    last_validated_at?: string | null;
+    version?: string | null;
+  }
+  const [toolStatus, setToolStatus] = useState<Record<string, ToolResult> | null>(null);
   const [isVerifyingTools, setIsVerifyingTools] = useState(false);
+  const [validatingTool, setValidatingTool] = useState<string | null>(null);
 
   const usersQuery = useQuery({
     queryKey: ["users"],
@@ -1038,50 +1050,187 @@ export default function AdminSettings() {
                   </TacticalPanel>
 
                   {/* Forensics Pipeline Settings */}
-                  <TacticalPanel title="FORENSICS PIPELINE" className="col-span-2">
+                  <TacticalPanel title="FORENSICS PIPELINE — TOOLS INTEGRATION" className="col-span-2">
                     {/* Info banner */}
                     <div className="mb-4 p-3 rounded border border-yellow-500/30 bg-yellow-500/5 font-mono text-xs text-yellow-400">
-                      Tools are NOT bundled in the Docker image. Install each tool on the server (or mount via Docker volume),
-                      then enter the path below and click VERIFY to confirm accessibility.
+                      Tools are NOT bundled. Install each tool on the server (or mount via Docker volume),
+                      enter the path, then click <strong>VALIDATE</strong> to confirm detection.
+                      Parsing will show an error if a required tool is configured but its DLL is missing.
                     </div>
+
+                    {/* Global Tools Health */}
+                    {toolStatus && (() => {
+                      const allOk = Object.values(toolStatus).every(t => t.ok);
+                      const someOk = Object.values(toolStatus).some(t => t.ok);
+                      const allNotConfigured = Object.values(toolStatus).every(t => t.status === "not_configured");
+                      const health = allNotConfigured ? "NOT CONFIGURED"
+                        : allOk ? "HEALTHY"
+                        : someOk ? "PARTIAL"
+                        : "BROKEN";
+                      const healthColor = health === "HEALTHY" ? "text-green-400 border-green-500/30 bg-green-500/5"
+                        : health === "PARTIAL" ? "text-yellow-400 border-yellow-500/30 bg-yellow-500/5"
+                        : health === "BROKEN" ? "text-red-400 border-red-500/30 bg-red-500/5"
+                        : "text-muted-foreground border-border bg-secondary/10";
+                      return (
+                        <div className={`mb-4 flex items-center gap-3 p-2.5 border rounded font-mono text-xs ${healthColor}`}>
+                          <Shield className="w-4 h-4 shrink-0" />
+                          <span className="font-bold tracking-widest">TOOLS HEALTH: {health}</span>
+                          <span className="text-[10px] opacity-70">
+                            {Object.values(toolStatus).filter(t => t.ok).length}/{Object.keys(toolStatus).length} TOOLS READY
+                          </span>
+                        </div>
+                      );
+                    })()}
 
                     {/* Tool path rows */}
                     {([
-                      { key: "ez_tools", label: "EZ Tools Directory", field: "ez_tools_path" as const, placeholder: "/opt/eztools", isDir: true },
-                      { key: "chainsaw", label: "Chainsaw Binary", field: "chainsaw_path" as const, placeholder: "/opt/chainsaw/chainsaw", isDir: false },
-                      { key: "hayabusa", label: "Hayabusa Binary", field: "hayabusa_path" as const, placeholder: "/opt/hayabusa/hayabusa", isDir: false },
-                      { key: "sigma_rules", label: "Sigma Rules Directory", field: "sigma_rules_path" as const, placeholder: "/opt/sigma-rules", isDir: true },
-                      { key: "yara_rules", label: "YARA Rules Directory", field: "yara_rules_path" as const, placeholder: "/opt/yara-rules", isDir: true },
-                    ] as const).map(({ key, label, field, placeholder }) => {
+                      {
+                        key: "ez_tools",
+                        label: "EZ Tools Directory",
+                        desc: "Eric Zimmerman's forensic toolset (13 parsers: EvtxECmd, MFTECmd, RECmd, PECmd, LECmd, WxTCmd, AmcacheParser, SrumECmd, AppCompatCacheParser, SBECmd, JLECmd, RBCmd, SQLECmd). Provide the root folder that contains each tool's subdirectory.",
+                        field: "ez_tools_path" as const,
+                        placeholder: "/opt/eztools",
+                      },
+                      {
+                        key: "chainsaw",
+                        label: "Chainsaw Binary",
+                        desc: "Sigma-based Windows EVTX detection engine. Used for threat hunting and IOC matching against collected event logs.",
+                        field: "chainsaw_path" as const,
+                        placeholder: "/opt/chainsaw/chainsaw",
+                      },
+                      {
+                        key: "hayabusa",
+                        label: "Hayabusa Binary",
+                        desc: "Fast Windows event log analyzer with Sigma rule support. Generates detection timelines from EVTX files.",
+                        field: "hayabusa_path" as const,
+                        placeholder: "/opt/hayabusa/hayabusa",
+                      },
+                      {
+                        key: "sigma_rules",
+                        label: "Sigma Rules Directory",
+                        desc: "Directory containing Sigma detection rules (.yml). Used by Chainsaw and Hayabusa for detection coverage.",
+                        field: "sigma_rules_path" as const,
+                        placeholder: "/opt/sigma-rules",
+                      },
+                      {
+                        key: "yara_rules",
+                        label: "YARA Rules Directory",
+                        desc: "Directory containing YARA rules (.yar/.yara). Used by the pipeline to scan collected binaries and artifacts for known malware signatures.",
+                        field: "yara_rules_path" as const,
+                        placeholder: "/opt/yara-rules",
+                      },
+                    ] as const).map(({ key, label, desc, field, placeholder }) => {
                       const ts = toolStatus?.[key];
+                      const isValidatingThis = validatingTool === key;
                       return (
-                        <div key={key} className="grid grid-cols-[1fr_auto] gap-2 items-end mb-3">
-                          <div className="space-y-1">
+                        <div key={key} className="mb-5 border border-border/40 rounded p-3 bg-secondary/5">
+                          {/* Header row: name + status badge + validate button */}
+                          <div className="flex items-center justify-between gap-2 mb-1">
+                            <FormLabel className="text-foreground uppercase font-bold">{label}</FormLabel>
                             <div className="flex items-center gap-2">
-                              <FormLabel className="text-muted-foreground uppercase">{label}</FormLabel>
                               {ts && (
-                                <span className={`flex items-center gap-1 font-mono text-xs ${ts.ok ? "text-green-400" : "text-red-400"}`}>
-                                  {ts.ok
-                                    ? <><CheckCircle2 className="w-3 h-3" /> FOUND</>
-                                    : ts.status === "not_configured"
-                                      ? <><CircleDashed className="w-3 h-3 text-muted-foreground" /><span className="text-muted-foreground">NOT CONFIGURED</span></>
-                                      : ts.status === "not_executable"
-                                        ? <><XCircle className="w-3 h-3" /> NOT EXECUTABLE</>
-                                        : <><XCircle className="w-3 h-3" /> NOT FOUND</>
+                                <span className={`flex items-center gap-1 font-mono text-[10px] px-1.5 py-0.5 border rounded ${
+                                  ts.ok ? "text-green-400 border-green-500/30 bg-green-500/5"
+                                    : ts.status === "not_configured" ? "text-muted-foreground border-border"
+                                    : "text-red-400 border-red-500/30 bg-red-500/5"
+                                }`}>
+                                  {ts.ok ? (
+                                    <>
+                                      <CheckCircle2 className="w-3 h-3" />
+                                      {key === "ez_tools" && ts.found_count !== undefined
+                                        ? `${ts.found_count}/${ts.total_count} FOUND`
+                                        : "DETECTED"}
+                                    </>
+                                  ) : ts.status === "not_configured" ? (
+                                    <><CircleDashed className="w-3 h-3" /> NOT CONFIGURED</>
+                                  ) : ts.status === "not_executable" ? (
+                                    <><XCircle className="w-3 h-3" /> NOT EXECUTABLE</>
+                                  ) : ts.status === "compile_error" ? (
+                                    <><XCircle className="w-3 h-3" /> YARA COMPILE ERROR</>
+                                  ) : ts.status === "no_dlls_found" ? (
+                                    <><XCircle className="w-3 h-3" /> DIR FOUND — NO DLLs</>
+                                  ) : ts.status === "partial" ? (
+                                    <><ShieldAlert className="w-3 h-3 text-yellow-400" /> PARTIAL</>
+                                  ) : (
+                                    <><XCircle className="w-3 h-3" /> NOT FOUND</>
+                                  )}
+                                </span>
+                              )}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 text-[10px] px-2 font-mono border border-border/40"
+                                disabled={isValidatingThis || isVerifyingTools}
+                                onClick={async () => {
+                                  setValidatingTool(key);
+                                  try {
+                                    const result = await apiPost<ToolResult>(`/settings/verify-tools/${key}`, {});
+                                    setToolStatus(prev => ({ ...(prev ?? {}), [key]: result }));
+                                  } catch {
+                                    setErrorMessage(`Failed to validate ${label}.`);
+                                  } finally {
+                                    setValidatingTool(null);
                                   }
+                                }}
+                              >
+                                <RefreshCw className={`w-3 h-3 mr-1 ${isValidatingThis ? "animate-spin" : ""}`} />
+                                {isValidatingThis ? "..." : "VALIDATE"}
+                              </Button>
+                            </div>
+                          </div>
+
+                          {/* Description */}
+                          <p className="font-mono text-[10px] text-muted-foreground mb-2 leading-relaxed">{desc}</p>
+
+                          {/* Path input */}
+                          <Input
+                            value={systemSettings?.[field] ?? ""}
+                            placeholder={placeholder}
+                            className="h-8 text-xs font-mono"
+                            onChange={(event) =>
+                              setSystemSettings((current) =>
+                                current ? { ...current, [field]: event.target.value || null } : current
+                              )
+                            }
+                          />
+
+                          {/* Metadata row: last validated + version */}
+                          {ts?.last_validated_at && (
+                            <div className="flex items-center gap-4 mt-1.5">
+                              <span className="font-mono text-[10px] text-muted-foreground flex items-center gap-1">
+                                <Calendar className="w-3 h-3" />
+                                Validated: {new Date(ts.last_validated_at).toLocaleString()}
+                              </span>
+                              {ts.version && (
+                                <span className="font-mono text-[10px] text-muted-foreground">
+                                  Version: {ts.version}
                                 </span>
                               )}
                             </div>
-                            <Input
-                              value={systemSettings?.[field] ?? ""}
-                              placeholder={placeholder}
-                              onChange={(event) =>
-                                setSystemSettings((current) =>
-                                  current ? { ...current, [field]: event.target.value || null } : current
-                                )
-                              }
-                            />
-                          </div>
+                          )}
+
+                          {/* YARA compile error detail */}
+                          {ts?.detail && (
+                            <p className="font-mono text-xs text-destructive mt-1">{ts.detail}</p>
+                          )}
+
+                          {/* EZ Tools per-DLL breakdown */}
+                          {key === "ez_tools" && ts?.dlls && (
+                            <div className="mt-2 pt-2 border-t border-border/20">
+                              <div className="font-mono text-[9px] text-muted-foreground uppercase tracking-widest mb-1.5">Parser DLL Status</div>
+                              <div className="grid grid-cols-3 gap-x-4 gap-y-1">
+                                {Object.entries(ts.dlls).map(([name, info]) => (
+                                  <span key={name} className={`flex items-center gap-1 font-mono text-[10px] ${info.found ? "text-green-400/80" : "text-muted-foreground/50"}`}>
+                                    {info.found
+                                      ? <CheckCircle2 className="w-3 h-3 shrink-0" />
+                                      : <XCircle className="w-3 h-3 shrink-0 text-red-400/50" />
+                                    }
+                                    {name}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -1092,6 +1241,7 @@ export default function AdminSettings() {
                       <Input
                         value={systemSettings?.timesketch_url ?? ""}
                         placeholder="http://timesketch:5000"
+                        className="h-8 text-xs font-mono"
                         onChange={(event) =>
                           setSystemSettings((current) =>
                             current ? { ...current, timesketch_url: event.target.value || null } : current
@@ -1100,7 +1250,7 @@ export default function AdminSettings() {
                       />
                     </div>
 
-                    {/* Auto-process + Verify row */}
+                    {/* Auto-process + Validate All row */}
                     <div className="flex items-center justify-between pt-3 border-t border-border">
                       <div className="flex items-center gap-3">
                         <input
@@ -1120,11 +1270,11 @@ export default function AdminSettings() {
                       </div>
                       <Button
                         variant="secondary"
-                        disabled={isVerifyingTools}
+                        disabled={isVerifyingTools || validatingTool !== null}
                         onClick={async () => {
                           setIsVerifyingTools(true);
                           try {
-                            const result = await apiPost<Record<string, { ok: boolean; status: string; path: string | null }>>(
+                            const result = await apiPost<Record<string, ToolResult>>(
                               "/settings/verify-tools",
                               {}
                             );
@@ -1137,7 +1287,7 @@ export default function AdminSettings() {
                         }}
                       >
                         <RefreshCw className={`w-4 h-4 mr-2 ${isVerifyingTools ? "animate-spin" : ""}`} />
-                        {isVerifyingTools ? "VERIFYING..." : "VERIFY TOOLS"}
+                        {isVerifyingTools ? "VERIFYING ALL..." : "VALIDATE ALL TOOLS"}
                       </Button>
                     </div>
                   </TacticalPanel>

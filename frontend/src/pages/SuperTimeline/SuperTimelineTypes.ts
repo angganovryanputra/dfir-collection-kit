@@ -142,3 +142,12 @@ export const IOC_COLORS: Record<string, string> = {
     SHA256: "border-purple-500/40 bg-purple-500/10 text-purple-400",
     Domain: "border-green-500/40 bg-green-500/10 text-green-400",
 };
+
+export function getHostColor(host: string, knownHosts: string[]): { bg: string; text: string; border: string } {
+    const idx = knownHosts.indexOf(host);
+    return HOST_COLORS[(idx >= 0 ? idx : 0) % HOST_COLORS.length];
+}
+
+export function getSourceColor(source: string): string {
+    return SOURCE_SHORT_COLORS[source] ?? "bg-muted/20 text-muted-foreground border-border";
+}

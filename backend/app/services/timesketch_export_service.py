@@ -105,6 +105,27 @@ _SOURCE_MAPS: dict[str, dict] = {
         "message_cols": ["DisplayName", "Name"],
         "extra_cols": ["Direction", "Action", "Enabled", "Profile"],
     },
+    # SrumECmd AppResourceUseInfo / NetworkUsageMonitor CSV output
+    "srum": {
+        "timestamp_cols": ["Timestamp", "TimeStamp", "EndTime"],
+        "timestamp_desc": "SRUM App Usage",
+        "source": "Windows SRUM Database",
+        "source_short": "SRUM",
+        "message_cols": ["ExeInfo", "AppId"],
+        "extra_cols": [
+            "FaceTime", "BackgroundBytesRead", "BackgroundBytesWritten",
+            "ForegroundBytesRead", "ForegroundBytesWritten", "UserId",
+        ],
+    },
+    # AppCompatCacheParser CSV output (parsed/shimcache/)
+    "shimcache": {
+        "timestamp_cols": ["LastModifiedTimeUTC0", "LastModified0x10", "LastModifiedUTC"],
+        "timestamp_desc": "ShimCache Entry (File Modified)",
+        "source": "Windows ShimCache (AppCompatCache)",
+        "source_short": "SHIMCACHE",
+        "message_cols": ["Path", "ExecutableName"],
+        "extra_cols": ["Executed", "Notes"],
+    },
 }
 
 
@@ -523,7 +544,353 @@ def _windows_text_artifacts_to_entries(extracted_dir: Path, incident_id: str) ->
             logger.info("Firewall log: %d entries", len(fw_entries))
         all_entries.extend(fw_entries)
 
+    # ── BITS Jobs CSV (PowerShell Get-BitsTransfer output) ────────────────────────
+    bits_csv = extracted_dir / "artifacts" / "windows" / "bits_jobs.csv"
+    if bits_csv.exists():
+        bits_entries: list[dict] = []
+        try:
+            with bits_csv.open(encoding="utf-8-sig", errors="replace", newline="") as fh:
+                for row in csv.DictReader(fh):
+                    for ts_col, ts_desc in [
+                        ("CreationTime", "BITS Job Created"),
+                        ("ModificationTime", "BITS Job Modified"),
+                    ]:
+                        ts = row.get(ts_col, "").strip()
+                        if not ts:
+                            continue
+                        dt = _parse_timestamp(ts)
+                        if not dt:
+                            continue
+                        job_name = row.get("DisplayName", "").strip() or "BITS Job"
+                        bits_entries.append({
+                            "message": f"BITS: {job_name} [{row.get('JobState', '')}]",
+                            "datetime": dt,
+                            "timestamp_desc": ts_desc,
+                            "source": "Windows BITS Jobs",
+                            "source_short": "BITS",
+                            "incident_id": incident_id,
+                            "jobid": row.get("JobId", ""),
+                            "jobstate": row.get("JobState", ""),
+                            "owneraccount": row.get("OwnerAccount", ""),
+                            "display_name": job_name,
+                        })
+                        break
+        except (OSError, csv.Error) as exc:
+            logger.warning("BITS jobs CSV parse failed: %s", exc)
+        if bits_entries:
+            logger.info("BITS jobs: %d entries", len(bits_entries))
+        all_entries.extend(bits_entries)
+
+    # ── UserAssist CSV (PowerShell registry parse) ────────────────────────────────
+    ua_csv = extracted_dir / "artifacts" / "windows" / "user_assist.csv"
+    if ua_csv.exists():
+        ua_entries: list[dict] = []
+        try:
+            with ua_csv.open(encoding="utf-8-sig", errors="replace", newline="") as fh:
+                for row in csv.DictReader(fh):
+                    ts = row.get("LastRun", "").strip()
+                    if not ts:
+                        continue
+                    dt = _parse_timestamp(ts)
+                    if not dt:
+                        continue
+                    program = row.get("Program", "").strip()
+                    run_count = row.get("RunCount", "").strip()
+                    ua_entries.append({
+                        "message": f"UserAssist: {program} (runs: {run_count})",
+                        "datetime": dt,
+                        "timestamp_desc": "Program Executed (UserAssist)",
+                        "source": "Windows UserAssist",
+                        "source_short": "USERASSIST",
+                        "incident_id": incident_id,
+                        "program": program,
+                        "runcount": run_count,
+                        "guid": row.get("GUID", ""),
+                        "display_name": program,
+                    })
+        except (OSError, csv.Error) as exc:
+            logger.warning("UserAssist CSV parse failed: %s", exc)
+        if ua_entries:
+            logger.info("UserAssist: %d entries", len(ua_entries))
+        all_entries.extend(ua_entries)
+
+    # ── ShimCache CSV (agent inline parser output, Win10 format) ─────────────────
+    # The agent writes shimcache.txt as CSV (Index,Path,LastModifiedUTC,Executed)
+    # with comment lines starting with '#'. Used when AppCompatCacheParser is absent.
+    shimcache_txt = extracted_dir / "artifacts" / "windows" / "shimcache.txt"
+    if shimcache_txt.exists():
+        sc_entries: list[dict] = []
+        try:
+            with shimcache_txt.open(encoding="utf-8", errors="replace", newline="") as fh:
+                reader = csv.DictReader(
+                    (line for line in fh if not line.startswith("#"))
+                )
+                if reader.fieldnames and "Path" in reader.fieldnames:
+                    for row in reader:
+                        dt = _parse_timestamp(row.get("LastModifiedUTC", "").strip())
+                        if not dt:
+                            continue
+                        path = row.get("Path", "").strip()
+                        if not path:
+                            continue
+                        exec_flag = row.get("Executed", "Unknown").strip()
+                        sc_entries.append({
+                            "message": f"ShimCache: {path}",
+                            "datetime": dt,
+                            "timestamp_desc": "ShimCache Entry (File Modified)",
+                            "source": "Windows ShimCache (AppCompatCache)",
+                            "source_short": "SHIMCACHE",
+                            "incident_id": incident_id,
+                            "path": path,
+                            "executed": exec_flag,
+                            "display_name": path,
+                        })
+        except (OSError, csv.Error) as exc:
+            logger.warning("ShimCache txt parse failed: %s", exc)
+        if sc_entries:
+            logger.info("ShimCache (agent): %d entries", len(sc_entries))
+        all_entries.extend(sc_entries)
+
     return all_entries
+
+
+_LASTLOG_TS_RE = re.compile(
+    r"^(?P<user>\S+)\s+(?P<port>\S*)\s+(?P<from>\S*)\s+"
+    r"(?P<day>\w{3})\s+(?P<month>\w{3})\s+(?P<mday>\d+)\s+(?P<time>\d{2}:\d{2}:\d{2})\s+"
+    r"(?P<tz>[+-]\d{4})\s+(?P<year>\d{4})"
+)
+
+# dpkg.log: "2026-01-02 15:04:05 install pkg:arch <old> <new>"
+_DPKG_RE = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2})\s+(?P<time>\d{2}:\d{2}:\d{2})\s+"
+    r"(?P<action>install|upgrade|remove|purge|trigproc|status)\s+(?P<pkg>[^\s]+)"
+)
+# yum/dnf.log: "Jan 02 15:04:05 2026 Installed: gcc-12..."  or  "2026-01-02T15:04:05Z INFO ..."
+_YUM_RE = re.compile(
+    r"^(?P<month>[A-Za-z]{3})\s+(?P<day>\d{1,2})\s+(?P<time>\d{2}:\d{2}:\d{2})\s+(?P<year>\d{4})\s+"
+    r"(?P<action>Installed|Erased|Updated|Obsoleted):\s+(?P<pkg>\S+)"
+)
+# apt history.log block: "Start-Date: 2026-01-02  15:04:05"
+_APT_START_RE = re.compile(r"^Start-Date:\s+(?P<dt>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})")
+_APT_CMD_RE = re.compile(r"^Commandline:\s+(?P<cmd>.+)")
+_APT_ACTION_RE = re.compile(r"^(Install|Upgrade|Remove|Purge):\s+(?P<pkgs>.+)")
+
+
+def _linux_lastlog_to_entries(log_path: Path, incident_id: str) -> list[dict]:
+    """Parse lastlog/last output into timeline entries.
+
+    Handles both the lastlog command format ('Thu Jan  2 12:00:00 +0000 2026')
+    and the 'last -F' format (already handled by _linux_wtmp_to_entries).
+    Accounts marked '**Never logged in**' are skipped.
+    """
+    entries: list[dict] = []
+    try:
+        with log_path.open(encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.rstrip()
+                # Skip headers and 'never logged in' lines
+                if not line or "**Never logged in**" in line or line.startswith("Username"):
+                    continue
+                # Normalise multiple spaces for consistent parsing
+                normalised = re.sub(r"\s+", " ", line).strip()
+                m = _LASTLOG_TS_RE.match(normalised)
+                if not m:
+                    continue
+                ts_str = (
+                    f"{m.group('day')} {m.group('month')} {m.group('mday')} "
+                    f"{m.group('time')} {m.group('tz')} {m.group('year')}"
+                )
+                try:
+                    dt = datetime.strptime(ts_str, "%a %b %d %H:%M:%S %z %Y")
+                    ts_iso = dt.isoformat()
+                except (ValueError, TypeError):
+                    continue
+                user = m.group("user")
+                port = m.group("port") or ""
+                from_host = m.group("from") or ""
+                entries.append({
+                    "message": f"Last login: {user} from {from_host} on {port}".strip(),
+                    "datetime": ts_iso,
+                    "timestamp_desc": "Last Login",
+                    "source": "Linux lastlog",
+                    "source_short": "LASTLOG",
+                    "incident_id": incident_id,
+                    "username": user,
+                    "tty": port,
+                    "remote_host": from_host,
+                })
+    except (OSError, UnicodeDecodeError) as exc:
+        logger.warning("Failed to parse lastlog %s: %s", log_path.name, exc)
+    return entries
+
+
+def _linux_package_history_to_entries(log_dir: Path, incident_id: str) -> list[dict]:
+    """Parse package manager logs (dpkg, apt, yum/dnf) into timeline entries."""
+    entries: list[dict] = []
+    if not log_dir.exists():
+        return entries
+
+    for log_file in sorted(log_dir.iterdir()):
+        if not log_file.is_file() or log_file.stat().st_size == 0:
+            continue
+        name = log_file.name.lower()
+        file_entries: list[dict] = []
+
+        try:
+            with log_file.open(encoding="utf-8", errors="replace") as fh:
+                lines = fh.readlines()
+
+            if "dpkg" in name:
+                for line in lines:
+                    m = _DPKG_RE.match(line.rstrip())
+                    if not m:
+                        continue
+                    dt = _parse_timestamp(f"{m.group('date')} {m.group('time')}")
+                    if not dt:
+                        continue
+                    action = m.group("action")
+                    pkg = m.group("pkg")
+                    file_entries.append({
+                        "message": f"dpkg {action}: {pkg}",
+                        "datetime": dt,
+                        "timestamp_desc": f"Package {action.capitalize()}",
+                        "source": "Linux dpkg Log",
+                        "source_short": "DPKG",
+                        "incident_id": incident_id,
+                        "package": pkg,
+                        "action": action,
+                        "display_name": pkg,
+                    })
+            elif "yum" in name or "dnf" in name:
+                for line in lines:
+                    m = _YUM_RE.match(line.rstrip())
+                    if not m:
+                        continue
+                    ts_str = (
+                        f"{m.group('month')} {m.group('day')} "
+                        f"{m.group('time')} {m.group('year')}"
+                    )
+                    try:
+                        dt_obj = datetime.strptime(ts_str, "%b %d %H:%M:%S %Y").replace(
+                            tzinfo=timezone.utc
+                        )
+                        dt = dt_obj.isoformat()
+                    except ValueError:
+                        continue
+                    action = m.group("action")
+                    pkg = m.group("pkg")
+                    mgr = "dnf" if "dnf" in name else "yum"
+                    file_entries.append({
+                        "message": f"{mgr} {action}: {pkg}",
+                        "datetime": dt,
+                        "timestamp_desc": f"Package {action}",
+                        "source": f"Linux {mgr.upper()} Log",
+                        "source_short": mgr.upper(),
+                        "incident_id": incident_id,
+                        "package": pkg,
+                        "action": action,
+                        "display_name": pkg,
+                    })
+            elif "apt" in name or "history" in name:
+                # Block-based format: Start-Date → Commandline → Install/Upgrade/Remove/Purge
+                current_dt: str | None = None
+                current_cmd: str = ""
+                for line in lines:
+                    line = line.rstrip()
+                    m_start = _APT_START_RE.match(line)
+                    if m_start:
+                        current_dt = _parse_timestamp(m_start.group("dt"))
+                        current_cmd = ""
+                        continue
+                    m_cmd = _APT_CMD_RE.match(line)
+                    if m_cmd:
+                        current_cmd = m_cmd.group("cmd").strip()
+                        continue
+                    m_act = _APT_ACTION_RE.match(line)
+                    if m_act and current_dt:
+                        action_name = line.split(":")[0]
+                        pkgs = m_act.group("pkgs").strip()
+                        file_entries.append({
+                            "message": f"apt {action_name}: {pkgs[:100]}",
+                            "datetime": current_dt,
+                            "timestamp_desc": f"Package {action_name}",
+                            "source": "Linux APT History",
+                            "source_short": "APT",
+                            "incident_id": incident_id,
+                            "commandline": current_cmd,
+                            "packages": pkgs[:200],
+                        })
+        except (OSError, UnicodeDecodeError) as exc:
+            logger.warning("Package history parse failed (%s): %s", log_file.name, exc)
+            continue
+
+        if file_entries:
+            logger.info("Package history (%s): %d entries", name, len(file_entries))
+            entries.extend(file_entries)
+
+    return entries
+
+
+def _macos_artifacts_to_entries(extracted_dir: Path, incident_id: str) -> list[dict]:
+    """Parse macOS forensic artifacts into timeline entries.
+
+    Currently handles:
+    - QuarantineEventsV2 SQLite database (LSQuarantineEvent table)
+      Timestamp is CFAbsoluteTime (seconds since 2001-01-01 UTC).
+    """
+    entries: list[dict] = []
+    quarantine_db = extracted_dir / "artifacts" / "macos" / "quarantine_events.db"
+    if not quarantine_db.exists():
+        return entries
+
+    try:
+        import sqlite3
+        # CFAbsoluteTime epoch offset: seconds between 1970-01-01 and 2001-01-01
+        _CF_EPOCH_OFFSET = 978307200
+
+        con = sqlite3.connect(str(quarantine_db))
+        try:
+            rows = con.execute(
+                "SELECT LSQuarantineTimeStamp, LSQuarantineAgentName, "
+                "LSQuarantineDataURLString, LSQuarantineOriginURLString "
+                "FROM LSQuarantineEvent "
+                "WHERE LSQuarantineTimeStamp IS NOT NULL "
+                "ORDER BY LSQuarantineTimeStamp"
+            ).fetchall()
+        except sqlite3.OperationalError as exc:
+            logger.warning("QuarantineEvents query failed: %s", exc)
+            rows = []
+        finally:
+            con.close()
+
+        for row in rows:
+            cf_ts, agent, data_url, origin_url = row
+            try:
+                unix_ts = float(cf_ts) + _CF_EPOCH_OFFSET
+                dt = datetime.fromtimestamp(unix_ts, tz=timezone.utc).isoformat()
+            except (TypeError, ValueError, OSError):
+                continue
+            url = (data_url or "").strip()
+            entries.append({
+                "message": f"Quarantine download: {url}" if url else f"Quarantine event via {agent}",
+                "datetime": dt,
+                "timestamp_desc": "File Downloaded (Quarantine)",
+                "source": "macOS Quarantine Events",
+                "source_short": "QUARANTINE",
+                "incident_id": incident_id,
+                "agent": (agent or "").strip(),
+                "data_url": url,
+                "origin_url": (origin_url or "").strip(),
+                "display_name": url or agent or "",
+            })
+    except ImportError:
+        logger.debug("sqlite3 not available — skipping macOS quarantine events")
+    except (OSError, Exception) as exc:
+        logger.warning("macOS quarantine events parse failed: %s", exc)
+
+    if entries:
+        logger.info("macOS quarantine events: %d entries", len(entries))
+    return entries
 
 
 def _linux_logs_to_entries(extracted_dir: Path, incident_id: str) -> list[dict]:
@@ -550,6 +917,15 @@ def _linux_logs_to_entries(extracted_dir: Path, incident_id: str) -> list[dict]:
             entries = _linux_syslog_to_entries(log_file, incident_id, "Kernel Message", "DMESG")
         elif name in ("wtmp.txt", "wtmp"):
             entries = _linux_wtmp_to_entries(log_file, incident_id)
+        elif name in ("btmp.txt", "btmp"):
+            # btmp records failed login attempts — same binary format, parsed via 'last -f'
+            entries = _linux_wtmp_to_entries(log_file, incident_id)
+            for e in entries:
+                e["source"] = "Linux btmp (Failed Logins)"
+                e["source_short"] = "BTMP"
+                e["timestamp_desc"] = "Failed Login Attempt"
+        elif name in ("lastlog.txt", "lastlog"):
+            entries = _linux_lastlog_to_entries(log_file, incident_id)
         else:
             continue
 
@@ -896,6 +1272,19 @@ async def export_to_jsonl(
                 count += _write_batch(agent_entries)
                 if agent_entries:
                     logger.info("Agent-parsed entries: %d total", len(agent_entries))
+
+                # Linux package manager logs (dpkg, apt, yum/dnf)
+                pkg_log_dir = extracted_dir / "logs" / "linux" / "package_history"
+                pkg_entries = _linux_package_history_to_entries(pkg_log_dir, incident_id)
+                count += _write_batch(pkg_entries)
+                if pkg_entries:
+                    logger.info("Linux package history entries: %d total", len(pkg_entries))
+
+                # macOS quarantine events (SQLite)
+                macos_entries = _macos_artifacts_to_entries(extracted_dir, incident_id)
+                count += _write_batch(macos_entries)
+                if macos_entries:
+                    logger.info("macOS artifact entries: %d total", len(macos_entries))
 
             # Sigma hits
             sigma_entries = _sigma_hits_to_entries(sigma_dir, incident_id)

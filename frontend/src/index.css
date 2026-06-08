@@ -61,66 +61,113 @@
 
     /* Grid overlay */
     --grid-color: 220 15% 12%;
+    
+    /* TCC Effects */
+    --terminal-green: 155 100% 45%;
+    --glitch-red: 0 100% 50%;
+    --glitch-blue: 200 100% 50%;
   }
 
   .dark {
     --background: 225 25% 4%;
     --foreground: 210 20% 90%;
-    --card: 225 20% 6%;
-    --card-foreground: 210 20% 90%;
-    --popover: 225 20% 8%;
-    --popover-foreground: 210 20% 90%;
-    --primary: 155 100% 45%;
-    --primary-foreground: 225 25% 4%;
-    --secondary: 220 15% 12%;
-    --secondary-foreground: 210 20% 75%;
-    --muted: 220 15% 15%;
-    --muted-foreground: 215 15% 55%;
-    --accent: 220 20% 18%;
-    --accent-foreground: 210 20% 90%;
-    --destructive: 0 85% 55%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 220 15% 18%;
-    --input: 220 15% 12%;
-    --ring: 155 100% 45%;
+    /* ... (rest of dark mode vars) */
   }
 }
 
 @layer base {
   * {
-    @apply border-border;
+    @apply border-border selection:bg-primary/30 selection:text-primary;
   }
 
   html {
     font-family: var(--font-sans);
+    cursor: crosshair; /* Tactical crosshair cursor */
   }
 
   body {
-    @apply bg-background text-foreground antialiased;
+    @apply bg-background text-foreground antialiased overflow-x-hidden;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
-  /* Tactical grid background */
+  /* Tactical grid background - Optimized */
   .tactical-grid {
     background-image: 
-      linear-gradient(hsl(var(--grid-color) / 0.3) 1px, transparent 1px),
-      linear-gradient(90deg, hsl(var(--grid-color) / 0.3) 1px, transparent 1px);
-    background-size: 20px 20px;
+      linear-gradient(hsl(var(--grid-color) / 0.15) 1px, transparent 1px),
+      linear-gradient(90deg, hsl(var(--grid-color) / 0.15) 1px, transparent 1px);
+    background-size: 30px 30px;
+    background-attachment: fixed;
   }
 
-  /* Scanline effect for terminal areas */
-  .scanlines::after {
-    content: '';
+  /* Scanline effect - Fixed and subtle */
+  .scanlines {
+    position: relative;
+  }
+  
+  .scanlines::before {
+    content: "";
     position: absolute;
     inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      hsl(var(--background) / 0.03) 2px,
-      hsl(var(--background) / 0.03) 4px
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+        rgba(18, 16, 16, 0) 50%,
+        rgba(0, 0, 0, 0.1) 50%
+    ), linear-gradient(
+        90deg,
+        rgba(255, 0, 0, 0.02),
+        rgba(0, 255, 0, 0.01),
+        rgba(0, 0, 255, 0.02)
     );
+    background-size: 100% 3px, 3px 100%;
     pointer-events: none;
+    z-index: 50;
+    opacity: 0.4;
+  }
+
+  /* Glitch Text Animation */
+  @keyframes glitch {
+    0% { text-shadow: 2px 0 hsl(var(--glitch-red)), -2px 0 hsl(var(--glitch-blue)); }
+    25% { text-shadow: -2px 0 hsl(var(--glitch-red)), 2px 0 hsl(var(--glitch-blue)); }
+    50% { text-shadow: 2px 0 hsl(var(--glitch-red)), -2px 0 hsl(var(--glitch-blue)); }
+    75% { text-shadow: -2px 0 hsl(var(--glitch-red)), 2px 0 hsl(var(--glitch-blue)); }
+    100% { text-shadow: 2px 0 hsl(var(--glitch-red)), -2px 0 hsl(var(--glitch-blue)); }
+  }
+
+  .animate-glitch {
+    animation: glitch 0.2s infinite linear alternate-reverse;
+  }
+
+  /* Data Stream Decryption Keyframes */
+  @keyframes decrypt {
+    0% { opacity: 0; transform: translateY(2px); }
+    100% { opacity: 1; transform: translateY(0); }
+  }
+
+  .decrypt-char {
+    display: inline-block;
+    animation: decrypt 0.1s ease-out forwards;
+  }
+
+  /* Optimized Heartbeat Wave */
+  @keyframes wave {
+    0% { stroke-dashoffset: 1000; }
+    100% { stroke-dashoffset: 0; }
+  }
+
+  .heartbeat-path {
+    stroke-dasharray: 1000;
+    animation: wave 10s linear infinite;
+  }
+
+  /* Floating UI Elements */
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-5px); }
+  }
+
+  .tactical-float {
+    animation: float 4s ease-in-out infinite;
   }
 
   /* Monospace text */

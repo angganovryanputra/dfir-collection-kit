@@ -1,5 +1,5 @@
 import React from "react";
-import { Bookmark, getSourceColor, getHostColor } from "./SuperTimeline/SuperTimelineTypes";
+import { Bookmark, getSourceColor, getHostColor } from "./SuperTimelineTypes";
 import { 
     Clock, Server, Shield, Activity, GitBranch, Target, AlertTriangle, ChevronRight, MessageSquare 
 } from "lucide-react";

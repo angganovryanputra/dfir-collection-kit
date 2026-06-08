@@ -7,6 +7,7 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { TablePagination } from "@/components/TablePagination";
 import { StatCard } from "@/components/common/StatCard";
+import { DecryptedText } from "@/components/DecryptedText";
 import { usePagination } from "@/hooks/usePagination";
 import {
   Plus,
@@ -15,15 +16,24 @@ import {
   AlertTriangle,
   ArrowUpRight,
   CheckCircle2,
+  ShieldAlert,
+  Database,
+  Wrench,
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
 import { apiGet } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
+import { cn } from "@/lib/utils";
 
 interface SystemSettingsPartial {
   ez_tools_path: string | null;
   hayabusa_path: string | null;
   chainsaw_path: string | null;
+}
+
+interface ToolsHealthResponse {
+  overall: "healthy" | "partial" | "broken" | "not_configured";
+  tools: Record<string, { status: string; dlls_found?: number; dlls_total?: number }>;
 }
 
 interface IncidentResponse {
@@ -122,6 +132,14 @@ export default function Dashboard() {
     queryFn: () => apiGet<SystemSettingsPartial>("/settings"),
     enabled: role === "admin",
     staleTime: 5 * 60 * 1000,
+  });
+
+  const toolsHealthQuery = useQuery<ToolsHealthResponse>({
+    queryKey: ["tools-health"],
+    queryFn: () => apiGet<ToolsHealthResponse>("/settings/tools-health"),
+    enabled: role === "admin" || role === "operator",
+    staleTime: 2 * 60 * 1000,
+    retry: false,
   });
 
   const toolsConfigured = !settingsQuery.data
@@ -234,99 +252,114 @@ export default function Dashboard() {
       subtitle="DFIR RAPID COLLECTION KIT"
       showWarning={hasActiveCollection}
       headerActions={
-        <Button variant="tactical" onClick={() => navigate("/incidents/create")}>
+        <Button variant="tactical" onClick={() => navigate("/incidents/create")} className="glow-green">
           <Plus className="w-4 h-4 mr-2" />
-          CREATE INCIDENT
+          CREATE NEW INCIDENT
         </Button>
       }
     >
-      <div className="p-6">
-        {!toolsConfigured && (
-          <div className="mb-4 border border-yellow-500/40 bg-yellow-500/10 p-3 font-mono text-xs text-yellow-400 flex items-center justify-between gap-4">
-            <span>
-              FORENSICS TOOLS NOT CONFIGURED — artifact parsing (EZ Tools) and threat hunting
-              (Hayabusa/Chainsaw) are unavailable. Timeline and Sigma hits will be empty after
-              processing.
-            </span>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="shrink-0 text-yellow-400 border border-yellow-500/40 hover:bg-yellow-500/10"
-              onClick={() => navigate("/admin/settings")}
-            >
-              CONFIGURE
-            </Button>
-          </div>
+      <div className="p-6 space-y-6">
+        {/* Alerts Section */}
+        {(!toolsConfigured || errorMessage) && (
+            <div className="space-y-2">
+                {!toolsConfigured && (
+                  <div className="border border-warning/40 bg-warning/5 p-3 font-mono text-[10px] text-warning flex items-center justify-between gap-4 animate-glitch">
+                    <div className="flex items-center gap-3">
+                        <ShieldAlert className="w-4 h-4" />
+                        <span>
+                          CRITICAL: FORENSICS TOOLS NOT CONFIGURED — Analysis capabilities (Hayabusa/Chainsaw) are currently offline.
+                        </span>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0 text-warning border border-warning/40 hover:bg-warning/10 h-7 text-[9px]"
+                      onClick={() => navigate("/admin/settings")}
+                    >
+                      RESOLVE
+                    </Button>
+                  </div>
+                )}
+                {errorMessage && (
+                  <div className="border border-destructive/40 bg-destructive/5 p-3 font-mono text-[10px] text-destructive flex items-center gap-3">
+                    <AlertTriangle className="w-4 h-4" />
+                    <span>{errorMessage}</span>
+                  </div>
+                )}
+            </div>
         )}
-        {errorMessage && (
-          <div className="mb-4 border border-destructive/40 bg-destructive/10 p-3 font-mono text-xs text-destructive">
-            {errorMessage}
-          </div>
-        )}
-        {/* Stats Cards */}
-        <div className="grid grid-cols-4 gap-4 mb-6">
+
+        {/* Stats HUD */}
+        <div className="grid grid-cols-5 gap-4">
           <StatCard
             icon={<Activity className="w-5 h-5 text-primary" />}
             value={activeIncidents}
-            valueClassName="text-primary"
-            label="Active Incidents"
+            valueClassName="text-primary text-glow-green"
+            label={<DecryptedText text="Active Incidents" delay={500} />}
           />
           <StatCard
             icon={<HardDrive className="w-5 h-5 text-primary" />}
             value={`${onlineCollectors}/${collectors.length}`}
-            valueClassName="text-primary"
-            label="Collectors Online"
+            valueClassName="text-primary text-glow-green"
+            label={<DecryptedText text="Collectors Online" delay={700} />}
           />
-            <StatCard
-              icon={(
-                <div className="w-5 h-5 flex items-center justify-center font-mono text-xs text-primary">
-                  TB
-                </div>
-              )}
-              value={String(totalEvidenceFiles)}
-              valueClassName="text-primary"
-              label="Evidence Files"
-            />
-            <StatCard
-            icon={(
-              <div className="w-5 h-5 flex items-center justify-center font-mono text-xs text-warning">
-                !
+          <StatCard
+            icon={<Database className="w-5 h-5 text-primary" />}
+            value={String(totalEvidenceFiles)}
+            valueClassName="text-primary text-glow-green"
+            label={<DecryptedText text="Evidence Items" delay={900} />}
+          />
+          {/* Tools Health — shown to admin/operator only */}
+          {(role === "admin" || role === "operator") && (() => {
+            const h = toolsHealthQuery.data?.overall;
+            const toolHealthColor = h === "healthy" ? "text-primary"
+              : h === "partial" ? "text-yellow-400"
+              : h === "broken" ? "text-destructive"
+              : "text-muted-foreground";
+            const toolHealthLabel = h === "healthy" ? "HEALTHY"
+              : h === "partial" ? "PARTIAL"
+              : h === "broken" ? "BROKEN"
+              : "NOT SET";
+            return (
+              <div className="cursor-pointer" onClick={() => navigate("/admin/settings")} title="Configure tools in Settings">
+                <StatCard
+                  icon={<Wrench className={cn("w-5 h-5", toolHealthColor)} />}
+                  value={toolHealthLabel}
+                  valueClassName={cn("text-sm", toolHealthColor)}
+                  label={<DecryptedText text="Tools Health" delay={1000} />}
+                />
               </div>
-            )}
-              value={String(systemAlerts)}
-              valueClassName="text-warning"
-              label="System Alerts"
-            />
+            );
+          })()}
+          <StatCard
+            icon={<AlertTriangle className={cn("w-5 h-5", systemAlerts > 0 ? "text-warning animate-pulse" : "text-muted-foreground")} />}
+            value={String(systemAlerts)}
+            valueClassName={systemAlerts > 0 ? "text-warning text-glow-amber" : "text-muted-foreground"}
+            label={<DecryptedText text="System Alerts" delay={1100} />}
+          />
         </div>
 
-        {/* Incident status breakdown */}
-        {incidents.length > 0 && (
-          <div className="flex items-center gap-3 mb-6 flex-wrap">
-            <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">STATUS BREAKDOWN</span>
-            {statusBreakdown.collecting > 0 && (
-              <span className="flex items-center gap-1.5 px-2.5 py-1 border border-primary/40 bg-primary/10 font-mono text-xs text-primary rounded-sm animate-pulse">
-                <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-                {statusBreakdown.collecting} COLLECTING
-              </span>
-            )}
-            {statusBreakdown.active > 0 && (
-              <span className="flex items-center gap-1.5 px-2.5 py-1 border border-yellow-500/40 bg-yellow-500/10 font-mono text-xs text-yellow-400 rounded-sm">
-                {statusBreakdown.active} ACTIVE
-              </span>
-            )}
-            {statusBreakdown.complete > 0 && (
-              <span className="flex items-center gap-1.5 px-2.5 py-1 border border-green-500/40 bg-green-500/10 font-mono text-xs text-green-400 rounded-sm">
-                <CheckCircle2 className="w-3 h-3" />
-                {statusBreakdown.complete} ANALYSIS READY
-              </span>
-            )}
-            {statusBreakdown.closed > 0 && (
-              <span className="px-2.5 py-1 border border-border/40 bg-secondary/30 font-mono text-xs text-muted-foreground rounded-sm">
-                {statusBreakdown.closed} CLOSED
-              </span>
-            )}
-          </div>
-        )}
+        {/* Status Stream Ticker */}
+        <div className="flex items-center gap-4 py-2 border-y border-border/40 bg-secondary/10 px-4 overflow-hidden">
+            <span className="font-mono text-[9px] text-muted-foreground uppercase tracking-widest font-bold shrink-0">Live Status Feed:</span>
+            <div className="flex gap-8 animate-[scanner-sweep_20s_linear_infinite] whitespace-nowrap">
+                {statusBreakdown.collecting > 0 && (
+                    <span className="text-[10px] text-primary font-mono flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
+                        {statusBreakdown.collecting} AGENTS COLLECTING DATA
+                    </span>
+                )}
+                <span className="text-[10px] text-muted-foreground font-mono">
+                    VAULT INTEGRITY: 100% SECURE
+                </span>
+                <span className="text-[10px] text-muted-foreground font-mono">
+                    STORAGE USAGE: {formattedStoragePercent}
+                </span>
+                <span className="text-[10px] text-muted-foreground font-mono">
+                    ACTIVE SESSIONS: {activeIncidents}
+                </span>
+            </div>
+        </div>
 
         <div className="grid grid-cols-12 gap-6">
           {/* Main Content - Incidents */}

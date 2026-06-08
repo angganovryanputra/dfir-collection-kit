@@ -61,8 +61,8 @@ ENV PYTHONPATH=/app
 # Run as non-root user for reduced attack surface
 RUN groupadd --gid 1000 dfir \
     && useradd --system --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin dfir \
-    && mkdir -p /vault/evidence \
-    && chown -R dfir:dfir /app /vault/evidence
+    && mkdir -p /vault/evidence /var/celery \
+    && chown -R dfir:dfir /app /vault/evidence /var/celery
 
 USER dfir
 
