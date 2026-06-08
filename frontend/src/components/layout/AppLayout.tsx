@@ -147,11 +147,15 @@ export function AppLayout({
   const incidentsQuery = useQuery({
     queryKey: ["incidents"],
     queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>("/incidents?limit=1000"),
+    staleTime: 60_000,
+    refetchIntervalInBackground: false,
   });
 
   const collectorsQuery = useQuery({
     queryKey: ["collectors"],
     queryFn: () => apiGet<CollectorResponse[]>("/collectors"),
+    staleTime: 60_000,
+    refetchIntervalInBackground: false,
   });
 
   useEffect(() => {

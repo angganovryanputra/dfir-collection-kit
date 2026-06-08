@@ -52,6 +52,7 @@ export default function AuditLog() {
     queryKey: ["audit-log", eventType, actorId, targetId, page],
     queryFn: () => apiGet<AuditLogResponse>(`/audit-logs?${params.toString()}`),
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
 
   const entries = data?.entries ?? [];

@@ -320,6 +320,7 @@ export default function AdminSettings() {
     }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (activeTab !== "audit") return;
     loadAuditLogs();
@@ -338,6 +339,7 @@ export default function AdminSettings() {
     }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (activeTab !== "threatintel") return;
     loadIOCIndicators();
@@ -378,6 +380,7 @@ export default function AdminSettings() {
     }
   };
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     const raw = localStorage.getItem("dfir_auth");
     if (!raw) {

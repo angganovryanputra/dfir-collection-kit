@@ -68,6 +68,7 @@ export default function UserManagement() {
     queryKey: ["admin-users"],
     queryFn: () => apiGet<UserOut[]>("/users/"),
     refetchInterval: 30000,
+    refetchIntervalInBackground: false,
   });
 
   // Create form state
