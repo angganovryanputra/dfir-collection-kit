@@ -1,13 +1,61 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { 
-    X, Server, Clock, User, Shield, ExternalLink, Bookmark as BookmarkIcon, Check, Copy, Tag, MessageSquare, Target
+    X, Server, Clock, User, Shield, ExternalLink, Bookmark as BookmarkIcon, Check, Copy, Tag, MessageSquare, Target, GitMerge
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { 
     getHostColor, detectIOCs, truncate 
 } from "./SuperTimelineUtils";
 import { EVENT_TAG_META, IOC_COLORS } from "./SuperTimelineTypes";
+import { cn } from "@/lib/utils";
+
+// ─── Process Tree Component ──────────────────────────────────────────────────
+
+function ProcessTree({ event }: { event: Record<string, unknown> }) {
+    const parentName = String(event["parent_process_name"] || event["parent_image"] || "Unknown Parent");
+    const currentName = String(event["process_name"] || event["image"] || event["display_name"] || "Current Process");
+    const parentId = String(event["parent_process_id"] || "—");
+    const currentId = String(event["process_id"] || "—");
+
+    return (
+        <div className="space-y-2 py-2">
+            <div className="text-[10px] text-muted-foreground uppercase tracking-widest border-b border-border/40 pb-1 flex items-center gap-2">
+                <GitMerge className="w-3 h-3" /> Process Lineage
+            </div>
+            <div className="relative pl-6 space-y-4 pt-2">
+                {/* Connector Line */}
+                <div className="absolute left-[11px] top-4 bottom-4 w-[1px] bg-primary/30" />
+
+                {/* Parent Node */}
+                <div className="relative">
+                    <div className="absolute -left-[20px] top-1.5 w-2 h-2 rounded-full border border-primary/50 bg-background" />
+                    <div className="flex flex-col">
+                        <span className="text-[9px] text-muted-foreground uppercase leading-none mb-1">Parent (PID: {parentId})</span>
+                        <span className="text-[11px] font-bold text-foreground/80 truncate max-w-[400px]" title={parentName}>{parentName.split(/[\\/]/).pop()}</span>
+                    </div>
+                </div>
+
+                {/* Current Node */}
+                <div className="relative">
+                    <div className="absolute -left-[24px] top-1 w-4 h-4 rounded-full border-2 border-primary bg-primary/20 shadow-[0_0_8px_hsl(var(--primary)/0.4)]" />
+                    <div className="flex flex-col bg-primary/5 border border-primary/20 p-2 rounded-sm">
+                        <span className="text-[9px] text-primary uppercase font-bold leading-none mb-1">Inspected (PID: {currentId})</span>
+                        <span className="text-[11px] font-bold text-primary truncate max-w-[380px]" title={currentName}>{currentName.split(/[\\/]/).pop()}</span>
+                    </div>
+                </div>
+
+                {/* Placeholder Child Node (Indicates potential activity) */}
+                <div className="relative opacity-40">
+                    <div className="absolute -left-[20px] top-1.5 w-2 h-2 rounded-full border border-border bg-background" />
+                    <div className="flex flex-col">
+                        <span className="text-[9px] text-muted-foreground uppercase leading-none italic">Subsequent Activity...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}
 
 // ─── Event Detail Panel ──────────────────────────────────────────────────────
 
@@ -34,6 +82,11 @@ export function EventDetailPanel({
     const hColor = getHostColor(host, knownHosts);
     const message = String(event["message"] ?? event["description"] ?? "");
     const iocs = detectIOCs(message + " " + JSON.stringify(event));
+
+    // Detect if this is a process creation event
+    const eventId = String(event["event_id"] || "");
+    const sourceShort = String(event["source_short"] || "").toUpperCase();
+    const isProcessEvent = eventId === "4688" || eventId === "1" || sourceShort === "SYSMON" || message.toLowerCase().includes("process creation");
 
     const handleCopy = (val: string, label: string) => {
         navigator.clipboard.writeText(val);
@@ -79,7 +132,7 @@ export function EventDetailPanel({
 
                 <div className="flex gap-2 shrink-0">
                     <Button 
-                        variant="outline" 
+                        variant="tactical" 
                         size="sm" 
                         className="flex-1 h-8 text-[10px] font-bold gap-2"
                         onClick={handlePivotHypothesis}
@@ -88,6 +141,9 @@ export function EventDetailPanel({
                         ADD TO HYPOTHESIS
                     </Button>
                 </div>
+
+                {/* Process Tree Explorer */}
+                {isProcessEvent && <ProcessTree event={event} />}
 
                 {/* Artifact Metadata */}
                 <div className="space-y-2">
@@ -240,62 +296,3 @@ export function ComparePanel({
         </div>
     );
 }
- Here is the updated code:
-...
-import React, { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { 
-    X, Server, Clock, User, Shield, ExternalLink, Bookmark as BookmarkIcon, Check, Copy, Tag, MessageSquare, Target
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-...
-    onBookmarkToggle: (event: Record<string, unknown>, note: string) => void;
-    onNavigateIOC: (value: string, type: string) => void;
-}
-
-export function EventDetailPanel({
-    event, knownHosts, onClose, onFilterSearch, incidentId,
-    isBookmarked, onBookmarkToggle, onNavigateIOC
-}: EventDetailPanelProps) {
-    const navigate = useNavigate();
-    const [noteInput, setNoteInput] = useState("");
-    const [copied, setCopied] = useState<string | null>(null);
-...
-    const handleCopy = (val: string, label: string) => {
-        navigator.clipboard.writeText(val);
-        setCopied(label);
-        setTimeout(() => setCopied(null), 2000);
-    };
-
-    const handlePivotHypothesis = () => {
-        const title = `Investigation: ${truncate(message, 50)}`;
-        const evidence = `Event at ${event["datetime"]} on ${host}\nSource: ${event["source"]}\nMessage: ${message}`;
-        const params = new URLSearchParams({
-            title,
-            evidence,
-        });
-        navigate(`/incidents/${incidentId}/hypotheses?${params.toString()}`);
-    };
-
-    return (
-...
-                    <div className="text-sm font-bold text-foreground leading-relaxed">
-                        {message}
-                    </div>
-                </div>
-
-                <div className="flex gap-2 shrink-0">
-                    <Button 
-                        variant="outline" 
-                        size="sm" 
-                        className="flex-1 h-8 text-[10px] font-bold gap-2"
-                        onClick={handlePivotHypothesis}
-                    >
-                        <Target className="w-3.5 h-3.5" />
-                        ADD TO HYPOTHESIS
-                    </Button>
-                </div>
-
-                {/* Artifact Metadata */}
-                <div className="space-y-2">
-...

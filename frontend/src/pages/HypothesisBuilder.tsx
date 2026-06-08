@@ -6,7 +6,17 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { KeyValueRow } from "@/components/common/KeyValueRow";
-import { ChevronLeft, Plus, Edit2, Trash2, Target, CheckCircle2, XCircle } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { ChevronLeft, Plus, Edit2, Trash2, Target, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
 import { useToast } from "@/components/ui/use-toast";
@@ -159,90 +169,111 @@ export default function HypothesisBuilder() {
 
         {showForm && (
           <TacticalPanel title={editId ? "EDIT HYPOTHESIS" : "NEW HYPOTHESIS"} status="active">
-            <div className="space-y-3 font-mono text-sm">
-              <div>
-                <label className="text-xs text-muted-foreground uppercase">Title *</label>
-                <input
-                  className="mt-1 w-full h-8 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+            <div className="space-y-4 font-mono text-sm">
+              <div className="space-y-1.5">
+                <Label className="text-xs uppercase text-muted-foreground">Title *</Label>
+                <Input
                   value={form.title}
                   onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
                   placeholder="e.g. Attacker used Pass-the-Hash for lateral movement"
+                  className="h-9"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs text-muted-foreground uppercase">MITRE Tactic</label>
-                  <select
-                    className="mt-1 w-full h-8 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none"
-                    value={form.tactic}
-                    onChange={e => setForm(f => ({ ...f, tactic: e.target.value }))}
+
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase text-muted-foreground">MITRE Tactic</Label>
+                  <Select 
+                    value={form.tactic} 
+                    onValueChange={val => setForm(f => ({ ...f, tactic: val }))}
                   >
-                    <option value="">— select —</option>
-                    {MITRE_TACTICS.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
+                    <SelectTrigger className="h-9">
+                      <SelectValue placeholder="— select —" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {MITRE_TACTICS.map(t => (
+                        <SelectItem key={t} value={t}>{t}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div>
-                  <label className="text-xs text-muted-foreground uppercase">Technique ID</label>
-                  <input
-                    className="mt-1 w-full h-8 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase text-muted-foreground">Technique ID</Label>
+                  <Input
                     value={form.technique_id}
                     onChange={e => setForm(f => ({ ...f, technique_id: e.target.value }))}
                     placeholder="e.g. T1550.002"
+                    className="h-9"
                   />
                 </div>
-                <div>
-                  <label className="text-xs text-muted-foreground uppercase">Confidence</label>
-                  <select
-                    className="mt-1 w-full h-8 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none"
-                    value={form.confidence}
-                    onChange={e => setForm(f => ({ ...f, confidence: e.target.value }))}
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase text-muted-foreground">Confidence</Label>
+                  <Select 
+                    value={form.confidence} 
+                    onValueChange={(val: any) => setForm(f => ({ ...f, confidence: val }))}
                   >
-                    <option>LOW</option>
-                    <option>MEDIUM</option>
-                    <option>HIGH</option>
-                  </select>
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="LOW">LOW</SelectItem>
+                      <SelectItem value="MEDIUM">MEDIUM</SelectItem>
+                      <SelectItem value="HIGH">HIGH</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div>
-                  <label className="text-xs text-muted-foreground uppercase">Status</label>
-                  <select
-                    className="mt-1 w-full h-8 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none"
-                    value={form.status}
-                    onChange={e => setForm(f => ({ ...f, status: e.target.value }))}
+                <div className="space-y-1.5">
+                  <Label className="text-xs uppercase text-muted-foreground">Status</Label>
+                  <Select 
+                    value={form.status} 
+                    onValueChange={(val: any) => setForm(f => ({ ...f, status: val }))}
                   >
-                    <option>OPEN</option>
-                    <option>CONFIRMED</option>
-                    <option>REFUTED</option>
-                  </select>
+                    <SelectTrigger className="h-9">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="OPEN">OPEN</SelectItem>
+                      <SelectItem value="CONFIRMED">CONFIRMED</SelectItem>
+                      <SelectItem value="REFUTED">REFUTED</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
-              <div>
-                <label className="text-xs text-muted-foreground uppercase">Description</label>
-                <textarea
-                  className="mt-1 w-full px-2 py-1 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+
+              <div className="space-y-1.5">
+                <Label className="text-xs uppercase text-muted-foreground">Description</Label>
+                <Textarea
                   rows={3}
                   value={form.description}
                   onChange={e => setForm(f => ({ ...f, description: e.target.value }))}
                   placeholder="Supporting narrative..."
+                  className="min-h-[80px]"
                 />
               </div>
-              <div>
-                <label className="text-xs text-muted-foreground uppercase">Evidence References (one per line)</label>
-                <textarea
-                  className="mt-1 w-full px-2 py-1 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary resize-none"
+
+              <div className="space-y-1.5">
+                <Label className="text-xs uppercase text-muted-foreground">Evidence References (one per line)</Label>
+                <Textarea
                   rows={2}
                   value={form.evidence_refs}
                   onChange={e => setForm(f => ({ ...f, evidence_refs: e.target.value }))}
                   placeholder="Event ID 4624 logon from DC01"
+                  className="min-h-[60px]"
                 />
               </div>
-              <div className="flex gap-2 pt-1">
+
+              <div className="flex gap-2 pt-2 border-t border-border/40">
                 <Button
                   variant="tactical"
                   size="sm"
                   disabled={!form.title || saveMutation.isPending}
                   onClick={() => saveMutation.mutate()}
+                  className="gap-2"
                 >
-                  {saveMutation.isPending ? "SAVING..." : "SAVE"}
+                  {saveMutation.isPending ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : null}
+                  {saveMutation.isPending ? "SAVING..." : "SAVE HYPOTHESIS"}
                 </Button>
                 <Button variant="ghost" size="sm" onClick={resetForm}>CANCEL</Button>
               </div>
@@ -252,61 +283,98 @@ export default function HypothesisBuilder() {
 
         <TacticalPanel title={`HYPOTHESES (${hypotheses.length})`} status={hypotheses.length > 0 ? "online" : "warning"}>
           {isLoading ? (
-            <div className="font-mono text-xs text-muted-foreground py-4">LOADING...</div>
+            <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground py-4">
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              LOADING...
+            </div>
           ) : hypotheses.length === 0 ? (
-            <div className="font-mono text-xs text-muted-foreground py-4">
+            <div className="font-mono text-xs text-muted-foreground py-4 italic">
               No hypotheses yet. Create one to track ATT&CK-framed investigation threads.
             </div>
           ) : (
             <div className="space-y-3">
               {hypotheses.map(h => (
-                <div key={h.id} className="border border-border rounded-sm p-3 font-mono text-xs space-y-2">
+                <div key={h.id} className="border border-border rounded-sm p-4 font-mono text-xs space-y-3 bg-secondary/5 hover:border-primary/30 transition-colors">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <div className="flex items-center gap-2.5 flex-1 min-w-0">
                       {h.status === "CONFIRMED" ? (
-                        <CheckCircle2 className="w-3 h-3 text-primary shrink-0" />
+                        <CheckCircle2 className="w-4 h-4 text-primary shrink-0" />
                       ) : h.status === "REFUTED" ? (
-                        <XCircle className="w-3 h-3 text-destructive shrink-0" />
+                        <XCircle className="w-4 h-4 text-destructive shrink-0" />
                       ) : (
-                        <Target className="w-3 h-3 shrink-0" />
+                        <Target className="w-4 h-4 text-orange-400 shrink-0" />
                       )}
-                      <span className="font-bold truncate">{h.title}</span>
+                      <span className="font-bold text-sm truncate">{h.title}</span>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <span className={`text-xs font-bold ${CONFIDENCE_COLORS[h.confidence]}`}>
-                        {h.confidence}
+                    <div className="flex items-center gap-3 shrink-0">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 border border-current rounded-sm ${CONFIDENCE_COLORS[h.confidence]}`}>
+                        {h.confidence} CONFIDENCE
                       </span>
                       <StatusIndicator
                         status={h.status === "CONFIRMED" ? "verified" : h.status === "REFUTED" ? "offline" : "active"}
                         label={h.status}
                       />
                       {canEdit && (
-                        <>
-                          <button className="text-muted-foreground hover:text-foreground" onClick={() => handleEdit(h)}>
-                            <Edit2 className="w-3 h-3" />
+                        <div className="flex items-center gap-1 ml-1 border-l border-border/40 pl-2">
+                          <button 
+                            className="p-1 text-muted-foreground hover:text-foreground transition-colors" 
+                            onClick={() => handleEdit(h)}
+                            title="Edit"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
                           </button>
-                          <button className="text-muted-foreground hover:text-destructive" onClick={() => deleteMutation.mutate(h.id)}>
-                            <Trash2 className="w-3 h-3" />
+                          <button 
+                            className="p-1 text-muted-foreground hover:text-destructive transition-colors" 
+                            onClick={() => deleteMutation.mutate(h.id)}
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
                           </button>
-                        </>
+                        </div>
                       )}
                     </div>
                   </div>
+                  
                   {(h.tactic || h.technique_id) && (
-                    <div className="text-muted-foreground">
-                      {h.tactic && <span className="mr-3">{h.tactic}</span>}
-                      {h.technique_id && <span className="text-primary font-bold">{h.technique_id}</span>}
+                    <div className="flex gap-4 border-b border-border/20 pb-2">
+                      {h.tactic && (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-[9px] text-muted-foreground uppercase">Tactic</span>
+                          <span className="text-foreground">{h.tactic}</span>
+                        </div>
+                      )}
+                      {h.technique_id && (
+                        <div className="flex flex-col gap-0.5">
+                          <span className="text-[9px] text-muted-foreground uppercase">Technique</span>
+                          <span className="text-primary font-bold">{h.technique_id}</span>
+                        </div>
+                      )}
                     </div>
                   )}
-                  {h.description && <div className="text-muted-foreground">{h.description}</div>}
+
+                  {h.description && (
+                    <p className="text-muted-foreground leading-relaxed italic border-l-2 border-primary/20 pl-3">
+                      {h.description}
+                    </p>
+                  )}
+
                   {h.evidence_refs.length > 0 && (
-                    <div className="mt-1 space-y-0.5">
-                      {h.evidence_refs.map((ref, i) => (
-                        <div key={i} className="text-muted-foreground">• {ref}</div>
-                      ))}
+                    <div className="space-y-1.5 bg-secondary/10 p-2 rounded-sm border border-border/30">
+                      <div className="text-[9px] text-muted-foreground uppercase tracking-widest font-bold">Evidence Items</div>
+                      <div className="space-y-1">
+                        {h.evidence_refs.map((ref, i) => (
+                          <div key={i} className="text-muted-foreground flex gap-2">
+                            <span className="text-primary/50 text-[10px]">•</span>
+                            <span className="flex-1">{ref}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   )}
-                  <KeyValueRow label="UPDATED:" value={new Date(h.updated_at).toLocaleString()} />
+
+                  <div className="pt-2 flex justify-end">
+                    <KeyValueRow label="LAST UPDATE:" value={new Date(h.updated_at).toLocaleString()} />
+                  </div>
                 </div>
               ))}
             </div>

@@ -287,6 +287,134 @@ function TimelineStep({
     );
 }
 
+// ─── Lateral Movement Graph ─────────────────────────────────────────────────
+
+interface LateralMovementGraphProps {
+    detections: LateralMovementOut[];
+    incidentId: string;
+}
+
+function LateralMovementGraph({ detections, incidentId }: LateralMovementGraphProps) {
+    const navigate = useNavigate();
+    
+    // Extract unique hosts
+    const hosts = Array.from(new Set([
+        ...detections.map(d => d.source_host),
+        ...detections.map(d => d.target_host)
+    ]));
+
+    // Simple radial layout for nodes
+    const width = 600;
+    const height = 300;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    const radius = Math.min(width, height) / 2.5;
+
+    const nodePositions: Record<string, { x: number; y: number }> = {};
+    hosts.forEach((h, i) => {
+        const angle = (i / hosts.length) * 2 * Math.PI - Math.PI / 2;
+        nodePositions[h] = {
+            x: centerX + radius * Math.cos(angle),
+            y: centerY + radius * Math.sin(angle),
+        };
+    });
+
+    return (
+        <div className="w-full h-[320px] bg-secondary/5 border border-border/40 rounded-sm relative overflow-hidden group/graph mb-4">
+            <div className="absolute top-2 left-3 font-mono text-[10px] text-muted-foreground uppercase tracking-widest pointer-events-none">
+                <Network className="w-3 h-3 inline mr-1.5 text-primary" />
+                Network Spread Visualization
+            </div>
+            
+            <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} className="drop-shadow-2xl">
+                <defs>
+                    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="19" refY="3.5" orient="auto">
+                        <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" />
+                    </marker>
+                    <filter id="glow">
+                        <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+                        <feMerge>
+                            <feMergeNode in="coloredBlur"/>
+                            <feMergeNode in="SourceGraphic"/>
+                        </feMerge>
+                    </filter>
+                </defs>
+
+                {/* Draw Edges */}
+                {detections.map((d) => {
+                    const start = nodePositions[d.source_host];
+                    const end = nodePositions[d.target_host];
+                    if (!start || !end) return null;
+
+                    const color = d.confidence >= 0.8 ? "text-red-500" : d.confidence >= 0.5 ? "text-orange-400" : "text-yellow-400";
+                    
+                    return (
+                        <g key={d.id} className={cn("cursor-pointer transition-all hover:opacity-100 opacity-70", color)}
+                           onClick={() => {
+                               const q = `host:${d.source_host} OR host:${d.target_host}`;
+                               const startTs = d.first_seen ? d.first_seen.replace(" ", "T") : "";
+                               const endTs = d.last_seen ? d.last_seen.replace(" ", "T") : "";
+                               const params = new URLSearchParams({ q });
+                               if (startTs) params.append("start_date", startTs);
+                               if (endTs) params.append("end_date", endTs);
+                               navigate(`/incidents/${incidentId}/super-timeline?${params.toString()}`);
+                           }}>
+                            <path
+                                d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`}
+                                stroke="currentColor"
+                                strokeWidth={Math.max(1, d.confidence * 3)}
+                                fill="none"
+                                markerEnd="url(#arrowhead)"
+                                className="animate-in fade-in duration-1000"
+                                strokeDasharray="5,5"
+                            >
+                                <animate attributeName="stroke-dashoffset" from="100" to="0" dur="5s" repeatCount="indefinite" />
+                            </path>
+                            {/* Hover hit area */}
+                            <path
+                                d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`}
+                                stroke="transparent"
+                                strokeWidth="20"
+                                fill="none"
+                            />
+                        </g>
+                    );
+                })}
+
+                {/* Draw Nodes */}
+                {hosts.map((h) => (
+                    <g key={h} transform={`translate(${nodePositions[h].x}, ${nodePositions[h].y})`} className="select-none">
+                        <circle
+                            r="12"
+                            className="fill-card stroke-primary/50"
+                            strokeWidth="1.5"
+                            filter="url(#glow)"
+                        />
+                        <text
+                            y="-18"
+                            textAnchor="middle"
+                            className="fill-foreground font-mono font-bold text-[10px] uppercase tracking-tighter"
+                        >
+                            {h}
+                        </text>
+                    </g>
+                ))}
+            </svg>
+            
+            <div className="absolute bottom-2 right-3 flex gap-4 pointer-events-none">
+                <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
+                    <span className="font-mono text-[9px] text-muted-foreground uppercase">High Confidence</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                    <div className="w-2 h-2 rounded-full bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.6)]" />
+                    <span className="font-mono text-[9px] text-muted-foreground uppercase">Med/Low</span>
+                </div>
+            </div>
+        </div>
+    );
+}
+
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function IncidentHub() {
@@ -670,6 +798,8 @@ export default function IncidentHub() {
                 {/* ── Lateral movement grid summary ───────────────────────── */}
                 {stDone && lmDetections && lmDetections.length > 0 && (
                     <TacticalPanel title={`LATERAL MOVEMENT DETECTED (${lmDetections.length})`} status="offline">
+                        <LateralMovementGraph detections={lmDetections} incidentId={incidentId ?? ""} />
+                        
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             {lmDetections.map((det) => (
                                 <div

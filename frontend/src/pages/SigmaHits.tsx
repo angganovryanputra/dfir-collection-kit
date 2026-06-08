@@ -5,6 +5,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/common/SearchInput";
+import { useEvidence } from "@/context/EvidenceContext";
 import {
     ChevronLeft,
     AlertTriangle,
@@ -13,8 +14,10 @@ import {
     ChevronRight,
     X,
     Search,
+    Pin,
 } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 interface SigmaHitOut {
     id: string;
@@ -62,6 +65,7 @@ const LIMIT = 50;
 export default function SigmaHits() {
     const navigate = useNavigate();
     const { id: incidentId } = useParams<{ id: string }>();
+    const { pinItem, pinnedItems } = useEvidence();
     const [selectedSeverity, setSelectedSeverity] = useState<string | null>(null);
     const [offset, setOffset] = useState(0);
     const [selectedHit, setSelectedHit] = useState<SigmaHitOut | null>(null);
@@ -340,6 +344,24 @@ export default function SigmaHits() {
                             )}
                         </div>
                         <div className="px-5 py-3 border-t border-border flex justify-end gap-2 shrink-0">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 gap-2"
+                                onClick={() => {
+                                    pinItem({
+                                        id: selectedHit.id,
+                                        type: "hit",
+                                        title: `Sigma: ${selectedHit.rule_name}`,
+                                        content: selectedHit.description || selectedHit.rule_name,
+                                        timestamp: selectedHit.event_timestamp || selectedHit.detected_at,
+                                        metadata: { severity: selectedHit.severity, artifact: selectedHit.artifact_file }
+                                    });
+                                }}
+                            >
+                                <Pin className={cn("w-3.5 h-3.5", pinnedItems.some(i => i.id === selectedHit.id) && "fill-current")} />
+                                {pinnedItems.some(i => i.id === selectedHit.id) ? "PINNED" : "PIN TO WORKSPACE"}
+                            </Button>
                             <Button
                                 variant="tactical"
                                 size="sm"

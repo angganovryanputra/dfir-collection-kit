@@ -4,8 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
-import { ChevronLeft, ChevronRight, ShieldCheck, Bug, AlertTriangle, Search } from "lucide-react";
+import { useEvidence } from "@/context/EvidenceContext";
+import { ChevronLeft, ChevronRight, ShieldCheck, Bug, AlertTriangle, Search, Pin } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 interface YaraMatchString {
     offset: number;
@@ -52,6 +54,7 @@ function formatBytes(bytes: number | null): string {
 export default function YaraMatches() {
     const navigate = useNavigate();
     const { id: incidentId } = useParams<{ id: string }>();
+    const { pinItem, pinnedItems } = useEvidence();
     const [page, setPage] = useState(1);
     const [selected, setSelected] = useState<YaraMatch | null>(null);
 
@@ -290,6 +293,24 @@ export default function YaraMatches() {
                             )}
                         </div>
                         <div className="px-5 py-3 border-t border-border flex justify-end gap-2 shrink-0">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-8 gap-2"
+                                onClick={() => {
+                                    pinItem({
+                                        id: selected.id,
+                                        type: "match",
+                                        title: `YARA: ${selected.rule_name}`,
+                                        content: selected.matched_file,
+                                        timestamp: selected.detected_at,
+                                        metadata: { severity: selected.severity, sha256: selected.file_sha256 }
+                                    });
+                                }}
+                            >
+                                <Pin className={cn("w-3.5 h-3.5", pinnedItems.some(i => i.id === selected.id) && "fill-current")} />
+                                {pinnedItems.some(i => i.id === selected.id) ? "PINNED" : "PIN TO WORKSPACE"}
+                            </Button>
                             <Button
                                 variant="tactical"
                                 size="sm"

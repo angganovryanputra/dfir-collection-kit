@@ -5,7 +5,7 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
 import { 
-    ChevronLeft, Loader2, Network, Shield, ArrowRight
+    ChevronLeft, Loader2, Network, Shield, ArrowRight, Table as TableIcon, GitBranch
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,7 @@ import { SuperTimelineFilters } from "./SuperTimeline/SuperTimelineFilters";
 import { SuperTimelineTable } from "./SuperTimeline/SuperTimelineTable";
 import { SuperTimelineToolbar } from "./SuperTimeline/SuperTimelineToolbar";
 import { SuperTimelineChart } from "./SuperTimeline/SuperTimelineChart";
+import { NarrativeStoryline } from "./SuperTimeline/NarrativeStoryline";
 import { EventDetailPanel, ComparePanel } from "./SuperTimeline/SuperTimelinePanels";
 
 // Types & Utils
@@ -39,6 +40,7 @@ export default function SuperTimeline() {
     const initialStart = searchParams.get("start_date") || "";
     const initialEnd = searchParams.get("end_date") || "";
     
+    const [viewMode, setViewMode] = useState<"table" | "narrative">("table");
     const [page, setPage] = useState(1);
     const [pageSize, setPageSize] = useState<number>(PAGE_SIZE_OPTIONS[0]);
     const [sortBy, setSortBy] = useState<SortKey>("datetime");
@@ -333,7 +335,34 @@ export default function SuperTimeline() {
                             activeFilterCount={activeFilterCount}
                         />
 
-                        <TacticalPanel title={showBookmarks ? "BOOKMARKED EVENTS" : "UNIFIED EVENT TIMELINE"} className="flex-1 flex flex-col min-h-0 overflow-hidden p-0">
+                        <TacticalPanel 
+                            title={showBookmarks ? "BOOKMARKED EVENTS" : viewMode === "narrative" ? "MISSION LOG: NARRATIVE STORYLINE" : "UNIFIED EVENT TIMELINE"} 
+                            className="flex-1 flex flex-col min-h-0 overflow-hidden p-0"
+                            headerActions={
+                                <div className="flex items-center gap-1 bg-secondary/50 p-0.5 rounded-sm border border-border/40 mr-4">
+                                    <button 
+                                        onClick={() => setViewMode("table")}
+                                        className={cn(
+                                            "flex items-center gap-1.5 px-2 py-1 rounded-sm font-mono text-[9px] transition-all",
+                                            viewMode === "table" ? "bg-primary text-primary-foreground shadow-lg" : "text-muted-foreground hover:text-foreground"
+                                        )}
+                                    >
+                                        <TableIcon className="w-3 h-3" />
+                                        TABLE VIEW
+                                    </button>
+                                    <button 
+                                        onClick={() => setViewMode("narrative")}
+                                        className={cn(
+                                            "flex items-center gap-1.5 px-2 py-1 rounded-sm font-mono text-[9px] transition-all",
+                                            viewMode === "narrative" ? "bg-primary text-primary-foreground shadow-lg" : "text-muted-foreground hover:text-foreground"
+                                        )}
+                                    >
+                                        <GitBranch className="w-3 h-3" />
+                                        NARRATIVE VIEW
+                                    </button>
+                                </div>
+                            }
+                        >
                             <div className="flex flex-col h-full">
                                 <SuperTimelineToolbar 
                                     visibleCols={visibleCols}
@@ -352,55 +381,66 @@ export default function SuperTimeline() {
                                     totalEvents={timelineData?.total ?? 0}
                                 />
 
-                                {!showBookmarks && timelineData && (
+                                {!showBookmarks && viewMode === "table" && timelineData && (
                                     <SuperTimelineChart 
                                         data={timelineData.data} 
                                         onSelectWindow={onSelectChartWindow}
                                     />
                                 )}
 
-                                <SuperTimelineTable 
-                                    data={showBookmarks ? [] : (timelineData?.data ?? [])}
-                                    total={timelineData?.total ?? 0}
-                                    page={page}
-                                    setPage={setPage}
-                                    pageSize={pageSize}
-                                    setPageSize={setPageSize}
-                                    sortBy={sortBy}
-                                    sortOrder={sortOrder}
-                                    onSort={handleSort}
-                                    visibleCols={visibleCols}
-                                    loading={tlLoading}
-                                    error={tlError as Error}
-                                    selectedEvent={selectedEvent}
-                                    onRowClick={(e, row, i) => {
-                                        if (e.shiftKey) {
-                                            if (!compareEvents) setCompareEvents([row]);
-                                            else if (compareEvents.includes(row)) setCompareEvents(compareEvents.filter(x => x !== row));
-                                            else setCompareEvents([...compareEvents, row]);
-                                        } else {
-                                            setSelectedEvent(row);
-                                            setFocusedRowIndex(i);
-                                        }
-                                    } }
-                                    focusedRowIndex={focusedRowIndex}
-                                    highlightCache={highlightCache}
-                                    eventHashCache={eventHashCache}
-                                    eventTags={eventTags}
-                                    setEventTag={setEventTag}
-                                    activeFilterCount={activeFilterCount}
-                                    clearFilters={() => {}}
-                                    knownHosts={timelineData?.hosts ?? []}
-                                    lmWindowSet={lmWindowSet}
-                                    onSearchChange={(q) => { setSearchInput(q); setPage(1); }}
-                                    bookmarks={bookmarks}
-                                    onRemoveBookmark={(hash) => {
-                                        const next = bookmarks.filter(b => b.eventHash !== hash);
-                                        setBookmarks(next);
-                                        saveBookmarks(incidentId ?? "", next);
-                                    }}
-                                    showBookmarks={showBookmarks}
-                                />
+                                <div className="flex-1 overflow-hidden flex flex-col">
+                                    {viewMode === "narrative" ? (
+                                        <div className="flex-1 overflow-auto bg-background/30">
+                                            <NarrativeStoryline 
+                                                bookmarks={bookmarks} 
+                                                knownHosts={timelineData?.hosts ?? []} 
+                                            />
+                                        </div>
+                                    ) : (
+                                        <SuperTimelineTable 
+                                            data={showBookmarks ? [] : (timelineData?.data ?? [])}
+                                            total={timelineData?.total ?? 0}
+                                            page={page}
+                                            setPage={setPage}
+                                            pageSize={pageSize}
+                                            setPageSize={setPageSize}
+                                            sortBy={sortBy}
+                                            sortOrder={sortOrder}
+                                            onSort={handleSort}
+                                            visibleCols={visibleCols}
+                                            loading={tlLoading}
+                                            error={tlError as Error}
+                                            selectedEvent={selectedEvent}
+                                            onRowClick={(e, row, i) => {
+                                                if (e.shiftKey) {
+                                                    if (!compareEvents) setCompareEvents([row]);
+                                                    else if (compareEvents.includes(row)) setCompareEvents(compareEvents.filter(x => x !== row));
+                                                    else setCompareEvents([...compareEvents, row]);
+                                                } else {
+                                                    setSelectedEvent(row);
+                                                    setFocusedRowIndex(i);
+                                                }
+                                            } }
+                                            focusedRowIndex={focusedRowIndex}
+                                            highlightCache={highlightCache}
+                                            eventHashCache={eventHashCache}
+                                            eventTags={eventTags}
+                                            setEventTag={setEventTag}
+                                            activeFilterCount={activeFilterCount}
+                                            clearFilters={() => {}}
+                                            knownHosts={timelineData?.hosts ?? []}
+                                            lmWindowSet={lmWindowSet}
+                                            onSearchChange={(q) => { setSearchInput(q); setPage(1); }}
+                                            bookmarks={bookmarks}
+                                            onRemoveBookmark={(hash) => {
+                                                const next = bookmarks.filter(b => b.eventHash !== hash);
+                                                setBookmarks(next);
+                                                saveBookmarks(incidentId ?? "", next);
+                                            }}
+                                            showBookmarks={showBookmarks}
+                                        />
+                                    )}
+                                </div>
                             </div>
                         </TacticalPanel>
                     </div>

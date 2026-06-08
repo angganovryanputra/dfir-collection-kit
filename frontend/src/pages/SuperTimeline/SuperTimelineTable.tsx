@@ -1,14 +1,16 @@
 import React from "react";
 import { 
-    Server, Clock, User, Trash2, Search, AlertTriangle, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Shield, Database, LayoutGrid
+    Server, Clock, User, Trash2, Search, AlertTriangle, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Shield, Database, LayoutGrid, Pin
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useEvidence } from "@/context/EvidenceContext";
 import { 
     SortKey, ColumnKey, Bookmark, EventTagValue, EVENT_TAG_META, PAGE_SIZE_OPTIONS
 } from "./SuperTimelineTypes";
 import { 
     getHostColor, getSourceColor, truncate, hashEvent 
 } from "./SuperTimelineUtils";
+import { cn } from "@/lib/utils";
 
 // ─── Table Sub-components ────────────────────────────────────────────────────
 
@@ -45,6 +47,224 @@ function SortableHeader({
         </th>
     );
 }
+
+// ─── Memoized Row Component ──────────────────────────────────────────────────
+
+interface SuperTimelineRowProps {
+    row: Record<string, unknown>;
+    index: number;
+    page: number;
+    pageSize: number;
+    knownHosts: string[];
+    visibleCols: Set<ColumnKey>;
+    isSelected: boolean;
+    isFocused: boolean;
+    isInLmWindow: boolean;
+    highlightedMessage: React.ReactNode;
+    evHash: string;
+    tag: EventTagValue | null;
+    onRowClick: (e: React.MouseEvent, row: Record<string, unknown>, idx: number) => void;
+    onSearchChange: (q: string) => void;
+    setEventTag: (hash: string, tag: EventTagValue | null) => void;
+}
+
+const SuperTimelineRow = React.memo(({
+    row, index, page, pageSize, knownHosts, visibleCols, isSelected, isFocused,
+    isInLmWindow, highlightedMessage, evHash, tag, onRowClick, onSearchChange, setEventTag
+}: SuperTimelineRowProps) => {
+    const { pinItem, pinnedItems } = useEvidence();
+    const eventSeq   = row["event_seq"] != null ? Number(row["event_seq"]) + 1 : ((page - 1) * pageSize + index + 1);
+    const host       = String(row["host"] ?? row["computer"] ?? "UNKNOWN");
+    const color      = getHostColor(host, knownHosts);
+    const srcShort   = String(row["source_short"] ?? "");
+    const srcColor   = getSourceColor(srcShort);
+    const datetime   = String(row["datetime"] ?? row["timestamp"] ?? "—");
+    const tsDesc     = String(row["timestamp_desc"] ?? "—");
+    const source     = String(row["source"] ?? "—");
+    const message    = String(row["message"] ?? row["description"] ?? "—");
+    const user       = row["user"] ? String(row["user"]) : null;
+    const eventId     = row["event_id"] ? String(row["event_id"]) : null;
+    const ruleName    = row["rule_name"] ? String(row["rule_name"]) : null;
+    const eventLabel  = eventId ?? ruleName ?? null;
+    const isEvtxLike  = eventId != null;
+    const displayName = row["display_name"] ? String(row["display_name"]) : null;
+
+    const isSigma = srcShort === "SIGMA" || srcShort === "HAYABUSA";
+    
+    const rowCls = isSigma
+        ? "border-b border-red-500/20 bg-red-500/5 hover:bg-red-500/10"
+        : isInLmWindow
+            ? "border-b border-border/20 bg-orange-500/5 hover:bg-orange-500/10 border-l-2 border-l-orange-500/60"
+            : "border-b border-border/20 hover:bg-primary/5";
+
+    const tagMeta = tag ? EVENT_TAG_META[tag] : null;
+    const isPinned = pinnedItems.some(i => i.id === evHash);
+
+    const handlePin = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        pinItem({
+            id: evHash,
+            type: "event",
+            title: truncate(message, 60),
+            content: message,
+            timestamp: datetime,
+            metadata: { host, source: srcShort }
+        });
+    };
+
+    return (
+        <tr
+            className={cn(
+                "transition-colors text-xs cursor-pointer group/row",
+                rowCls,
+                isSelected && "ring-1 ring-inset ring-primary/60",
+                isFocused && "bg-secondary/60 ring-1 ring-inset ring-primary/30"
+            )}
+            onClick={(e) => onRowClick(e, row, index)}
+        >
+            <td className="px-2 py-1.5 text-right text-muted-foreground/50 text-[10px] select-none tabular-nums w-10 relative">
+                <button 
+                    onClick={handlePin}
+                    className={cn(
+                        "absolute left-0 top-1/2 -translate-y-1/2 p-1 transition-all z-10",
+                        isPinned ? "text-primary opacity-100" : "text-muted-foreground/20 opacity-0 group-hover/row:opacity-100 hover:text-primary"
+                    )}
+                    title={isPinned ? "Pinned to Workspace" : "Pin to Workspace"}
+                >
+                    <Pin className={cn("w-2.5 h-2.5", isPinned && "fill-current")} />
+                </button>
+                {eventSeq.toLocaleString()}
+            </td>
+            <td className="px-3 py-1.5 whitespace-nowrap">
+                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm border text-[10px] font-mono ${color.bg} ${color.text} ${color.border}`}>
+                    <Server className="w-2 h-2 shrink-0" />
+                    {host}
+                </span>
+            </td>
+            <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground tabular-nums">
+                <span className="flex items-center gap-1">
+                    <Clock className="w-2.5 h-2.5 shrink-0 text-muted-foreground/50" />
+                    {datetime}
+                </span>
+            </td>
+            <td className="px-3 py-1.5 whitespace-nowrap">
+                <span
+                    className="px-1.5 py-0.5 rounded-sm border border-border/40 bg-secondary/30 text-[10px] truncate block max-w-[130px]"
+                    title={tsDesc}
+                >
+                    {truncate(tsDesc, 22)}
+                </span>
+            </td>
+            <td className="px-3 py-1.5 whitespace-nowrap">
+                <div className="flex items-center gap-1.5">
+                    {srcShort && (
+                        <span className={`px-1.5 py-0.5 rounded-sm border text-[10px] font-bold shrink-0 ${srcColor}`}>
+                            {srcShort}
+                        </span>
+                    )}
+                    <span className="text-muted-foreground truncate block max-w-[90px] text-[10px]" title={source}>
+                        {truncate(source, 22)}
+                    </span>
+                </div>
+            </td>
+            {visibleCols.has("event_id") && (
+                <td className="px-3 py-1.5 whitespace-nowrap">
+                    {eventLabel ? (
+                        <span
+                            className={`px-1.5 py-0.5 rounded-sm border text-[10px] truncate block max-w-[110px] ${
+                                isEvtxLike
+                                    ? "border-blue-500/30 bg-blue-500/10 text-blue-400 font-bold"
+                                    : "border-orange-500/30 bg-orange-500/10 text-orange-400"
+                            }`}
+                            title={eventLabel}
+                        >
+                            {isEvtxLike ? `EID:${eventLabel}` : truncate(eventLabel, 18)}
+                        </span>
+                    ) : (
+                        <span className="text-muted-foreground/30">—</span>
+                    )}
+                </td>
+            )}
+            {visibleCols.has("user") && (
+                <td className="px-3 py-1.5 whitespace-nowrap">
+                    {user ? (
+                        <span className="flex items-center gap-1 text-[10px]">
+                            <User className="w-2.5 h-2.5 text-muted-foreground/60 shrink-0" />
+                            <button
+                                className="text-foreground/80 hover:text-primary transition-colors"
+                                title={`Filter by user: ${user}`}
+                                onClick={(e) => { e.stopPropagation(); onSearchChange(`user:"${user}"`); }}
+                            >
+                                {truncate(user, 16)}
+                            </button>
+                        </span>
+                    ) : (
+                        <span className="text-muted-foreground/30">—</span>
+                    )}
+                </td>
+            )}
+            {visibleCols.has("display_name") && (
+                <td className="px-3 py-1.5 max-w-[160px]">
+                    {displayName ? (
+                        <span
+                            className="block truncate text-[10px] text-muted-foreground font-mono"
+                            title={displayName}
+                            style={{ direction: "rtl", textAlign: "left" }}
+                        >
+                            {displayName}
+                        </span>
+                    ) : (
+                        <span className="text-muted-foreground/30">—</span>
+                    )}
+                </td>
+            )}
+            <td className="px-3 py-1.5 max-w-[0] w-full">
+                <span className="truncate block" title={message}>
+                    {highlightedMessage ?? message}
+                </span>
+            </td>
+            <td className="px-2 py-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                <div className="relative group/tag">
+                    <button
+                        className={cn(
+                            "px-1.5 py-0.5 rounded-sm border font-mono text-[10px] transition-all",
+                            tagMeta ? tagMeta.color : "border-border/20 text-muted-foreground/30 hover:border-border/60 hover:text-muted-foreground"
+                        )}
+                        title={tagMeta ? `Tag: ${tagMeta.label} (click to change)` : "Add tag"}
+                    >
+                        {tagMeta ? tagMeta.short : "+"}
+                    </button>
+                    <div className="absolute right-0 top-full mt-0.5 z-50 hidden group-hover/tag:flex flex-col bg-card border border-border shadow-lg rounded-sm overflow-hidden min-w-[110px]">
+                        {(Object.entries(EVENT_TAG_META) as [EventTagValue, typeof EVENT_TAG_META[EventTagValue]][]).map(([k, v]) => (
+                            <button
+                                key={k}
+                                onClick={() => setEventTag(evHash, k)}
+                                className={cn(
+                                    "px-2 py-1.5 text-left font-mono text-[10px] transition-colors hover:bg-secondary/50 flex items-center gap-2",
+                                    tag === k ? v.color : "text-muted-foreground"
+                                )}
+                            >
+                                <span className={cn("w-1.5 h-1.5 rounded-full", tag === k ? "" : "bg-muted-foreground/30")}
+                                    style={tag === k ? { background: "currentColor" } : {}} />
+                                {v.label}
+                            </button>
+                        ))}
+                        {tag && (
+                            <button
+                                onClick={() => setEventTag(evHash, null)}
+                                className="px-2 py-1.5 text-left font-mono text-[10px] text-destructive/60 hover:bg-secondary/50 border-t border-border/40"
+                            >
+                                CLEAR
+                            </button>
+                        )}
+                    </div>
+                </div>
+            </td>
+        </tr>
+    );
+});
+
+SuperTimelineRow.displayName = "SuperTimelineRow";
 
 // ─── Main Table Component ────────────────────────────────────────────────────
 
@@ -87,6 +307,8 @@ export function SuperTimelineTable({
 }: SuperTimelineTableProps) {
     const totalPages = Math.ceil(total / pageSize);
     const [pageJumpInput, setPageJumpInput] = React.useState("");
+    const [showScrollTop, setShowScrollTop] = React.useState(false);
+    const tableContainerRef = React.useRef<HTMLDivElement>(null);
 
     const handlePageJump = (e: React.KeyboardEvent) => {
         if (e.key === "Enter") {
@@ -96,6 +318,14 @@ export function SuperTimelineTable({
                 setPageJumpInput("");
             }
         }
+    };
+
+    const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+        setShowScrollTop(e.currentTarget.scrollTop > 400);
+    };
+
+    const scrollToTop = () => {
+        tableContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
     };
 
     if (showBookmarks) {
@@ -145,8 +375,12 @@ export function SuperTimelineTable({
     }
 
     return (
-        <div className="flex flex-col flex-1 min-h-0">
-            <div className="flex-1 overflow-auto min-h-[300px]">
+        <div className="flex flex-col flex-1 min-h-0 relative">
+            <div 
+                ref={tableContainerRef}
+                className="flex-1 overflow-auto min-h-[300px]" 
+                onScroll={handleScroll}
+            >
                 {error ? (
                     <div className="flex items-center justify-center h-40 font-mono text-sm text-destructive">
                         <AlertTriangle className="w-4 h-4 mr-2" />
@@ -200,181 +434,41 @@ export function SuperTimelineTable({
                             </tr>
                         </thead>
                         <tbody>
-                            {data.map((row, i) => {
-                                const eventSeq   = row["event_seq"] != null ? Number(row["event_seq"]) + 1 : ((page - 1) * pageSize + i + 1);
-                                const host       = String(row["host"] ?? row["computer"] ?? "UNKNOWN");
-                                const color      = getHostColor(host, knownHosts);
-                                const srcShort   = String(row["source_short"] ?? "");
-                                const srcColor   = getSourceColor(srcShort);
-                                const datetime   = String(row["datetime"] ?? row["timestamp"] ?? "—");
-                                const tsDesc     = String(row["timestamp_desc"] ?? "—");
-                                const source     = String(row["source"] ?? "—");
-                                const message    = String(row["message"] ?? row["description"] ?? "—");
-                                const user       = row["user"] ? String(row["user"]) : null;
-                                const eventId     = row["event_id"] ? String(row["event_id"]) : null;
-                                const ruleName    = row["rule_name"] ? String(row["rule_name"]) : null;
-                                const eventLabel  = eventId ?? ruleName ?? null;
-                                const isEvtxLike  = eventId != null;
-                                const displayName = row["display_name"] ? String(row["display_name"]) : null;
-
-                                const isSigma = srcShort === "SIGMA" || srcShort === "HAYABUSA";
-                                const isInLmWindow = lmWindowSet.has(row);
-
-                                const rowCls = isSigma
-                                    ? "border-b border-red-500/20 bg-red-500/5 hover:bg-red-500/10"
-                                    : isInLmWindow
-                                        ? "border-b border-border/20 bg-orange-500/5 hover:bg-orange-500/10 border-l-2 border-l-orange-500/60"
-                                        : "border-b border-border/20 hover:bg-primary/5";
-
-                                const isSelected = selectedEvent === row;
-                                const isFocused = focusedRowIndex === i && !selectedEvent;
-                                
-                                return (
-                                    <tr
-                                        key={i}
-                                        className={`transition-colors text-xs cursor-pointer ${rowCls} ${isSelected ? "ring-1 ring-inset ring-primary/60" : ""} ${isFocused ? "bg-secondary/60 ring-1 ring-inset ring-primary/30" : ""}`}
-                                        onClick={(e) => onRowClick(e, row, i)}
-                                    >
-                                        <td className="px-2 py-1.5 text-right text-muted-foreground/50 text-[10px] select-none tabular-nums w-10">
-                                            {eventSeq.toLocaleString()}
-                                        </td>
-                                        <td className="px-3 py-1.5 whitespace-nowrap">
-                                            <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm border text-[10px] font-mono ${color.bg} ${color.text} ${color.border}`}>
-                                                <Server className="w-2 h-2 shrink-0" />
-                                                {host}
-                                            </span>
-                                        </td>
-                                        <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground tabular-nums">
-                                            <span className="flex items-center gap-1">
-                                                <Clock className="w-2.5 h-2.5 shrink-0 text-muted-foreground/50" />
-                                                {datetime}
-                                            </span>
-                                        </td>
-                                        <td className="px-3 py-1.5 whitespace-nowrap">
-                                            <span
-                                                className="px-1.5 py-0.5 rounded-sm border border-border/40 bg-secondary/30 text-[10px] truncate block max-w-[130px]"
-                                                title={tsDesc}
-                                            >
-                                                {truncate(tsDesc, 22)}
-                                            </span>
-                                        </td>
-                                        <td className="px-3 py-1.5 whitespace-nowrap">
-                                            <div className="flex items-center gap-1.5">
-                                                {srcShort && (
-                                                    <span className={`px-1.5 py-0.5 rounded-sm border text-[10px] font-bold shrink-0 ${srcColor}`}>
-                                                        {srcShort}
-                                                    </span>
-                                                )}
-                                                <span className="text-muted-foreground truncate block max-w-[90px] text-[10px]" title={source}>
-                                                    {truncate(source, 22)}
-                                                </span>
-                                            </div>
-                                        </td>
-                                        {visibleCols.has("event_id") && (
-                                            <td className="px-3 py-1.5 whitespace-nowrap">
-                                                {eventLabel ? (
-                                                    <span
-                                                        className={`px-1.5 py-0.5 rounded-sm border text-[10px] truncate block max-w-[110px] ${
-                                                            isEvtxLike
-                                                                ? "border-blue-500/30 bg-blue-500/10 text-blue-400 font-bold"
-                                                                : "border-orange-500/30 bg-orange-500/10 text-orange-400"
-                                                        }`}
-                                                        title={eventLabel}
-                                                    >
-                                                        {isEvtxLike ? `EID:${eventLabel}` : truncate(eventLabel, 18)}
-                                                    </span>
-                                                ) : (
-                                                    <span className="text-muted-foreground/30">—</span>
-                                                )}
-                                            </td>
-                                        )}
-                                        {visibleCols.has("user") && (
-                                            <td className="px-3 py-1.5 whitespace-nowrap">
-                                                {user ? (
-                                                    <span className="flex items-center gap-1 text-[10px]">
-                                                        <User className="w-2.5 h-2.5 text-muted-foreground/60 shrink-0" />
-                                                        <button
-                                                            className="text-foreground/80 hover:text-primary transition-colors"
-                                                            title={`Filter by user: ${user}`}
-                                                            onClick={(e) => { e.stopPropagation(); onSearchChange(`user:"${user}"`); }}
-                                                        >
-                                                            {truncate(user, 16)}
-                                                        </button>
-                                                    </span>
-                                                ) : (
-                                                    <span className="text-muted-foreground/30">—</span>
-                                                )}
-                                            </td>
-                                        )}
-                                        {visibleCols.has("display_name") && (
-                                            <td className="px-3 py-1.5 max-w-[160px]">
-                                                {displayName ? (
-                                                    <span
-                                                        className="block truncate text-[10px] text-muted-foreground font-mono"
-                                                        title={displayName}
-                                                        style={{ direction: "rtl", textAlign: "left" }}
-                                                    >
-                                                        {displayName}
-                                                    </span>
-                                                ) : (
-                                                    <span className="text-muted-foreground/30">—</span>
-                                                )}
-                                            </td>
-                                        )}
-                                        <td className="px-3 py-1.5 max-w-[0] w-full">
-                                            <span className="truncate block" title={message}>
-                                                {highlightCache.get(row) ?? message}
-                                            </span>
-                                        </td>
-                                        <td className="px-2 py-1.5 whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                                            {(() => {
-                                                const evHash = eventHashCache.get(row) ?? hashEvent(row);
-                                                const tag = eventTags[evHash];
-                                                const meta = tag ? EVENT_TAG_META[tag] : null;
-                                                return (
-                                                    <div className="relative group/tag">
-                                                        <button
-                                                            className={`px-1.5 py-0.5 rounded-sm border font-mono text-[10px] transition-all ${
-                                                                meta
-                                                                    ? meta.color
-                                                                    : "border-border/20 text-muted-foreground/30 hover:border-border/60 hover:text-muted-foreground"
-                                                            }`}
-                                                            title={meta ? `Tag: ${meta.label} (click to change)` : "Add tag"}
-                                                        >
-                                                            {meta ? meta.short : "+"}
-                                                        </button>
-                                                        <div className="absolute right-0 top-full mt-0.5 z-50 hidden group-hover/tag:flex flex-col bg-card border border-border shadow-lg rounded-sm overflow-hidden min-w-[110px]">
-                                                            {(Object.entries(EVENT_TAG_META) as [EventTagValue, typeof EVENT_TAG_META[EventTagValue]][]).map(([k, v]) => (
-                                                                <button
-                                                                    key={k}
-                                                                    onClick={() => setEventTag(evHash, k)}
-                                                                    className={`px-2 py-1.5 text-left font-mono text-[10px] transition-colors hover:bg-secondary/50 flex items-center gap-2 ${tag === k ? v.color : "text-muted-foreground"}`}
-                                                                >
-                                                                    <span className={`w-1.5 h-1.5 rounded-full ${tag === k ? "" : "bg-muted-foreground/30"}`}
-                                                                        style={tag === k ? { background: "currentColor" } : {}} />
-                                                                    {v.label}
-                                                                </button>
-                                                            ))}
-                                                            {tag && (
-                                                                <button
-                                                                    onClick={() => setEventTag(evHash, null)}
-                                                                    className="px-2 py-1.5 text-left font-mono text-[10px] text-destructive/60 hover:bg-secondary/50 border-t border-border/40"
-                                                                >
-                                                                    CLEAR
-                                                                </button>
-                                                            )}
-                                                        </div>
-                                                    </div>
-                                                );
-                                            })()}
-                                        </td>
-                                    </tr>
-                                );
-                            })}
+                            {data.map((row, i) => (
+                                <SuperTimelineRow 
+                                    key={i}
+                                    row={row}
+                                    index={i}
+                                    page={page}
+                                    pageSize={pageSize}
+                                    knownHosts={knownHosts}
+                                    visibleCols={visibleCols}
+                                    isSelected={selectedEvent === row}
+                                    isFocused={focusedRowIndex === i && !selectedEvent}
+                                    isInLmWindow={lmWindowSet.has(row)}
+                                    highlightedMessage={highlightCache.get(row)}
+                                    evHash={eventHashCache.get(row) ?? hashEvent(row)}
+                                    tag={eventTags[eventHashCache.get(row) ?? hashEvent(row)]}
+                                    onRowClick={onRowClick}
+                                    onSearchChange={onSearchChange}
+                                    setEventTag={setEventTag}
+                                />
+                            ))}
                         </tbody>
                     </table>
                 )}
             </div>
+
+            {/* Scroll to Top FAB */}
+            {showScrollTop && (
+                <button
+                    onClick={scrollToTop}
+                    className="absolute bottom-16 right-6 p-2 bg-primary text-primary-foreground rounded-full shadow-lg hover:scale-110 transition-all z-20 animate-in fade-in zoom-in duration-200"
+                    title="Scroll to Top"
+                >
+                    <ChevronLeft className="w-5 h-5 rotate-90" />
+                </button>
+            )}
 
             {/* Pagination footer */}
             {data.length > 0 && (
