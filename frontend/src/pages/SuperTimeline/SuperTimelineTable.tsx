@@ -120,6 +120,7 @@ const SuperTimelineRow = React.memo(({
                 isSelected && "ring-1 ring-inset ring-primary/60",
                 isFocused && "bg-secondary/60 ring-1 ring-inset ring-primary/30"
             )}
+            style={{ contentVisibility: "auto", containIntrinsicSize: "0 40px" }}
             onClick={(e) => onRowClick(e, row, index)}
         >
             <td className="px-2 py-1.5 text-right text-muted-foreground/50 text-[10px] select-none tabular-nums w-10 relative">

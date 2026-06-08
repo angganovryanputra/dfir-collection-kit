@@ -7,7 +7,6 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { TablePagination } from "@/components/TablePagination";
 import { StatCard } from "@/components/common/StatCard";
-import { DecryptedText } from "@/components/DecryptedText";
 import { usePagination } from "@/hooks/usePagination";
 import {
   Plus,
@@ -17,37 +16,16 @@ import {
   ArrowUpRight,
   CheckCircle2,
   ShieldAlert,
-  Database,
-  Wrench,
-  X,
-  ExternalLink,
+  Database
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
 import { apiGet } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
-import { cn } from "@/lib/utils";
 
-interface ReadinessCheckItem {
-  id: string;
-  label: string;
-  description: string;
-  status: "ok" | "not_configured";
-  action: string;
-  action_path: string | null;
-}
-
-interface ReadinessResponse {
-  overall: "ready" | "partial" | "not_ready";
-  ok_count: number;
-  total: number;
-  tools_configured: boolean;
-  tools_ok: boolean;
-  checklist: ReadinessCheckItem[];
-}
-
-interface ToolsHealthResponse {
-  overall: "healthy" | "partial" | "broken" | "not_configured";
-  tools: Record<string, { status: string; dlls_found?: number; dlls_total?: number }>;
+interface SystemSettingsPartial {
+  ez_tools_path: string | null;
+  hayabusa_path: string | null;
+  chainsaw_path: string | null;
 }
 
 interface IncidentResponse {
@@ -114,9 +92,6 @@ export default function Dashboard() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [incidentSearch, setIncidentSearch] = useState("");
   const [incidentStatusFilter, setIncidentStatusFilter] = useState("");
-  const [readinessDismissed, setReadinessDismissed] = useState(
-    () => localStorage.getItem("dfir_readiness_dismissed") === "true"
-  );
 
   const incidentParams = new URLSearchParams({ limit: "1000" });
   if (incidentSearch) incidentParams.set("search", incidentSearch);
@@ -144,33 +119,16 @@ export default function Dashboard() {
   });
 
   const role = getStoredRole();
-  const readinessQuery = useQuery<ReadinessResponse>({
-    queryKey: ["system-readiness"],
-    queryFn: () => apiGet<ReadinessResponse>("/settings/readiness"),
-    enabled: role === "admin" || role === "operator",
-    staleTime: 2 * 60 * 1000,
-    retry: false,
+  const settingsQuery = useQuery<SystemSettingsPartial>({
+    queryKey: ["settings-tools"],
+    queryFn: () => apiGet<SystemSettingsPartial>("/settings"),
+    enabled: role === "admin",
+    staleTime: 5 * 60 * 1000,
   });
 
-  const toolsHealthQuery = useQuery<ToolsHealthResponse>({
-    queryKey: ["tools-health"],
-    queryFn: () => apiGet<ToolsHealthResponse>("/settings/tools-health"),
-    enabled: role === "admin" || role === "operator",
-    staleTime: 2 * 60 * 1000,
-    retry: false,
-  });
-
-  const readinessData = readinessQuery.data;
-  const showReadiness =
-    !readinessDismissed &&
-    readinessData !== undefined &&
-    readinessData.overall !== "ready" &&
-    (role === "admin" || role === "operator");
-
-  const dismissReadiness = () => {
-    localStorage.setItem("dfir_readiness_dismissed", "true");
-    setReadinessDismissed(true);
-  };
+  const toolsConfigured = !settingsQuery.data
+    ? true // can't check → don't show warning
+    : Boolean(settingsQuery.data.ez_tools_path || settingsQuery.data.hayabusa_path);
 
   useEffect(() => {
     const err = incidentsQuery.error ?? collectorsQuery.error ?? evidenceQuery.error;
@@ -278,147 +236,69 @@ export default function Dashboard() {
       subtitle="DFIR RAPID COLLECTION KIT"
       showWarning={hasActiveCollection}
       headerActions={
-        <Button variant="tactical" onClick={() => navigate("/incidents/create")} className="glow-green">
+        <Button variant="tactical" onClick={() => navigate("/incidents/create")}>
           <Plus className="w-4 h-4 mr-2" />
-          CREATE NEW INCIDENT
+          CREATE INCIDENT
         </Button>
       }
     >
       <div className="p-6 space-y-6">
-        {/* Setup Readiness Checklist */}
-        {showReadiness && readinessData && (
-          <div className={cn(
-            "border p-4 font-mono space-y-3",
-            readinessData.overall === "not_ready"
-              ? "border-destructive/40 bg-destructive/5"
-              : "border-warning/40 bg-warning/5"
-          )}>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <ShieldAlert className={cn("w-4 h-4", readinessData.overall === "not_ready" ? "text-destructive" : "text-warning")} />
-                <span className={cn("text-xs font-bold uppercase tracking-wider", readinessData.overall === "not_ready" ? "text-destructive" : "text-warning")}>
-                  SYSTEM SETUP INCOMPLETE — {readinessData.ok_count}/{readinessData.total} checks passed
-                </span>
-              </div>
-              <button
-                onClick={dismissReadiness}
-                className="text-muted-foreground hover:text-foreground transition-colors"
-                title="Dismiss (until page reload)"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-              {readinessData.checklist.map((item) => (
-                <div
-                  key={item.id}
-                  className={cn(
-                    "flex items-start gap-2 p-2 border text-[10px]",
-                    item.status === "ok"
-                      ? "border-primary/20 bg-primary/5"
-                      : "border-border bg-secondary/30"
-                  )}
-                >
-                  <span className={cn("mt-0.5 w-2 h-2 rounded-full flex-shrink-0", item.status === "ok" ? "bg-primary" : "bg-muted-foreground")} />
-                  <div className="flex-1 space-y-0.5 min-w-0">
-                    <div className={cn("font-bold", item.status === "ok" ? "text-primary" : "text-foreground")}>
-                      {item.label}
+        {/* Alerts Section */}
+        {(!toolsConfigured || errorMessage) && (
+            <div className="space-y-2">
+                {!toolsConfigured && (
+                  <div className="border border-warning/40 bg-warning/5 p-3 font-mono text-xs text-warning flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                        <ShieldAlert className="w-4 h-4" />
+                        <span>
+                          CRITICAL: FORENSICS TOOLS NOT CONFIGURED — Analysis capabilities (Hayabusa/Chainsaw) are currently offline.
+                        </span>
                     </div>
-                    <div className="text-muted-foreground truncate">{item.description}</div>
-                    {item.status !== "ok" && item.action_path && (
-                      <button
-                        onClick={() => navigate(item.action_path!)}
-                        className="flex items-center gap-1 text-primary hover:text-primary/80 transition-colors mt-1"
-                      >
-                        <ExternalLink className="w-2.5 h-2.5" />
-                        FIX NOW
-                      </button>
-                    )}
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="shrink-0 text-warning border border-warning/40 hover:bg-warning/10 h-7"
+                      onClick={() => navigate("/admin/settings")}
+                    >
+                      RESOLVE
+                    </Button>
                   </div>
-                </div>
-              ))}
+                )}
+                {errorMessage && (
+                  <div className="border border-destructive/40 bg-destructive/5 p-3 font-mono text-xs text-destructive flex items-center gap-3">
+                    <AlertTriangle className="w-4 h-4" />
+                    <span>{errorMessage}</span>
+                  </div>
+                )}
             </div>
-          </div>
-        )}
-
-        {/* Network / Load Error */}
-        {errorMessage && (
-          <div className="border border-destructive/40 bg-destructive/5 p-3 font-mono text-[10px] text-destructive flex items-center gap-3">
-            <AlertTriangle className="w-4 h-4" />
-            <span>{errorMessage}</span>
-          </div>
         )}
 
         {/* Stats HUD */}
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-4 gap-4">
           <StatCard
             icon={<Activity className="w-5 h-5 text-primary" />}
             value={activeIncidents}
-            valueClassName="text-primary text-glow-green"
-            label={<DecryptedText text="Active Incidents" delay={500} />}
+            valueClassName="text-primary"
+            label="Active Incidents"
           />
           <StatCard
             icon={<HardDrive className="w-5 h-5 text-primary" />}
             value={`${onlineCollectors}/${collectors.length}`}
-            valueClassName="text-primary text-glow-green"
-            label={<DecryptedText text="Collectors Online" delay={700} />}
+            valueClassName="text-primary"
+            label="Collectors Online"
           />
           <StatCard
             icon={<Database className="w-5 h-5 text-primary" />}
             value={String(totalEvidenceFiles)}
-            valueClassName="text-primary text-glow-green"
-            label={<DecryptedText text="Evidence Items" delay={900} />}
+            valueClassName="text-primary"
+            label="Evidence Items"
           />
-          {/* Tools Health — shown to admin/operator only */}
-          {(role === "admin" || role === "operator") && (() => {
-            const h = toolsHealthQuery.data?.overall;
-            const toolHealthColor = h === "healthy" ? "text-primary"
-              : h === "partial" ? "text-yellow-400"
-              : h === "broken" ? "text-destructive"
-              : "text-muted-foreground";
-            const toolHealthLabel = h === "healthy" ? "HEALTHY"
-              : h === "partial" ? "PARTIAL"
-              : h === "broken" ? "BROKEN"
-              : "NOT SET";
-            return (
-              <div className="cursor-pointer" onClick={() => navigate("/admin/settings")} title="Configure tools in Settings">
-                <StatCard
-                  icon={<Wrench className={cn("w-5 h-5", toolHealthColor)} />}
-                  value={toolHealthLabel}
-                  valueClassName={cn("text-sm", toolHealthColor)}
-                  label={<DecryptedText text="Tools Health" delay={1000} />}
-                />
-              </div>
-            );
-          })()}
           <StatCard
-            icon={<AlertTriangle className={cn("w-5 h-5", systemAlerts > 0 ? "text-warning animate-pulse" : "text-muted-foreground")} />}
+            icon={<AlertTriangle className={cn("w-5 h-5", systemAlerts > 0 ? "text-warning" : "text-muted-foreground")} />}
             value={String(systemAlerts)}
-            valueClassName={systemAlerts > 0 ? "text-warning text-glow-amber" : "text-muted-foreground"}
-            label={<DecryptedText text="System Alerts" delay={1100} />}
+            valueClassName={systemAlerts > 0 ? "text-warning" : "text-muted-foreground"}
+            label="System Alerts"
           />
-        </div>
-
-        {/* Status Stream Ticker */}
-        <div className="flex items-center gap-4 py-2 border-y border-border/40 bg-secondary/10 px-4 overflow-hidden">
-            <span className="font-mono text-[9px] text-muted-foreground uppercase tracking-widest font-bold shrink-0">Live Status Feed:</span>
-            <div className="flex gap-8 animate-[scanner-sweep_20s_linear_infinite] whitespace-nowrap">
-                {statusBreakdown.collecting > 0 && (
-                    <span className="text-[10px] text-primary font-mono flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />
-                        {statusBreakdown.collecting} AGENTS COLLECTING DATA
-                    </span>
-                )}
-                <span className="text-[10px] text-muted-foreground font-mono">
-                    VAULT INTEGRITY: 100% SECURE
-                </span>
-                <span className="text-[10px] text-muted-foreground font-mono">
-                    STORAGE USAGE: {formattedStoragePercent}
-                </span>
-                <span className="text-[10px] text-muted-foreground font-mono">
-                    ACTIVE SESSIONS: {activeIncidents}
-                </span>
-            </div>
         </div>
 
         <div className="grid grid-cols-12 gap-6">
@@ -436,13 +316,13 @@ export default function Dashboard() {
               {/* Search + filter bar */}
               <div className="flex items-center gap-2 mb-3">
                 <input
-                  className="flex-1 h-7 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  className="flex-1 h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary"
                   placeholder="Search incident ID or operator..."
                   value={incidentSearch}
                   onChange={e => setIncidentSearch(e.target.value)}
                 />
                 <select
-                  className="h-7 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none"
+                  className="h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none"
                   value={incidentStatusFilter}
                   onChange={e => setIncidentStatusFilter(e.target.value)}
                 >

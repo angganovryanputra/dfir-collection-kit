@@ -5,8 +5,6 @@ import { AppSidebar } from "@/components/layout/AppSidebar";
 import { WarningBanner } from "@/components/WarningBanner";
 import { EvidenceProvider } from "@/context/EvidenceContext";
 import { EvidenceWorkspace } from "@/components/EvidenceWorkspace";
-import { DecryptedText } from "@/components/DecryptedText";
-import { TacticalTerminal } from "@/components/TacticalTerminal";
 import { 
     CommandDialog, 
     CommandInput, 
@@ -84,28 +82,22 @@ interface AppLayoutProps {
   headerActions?: ReactNode;
 }
 
-// ─── Heartbeat Pulse Component (Refactored to SVG Wave) ──────────────────────
+// ─── Heartbeat Pulse Component (Simplified) ──────────────────────────────────
 
 function SystemHeartbeat() {
     return (
-        <div className="flex items-center gap-3 px-3 py-1.5 border border-primary/20 bg-primary/5 rounded-sm tactical-float">
-            <HeartPulse className="w-3.5 h-3.5 text-primary animate-pulse" />
-            <div className="relative w-24 h-6 overflow-hidden">
-                <svg viewBox="0 0 100 20" className="w-full h-full">
-                    <path
-                        d="M0,10 L10,10 L15,2 L20,18 L25,10 L40,10 L45,0 L50,20 L55,10 L70,10 L75,5 L80,15 L85,10 L100,10"
-                        fill="none"
-                        stroke="hsl(var(--primary))"
-                        strokeWidth="1.5"
-                        className="heartbeat-path"
-                        strokeLinecap="round"
+        <div className="flex items-center gap-2 px-3 py-1 border border-primary/20 bg-primary/5 rounded-sm">
+            <HeartPulse className="w-3 h-3 text-primary animate-pulse" />
+            <div className="flex gap-0.5 items-end h-3 w-12">
+                {[40, 70, 45, 90, 30, 60, 50, 80].map((h, i) => (
+                    <div 
+                        key={i} 
+                        className="w-1 bg-primary/40 rounded-t-[1px]" 
+                        style={{ height: `${h}%`, animation: `status-pulse ${1.5 + (i*0.2)}s ease-in-out infinite` }}
                     />
-                </svg>
+                ))}
             </div>
-            <div className="flex flex-col">
-                <span className="font-mono text-[8px] text-primary/60 font-bold tracking-tighter leading-none">CORE.STABLE</span>
-                <span className="font-mono text-[10px] text-primary font-bold tracking-tighter">98.4% OPS</span>
-            </div>
+            <span className="font-mono text-[9px] text-primary font-bold tracking-tighter">SYS.HEALTH: 98%</span>
         </div>
     );
 }
@@ -147,15 +139,11 @@ export function AppLayout({
   const incidentsQuery = useQuery({
     queryKey: ["incidents"],
     queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>("/incidents?limit=1000"),
-    staleTime: 60_000,
-    refetchIntervalInBackground: false,
   });
 
   const collectorsQuery = useQuery({
     queryKey: ["collectors"],
     queryFn: () => apiGet<CollectorResponse[]>("/collectors"),
-    staleTime: 60_000,
-    refetchIntervalInBackground: false,
   });
 
   useEffect(() => {
@@ -198,20 +186,9 @@ export function AppLayout({
     command();
   };
 
-  // Tactical Breadcrumb formatting
-  const tacticalPath = `ROOT:/${location.pathname.substring(1).toUpperCase().replace(/\//g, " / ")}`;
-
   return (
     <EvidenceProvider>
-      <div className="min-h-screen bg-background flex digital-flicker relative">
-        {/* Global Overlays */}
-        <div className="scanner-overlay"><div className="scanner-line" /></div>
-        <div className="crt-warp" />
-        <div className="fixed inset-0 pointer-events-none z-[60] opacity-[0.03] bg-[url('https://grainy-gradients.vercel.app/noise.svg')]" />
-
-        {/* Tactical Terminal HUD */}
-        <TacticalTerminal />
-
+      <div className="min-h-screen bg-background flex relative">
         {/* Global Command Palette */}
         <CommandDialog open={open} onOpenChange={setOpen}>
           <CommandInput placeholder="Type a command or search..." />
@@ -278,25 +255,26 @@ export function AppLayout({
               <div className="flex items-center gap-6">
                 <div>
                   <h1 className="font-mono text-lg font-bold tracking-wider text-foreground flex items-center gap-2">
-                    <span className="text-primary/40 text-xs">//</span>
-                    <DecryptedText text={title} />
+                    <span className="text-primary/40 text-xs">//</span> {title}
                   </h1>
-                  <p className="font-mono text-[9px] text-primary/60 mt-0.5 uppercase tracking-[0.2em] font-bold">
-                    {tacticalPath}
-                  </p>
+                  {subtitle && (
+                    <p className="font-mono text-[10px] text-muted-foreground mt-0.5 uppercase tracking-tighter">
+                      {subtitle}
+                    </p>
+                  )}
                 </div>
                 <SystemHeartbeat />
               </div>
               <div className="flex items-center gap-4">
-                <div className="hidden lg:flex items-center gap-2 px-3 py-1.5 border border-border bg-secondary/50 rounded-sm text-[10px] text-muted-foreground font-mono">
-                  <Terminal className="w-3 h-3 text-primary" />
-                  <span>EXEC:</span>
-                  <kbd className="px-1.5 py-0.5 bg-background border border-border rounded text-primary font-bold text-[9px]">⌘K</kbd>
+                <div className="hidden lg:flex items-center gap-1.5 px-2 py-1 border border-border bg-secondary/50 rounded-sm text-[10px] text-muted-foreground font-mono">
+                  <Terminal className="w-3 h-3" />
+                  <span>PRESS</span>
+                  <kbd className="px-1.5 py-0.5 bg-background border border-border rounded text-foreground font-bold text-[9px]">⌘K</kbd>
+                  <span>TO NAVIGATE</span>
                 </div>
                 {headerActions}
-                <div className="font-mono text-[10px] text-muted-foreground tabular-nums border-l border-border pl-4 flex flex-col items-end">
-                  <span className="text-foreground font-bold">{currentTime.toISOString().split('T')[0]}</span>
-                  <span>{currentTime.toISOString().split('T')[1].replace('Z', ' UTC')}</span>
+                <div className="font-mono text-[10px] text-muted-foreground tabular-nums border-l border-border pl-4">
+                  {currentTime.toISOString()}
                 </div>
               </div>
             </div>
@@ -310,7 +288,7 @@ export function AppLayout({
           )}
 
           {/* Page Content */}
-          <main className="flex-1 overflow-auto tactical-grid relative z-10 scanlines">
+          <main className="flex-1 overflow-auto tactical-grid relative z-10">
             {children}
           </main>
 
@@ -319,28 +297,24 @@ export function AppLayout({
             <div className="flex items-center gap-6 flex-1 overflow-hidden">
                 <span className="flex items-center gap-2 whitespace-nowrap">
                     <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse shadow-[0_0_8px_hsl(var(--primary))]" />
-                    OP.STATUS: <span className="text-primary font-bold">READY_TO_COLLECT</span>
+                    OP.STATUS: ACTIVE
                 </span>
                 
                 {/* Scrolling Ticker */}
                 <div className="flex-1 overflow-hidden border-x border-border/40 px-4 relative">
-                    <div className="animate-[scanner-sweep_30s_linear_infinite] whitespace-nowrap inline-block text-primary/40">
-                        LATEST DETECTIONS: {incidents.slice(0, 3).map(i => `[INCIDENT ${i.id} - ${i.type}]`).join("  •  ")}  •  COLLECTOR HEARTBEAT: STABLE  •  STORAGE INTEGRITY: 100%  •  ENCRYPTION: AES-256-GCM ACTIVE  •  READY FOR ANALYSIS
+                    <div className="whitespace-nowrap inline-block text-primary/60">
+                        LATEST DETECTIONS: {incidents.slice(0, 3).map(i => `[INCIDENT ${i.id} - ${i.type}]`).join("  •  ")}  •  COLLECTOR HEARTBEAT: STABLE  •  STORAGE INTEGRITY: 100%  •  ENCRYPTION: AES-256-GCM ACTIVE
                     </div>
                 </div>
             </div>
             <div className="flex items-center gap-4 border-l border-border pl-4">
-                <div className="flex items-center gap-1.5">
-                    <ShieldCheck className="w-3 h-3 text-primary" />
-                    <span className="uppercase tracking-tighter">
-                        USER: <span className="text-foreground font-bold">{currentUser?.username ?? "UNKNOWN"}</span>
-                    </span>
-                </div>
-                <div className="h-4 w-[1px] bg-border" />
+                <span>
+                    OPERATOR: <span className="text-foreground font-bold">{currentUser?.username ?? "UNKNOWN"}</span>
+                </span>
                 <span>
                     ROLE: <span className="text-primary font-bold">{currentUser?.role?.toUpperCase() ?? "UNKNOWN"}</span>
                 </span>
-                <span className="tabular-nums bg-secondary/80 px-2 py-0.5 rounded-sm text-foreground font-bold border border-border">{currentTime.toLocaleTimeString()}</span>
+                <span className="tabular-nums">{currentTime.toLocaleTimeString()}</span>
             </div>
           </footer>
         </div>

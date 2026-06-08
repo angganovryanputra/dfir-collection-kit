@@ -5,7 +5,8 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
 import { 
-    ChevronLeft, Loader2, Network, Shield, ArrowRight, Table as TableIcon, GitBranch
+    ChevronLeft, Loader2, Network, Shield, ArrowRight, Table as TableIcon, GitBranch,
+    Server, Database, Clock, RefreshCw
 } from "lucide-react";
 import { apiGet, apiPost } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -281,70 +282,93 @@ export default function SuperTimeline() {
             title="SUPER TIMELINE"
             subtitle={`INCIDENT: ${incidentId}`}
             headerActions={
-                <Button variant="ghost" onClick={() => navigate(`/incidents/${incidentId}`)} size="sm">
-                    <ChevronLeft className="w-4 h-4 mr-2" /> BACK TO HUB
-                </Button>
+                <div className="flex items-center gap-3">
+                    {isDone && stStatus && (
+                        <div className="hidden xl:flex items-center gap-4 font-mono text-[10px] border-l border-border pl-4 mr-2">
+                            <div className="flex flex-col">
+                                <span className="text-muted-foreground uppercase leading-none mb-1">Hosts</span>
+                                <span className="text-primary font-bold">{stStatus.host_count || 0}</span>
+                            </div>
+                            <div className="flex flex-col border-l border-border/40 pl-4">
+                                <span className="text-muted-foreground uppercase leading-none mb-1">Total Events</span>
+                                <span className="text-primary font-bold">{stStatus.event_count?.toLocaleString() || 0}</span>
+                            </div>
+                        </div>
+                    )}
+                    <Button 
+                        variant="ghost" 
+                        onClick={() => navigate(`/incidents/${incidentId}`)} 
+                        size="sm"
+                        className="h-8 gap-2 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+                    >
+                        <ChevronLeft className="w-3.5 h-3.5" /> BACK TO HUB
+                    </Button>
+                </div>
             }
         >
-            <div className="p-6 flex flex-col gap-6 max-w-[1600px] mx-auto w-full h-[calc(100vh-120px)]">
+            <div className="flex flex-col h-full overflow-hidden">
                 
-                <SuperTimelineStatus 
-                    stStatus={stStatus ?? null}
-                    statusLoading={statusLoading}
-                    statusError={statusError instanceof Error ? statusError.message : null}
-                    isBuilding={isBuilding || stStatus?.status === "BUILDING" || stStatus?.status === "PENDING"}
-                    isFailed={isFailed}
-                    isDone={isDone}
-                    buildError={buildError}
-                    triggerBuild={triggerBuild}
-                    lmCount={lmDetections?.length ?? 0}
-                />
+                {/* ─── Global Status Overlay (Floating when not done) ─── */}
+                {!isDone && (
+                    <div className="flex-1 flex items-center justify-center p-8 bg-background/50 backdrop-blur-sm">
+                        <SuperTimelineStatus 
+                            stStatus={stStatus ?? null}
+                            statusLoading={statusLoading}
+                            statusError={statusError instanceof Error ? statusError.message : null}
+                            isBuilding={isBuilding || stStatus?.status === "BUILDING" || stStatus?.status === "PENDING"}
+                            isFailed={isFailed}
+                            isDone={isDone}
+                            buildError={buildError}
+                            triggerBuild={triggerBuild}
+                            lmCount={lmDetections?.length ?? 0}
+                        />
+                    </div>
+                )}
 
                 {isDone && (
-                    <div className="flex flex-col flex-1 gap-4 min-h-0">
+                    <div className="flex-1 flex flex-col min-h-0">
                         
-                        <SuperTimelineFilters 
-                            searchInput={searchInput}
-                            onSearchChange={setSearchInput}
-                            dateFrom={dateFrom}
-                            setDateFrom={setDateFrom}
-                            dateTo={dateTo}
-                            setDateTo={setDateTo}
-                            dateFilterActive={dateFilterActive}
-                            applyDateFilter={() => setDateFilterActive(true)}
-                            clearDateFilter={() => { setDateFilterActive(false); setDateFrom(""); setDateTo(""); }}
-                            activeQuickFilter={activeQuickFilter}
-                            applyQuickFilter={applyQuickFilter}
-                            knownHosts={timelineData?.hosts ?? []}
-                            activeHosts={activeHosts}
-                            allHostsActive={allHostsActive}
-                            toggleHost={toggleHost}
-                            toggleAllHosts={() => { setAllHostsActive(true); setActiveHosts(new Set()); setPage(1); }}
-                            knownSources={timelineData?.source_shorts ?? []}
-                            activeSources={activeSources}
-                            allSourcesActive={allSourcesActive}
-                            toggleSource={toggleSource}
-                            toggleAllSources={() => { setAllSourcesActive(true); setActiveSources(new Set()); setPage(1); }}
-                            clearAll={() => {
-                                setSearchInput(""); setDebouncedSearch("");
-                                setAllHostsActive(true); setActiveHosts(new Set());
-                                setAllSourcesActive(true); setActiveSources(new Set());
-                                setDateFilterActive(false); setDateFrom(""); setDateTo("");
-                                setActiveQuickFilter(null); setPage(1);
-                            }}
-                            activeFilterCount={activeFilterCount}
-                        />
+                        {/* ─── Refined Unified Action Bar ─── */}
+                        <div className="bg-card border-b border-border shrink-0 px-6 py-3 flex flex-col gap-4">
+                            <SuperTimelineFilters 
+                                searchInput={searchInput}
+                                onSearchChange={setSearchInput}
+                                dateFrom={dateFrom}
+                                setDateFrom={setDateFrom}
+                                dateTo={dateTo}
+                                setDateTo={setDateTo}
+                                dateFilterActive={dateFilterActive}
+                                applyDateFilter={() => setDateFilterActive(true)}
+                                clearDateFilter={() => { setDateFilterActive(false); setDateFrom(""); setDateTo(""); }}
+                                activeQuickFilter={activeQuickFilter}
+                                applyQuickFilter={applyQuickFilter}
+                                knownHosts={timelineData?.hosts ?? []}
+                                activeHosts={activeHosts}
+                                allHostsActive={allHostsActive}
+                                toggleHost={toggleHost}
+                                toggleAllHosts={() => { setAllHostsActive(true); setActiveHosts(new Set()); setPage(1); }}
+                                knownSources={timelineData?.source_shorts ?? []}
+                                activeSources={activeSources}
+                                allSourcesActive={allSourcesActive}
+                                toggleSource={toggleSource}
+                                toggleAllSources={() => { setAllSourcesActive(true); setActiveSources(new Set()); setPage(1); }}
+                                clearAll={() => {
+                                    setSearchInput(""); setDebouncedSearch("");
+                                    setAllHostsActive(true); setActiveHosts(new Set());
+                                    setAllSourcesActive(true); setActiveSources(new Set());
+                                    setDateFilterActive(false); setDateFrom(""); setDateTo("");
+                                    setActiveQuickFilter(null); setPage(1);
+                                }}
+                                activeFilterCount={activeFilterCount}
+                            />
 
-                        <TacticalPanel 
-                            title={showBookmarks ? "BOOKMARKED EVENTS" : viewMode === "narrative" ? "MISSION LOG: NARRATIVE STORYLINE" : "UNIFIED EVENT TIMELINE"} 
-                            className="flex-1 flex flex-col min-h-0 overflow-hidden p-0"
-                            headerActions={
-                                <div className="flex items-center gap-1 bg-secondary/50 p-0.5 rounded-sm border border-border/40 mr-4">
+                            <div className="flex items-center justify-between border-t border-border/40 pt-3">
+                                <div className="flex items-center gap-1.5 bg-secondary/50 p-0.5 rounded-sm border border-border/40">
                                     <button 
                                         onClick={() => setViewMode("table")}
                                         className={cn(
-                                            "flex items-center gap-1.5 px-2 py-1 rounded-sm font-mono text-[9px] transition-all",
-                                            viewMode === "table" ? "bg-primary text-primary-foreground shadow-lg" : "text-muted-foreground hover:text-foreground"
+                                            "flex items-center gap-1.5 px-3 py-1 rounded-sm font-mono text-[9px] transition-all",
+                                            viewMode === "table" ? "bg-primary text-primary-foreground shadow-md" : "text-muted-foreground hover:text-foreground"
                                         )}
                                     >
                                         <TableIcon className="w-3 h-3" />
@@ -353,17 +377,15 @@ export default function SuperTimeline() {
                                     <button 
                                         onClick={() => setViewMode("narrative")}
                                         className={cn(
-                                            "flex items-center gap-1.5 px-2 py-1 rounded-sm font-mono text-[9px] transition-all",
-                                            viewMode === "narrative" ? "bg-primary text-primary-foreground shadow-lg" : "text-muted-foreground hover:text-foreground"
+                                            "flex items-center gap-1.5 px-3 py-1 rounded-sm font-mono text-[9px] transition-all",
+                                            viewMode === "narrative" ? "bg-primary text-primary-foreground shadow-md" : "text-muted-foreground hover:text-foreground"
                                         )}
                                     >
                                         <GitBranch className="w-3 h-3" />
                                         NARRATIVE VIEW
                                     </button>
                                 </div>
-                            }
-                        >
-                            <div className="flex flex-col h-full">
+
                                 <SuperTimelineToolbar 
                                     visibleCols={visibleCols}
                                     toggleCol={(k) => {
@@ -380,69 +402,81 @@ export default function SuperTimeline() {
                                     activeFilterCount={activeFilterCount}
                                     totalEvents={timelineData?.total ?? 0}
                                 />
+                            </div>
+                        </div>
 
+                        {/* ─── Main Content Area ─── */}
+                        <div className="flex-1 flex min-h-0 relative">
+                            <div className={cn(
+                                "flex-1 flex flex-col min-w-0 transition-all duration-300",
+                                (selectedEvent || compareEvents) ? "mr-[400px]" : "mr-0"
+                            )}>
                                 {!showBookmarks && viewMode === "table" && timelineData && (
-                                    <SuperTimelineChart 
-                                        data={timelineData.data} 
-                                        onSelectWindow={onSelectChartWindow}
-                                    />
+                                    <div className="px-6 py-2 bg-background/20 border-b border-border/40">
+                                        <SuperTimelineChart 
+                                            data={timelineData.data} 
+                                            onSelectWindow={onSelectChartWindow}
+                                        />
+                                    </div>
                                 )}
 
                                 <div className="flex-1 overflow-hidden flex flex-col">
                                     {viewMode === "narrative" ? (
-                                        <div className="flex-1 overflow-auto bg-background/30">
+                                        <div className="flex-1 overflow-auto bg-background/30 p-6">
                                             <NarrativeStoryline 
                                                 bookmarks={bookmarks} 
                                                 knownHosts={timelineData?.hosts ?? []} 
                                             />
                                         </div>
                                     ) : (
-                                        <SuperTimelineTable 
-                                            data={showBookmarks ? [] : (timelineData?.data ?? [])}
-                                            total={timelineData?.total ?? 0}
-                                            page={page}
-                                            setPage={setPage}
-                                            pageSize={pageSize}
-                                            setPageSize={setPageSize}
-                                            sortBy={sortBy}
-                                            sortOrder={sortOrder}
-                                            onSort={handleSort}
-                                            visibleCols={visibleCols}
-                                            loading={tlLoading}
-                                            error={tlError as Error}
-                                            selectedEvent={selectedEvent}
-                                            onRowClick={(e, row, i) => {
-                                                if (e.shiftKey) {
-                                                    if (!compareEvents) setCompareEvents([row]);
-                                                    else if (compareEvents.includes(row)) setCompareEvents(compareEvents.filter(x => x !== row));
-                                                    else setCompareEvents([...compareEvents, row]);
-                                                } else {
-                                                    setSelectedEvent(row);
-                                                    setFocusedRowIndex(i);
-                                                }
-                                            } }
-                                            focusedRowIndex={focusedRowIndex}
-                                            highlightCache={highlightCache}
-                                            eventHashCache={eventHashCache}
-                                            eventTags={eventTags}
-                                            setEventTag={setEventTag}
-                                            activeFilterCount={activeFilterCount}
-                                            clearFilters={() => {}}
-                                            knownHosts={timelineData?.hosts ?? []}
-                                            lmWindowSet={lmWindowSet}
-                                            onSearchChange={(q) => { setSearchInput(q); setPage(1); }}
-                                            bookmarks={bookmarks}
-                                            onRemoveBookmark={(hash) => {
-                                                const next = bookmarks.filter(b => b.eventHash !== hash);
-                                                setBookmarks(next);
-                                                saveBookmarks(incidentId ?? "", next);
-                                            }}
-                                            showBookmarks={showBookmarks}
-                                        />
+                                        <div className="flex-1 flex flex-col min-h-0 p-6 pt-2">
+                                            <SuperTimelineTable 
+                                                data={showBookmarks ? [] : (timelineData?.data ?? [])}
+                                                total={timelineData?.total ?? 0}
+                                                page={page}
+                                                setPage={setPage}
+                                                pageSize={pageSize}
+                                                setPageSize={setPageSize}
+                                                sortBy={sortBy}
+                                                sortOrder={sortOrder}
+                                                onSort={handleSort}
+                                                visibleCols={visibleCols}
+                                                loading={tlLoading}
+                                                error={tlError as Error}
+                                                selectedEvent={selectedEvent}
+                                                onRowClick={(e, row, i) => {
+                                                    if (e.shiftKey) {
+                                                        if (!compareEvents) setCompareEvents([row]);
+                                                        else if (compareEvents.includes(row)) setCompareEvents(compareEvents.filter(x => x !== row));
+                                                        else setCompareEvents([...compareEvents, row]);
+                                                    } else {
+                                                        setSelectedEvent(row);
+                                                        setFocusedRowIndex(i);
+                                                    }
+                                                } }
+                                                focusedRowIndex={focusedRowIndex}
+                                                highlightCache={highlightCache}
+                                                eventHashCache={eventHashCache}
+                                                eventTags={eventTags}
+                                                setEventTag={setEventTag}
+                                                activeFilterCount={activeFilterCount}
+                                                clearFilters={() => {}}
+                                                knownHosts={timelineData?.hosts ?? []}
+                                                lmWindowSet={lmWindowSet}
+                                                onSearchChange={(q) => { setSearchInput(q); setPage(1); }}
+                                                bookmarks={bookmarks}
+                                                onRemoveBookmark={(hash) => {
+                                                    const next = bookmarks.filter(b => b.eventHash !== hash);
+                                                    setBookmarks(next);
+                                                    saveBookmarks(incidentId ?? "", next);
+                                                }}
+                                                showBookmarks={showBookmarks}
+                                            />
+                                        </div>
                                     )}
                                 </div>
                             </div>
-                        </TacticalPanel>
+                        </div>
                     </div>
                 )}
             </div>
