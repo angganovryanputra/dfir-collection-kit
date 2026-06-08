@@ -33,28 +33,52 @@ interface NavItem {
   adminOnly?: boolean;
 }
 
-const mainNavItems: NavItem[] = [
-  { label: "DASHBOARD", icon: LayoutDashboard, path: "/dashboard" },
-  { label: "CREATE INCIDENT", icon: Plus, path: "/incidents/create" },
-  { label: "EVIDENCE VAULT", icon: FolderLock, path: "/evidence" },
-  { label: "CHAIN OF CUSTODY", icon: FileText, path: "/chain-of-custody" },
-];
+interface NavSection {
+  label: string;
+  items: NavItem[];
+}
 
-const intelligenceNavItems: NavItem[] = [
-  { label: "THREAT HUNT", icon: Crosshair, path: "/threat-hunt" },
-  { label: "CORRELATE", icon: GitMerge, path: "/correlate" },
-  { label: "THREAT INTEL", icon: Zap, path: "/threat-intel" },
-];
-
-const systemNavItems: NavItem[] = [
-  { label: "COLLECTORS", icon: Server, path: "/collectors" },
-  { label: "DEVICES", icon: Monitor, path: "/devices" },
-  { label: "TEMPLATES", icon: FileStack, path: "/incident-templates" },
-  { label: "SCHEDULED", icon: Clock, path: "/scheduled-collections" },
-  { label: "CUSTOM MODULES", icon: Database, path: "/admin/custom-modules", adminOnly: true },
-  { label: "AUDIT LOG", icon: ClipboardList, path: "/admin/audit-log", adminOnly: true },
-  { label: "USERS", icon: Users, path: "/admin/users", adminOnly: true },
-  { label: "SETTINGS", icon: Settings, path: "/admin/settings", adminOnly: true },
+const NAV_SECTIONS: NavSection[] = [
+  {
+    label: "Investigate",
+    items: [
+      { label: "DASHBOARD", icon: LayoutDashboard, path: "/dashboard" },
+      { label: "CREATE INCIDENT", icon: Plus, path: "/incidents/create" },
+    ],
+  },
+  {
+    label: "Collect",
+    items: [
+      { label: "DEVICES", icon: Monitor, path: "/devices" },
+      { label: "COLLECTORS", icon: Server, path: "/collectors" },
+      { label: "TEMPLATES", icon: FileStack, path: "/incident-templates" },
+      { label: "SCHEDULED", icon: Clock, path: "/scheduled-collections" },
+    ],
+  },
+  {
+    label: "Evidence",
+    items: [
+      { label: "EVIDENCE VAULT", icon: FolderLock, path: "/evidence" },
+      { label: "CHAIN OF CUSTODY", icon: FileText, path: "/chain-of-custody" },
+    ],
+  },
+  {
+    label: "Hunt",
+    items: [
+      { label: "THREAT HUNT", icon: Crosshair, path: "/threat-hunt" },
+      { label: "CORRELATE", icon: GitMerge, path: "/correlate" },
+      { label: "THREAT INTEL", icon: Zap, path: "/threat-intel" },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { label: "CUSTOM MODULES", icon: Database, path: "/admin/custom-modules", adminOnly: true },
+      { label: "AUDIT LOG", icon: ClipboardList, path: "/admin/audit-log", adminOnly: true },
+      { label: "USERS", icon: Users, path: "/admin/users", adminOnly: true },
+      { label: "SETTINGS", icon: Settings, path: "/admin/settings", adminOnly: true },
+    ],
+  },
 ];
 
 interface AppSidebarProps {
@@ -85,9 +109,6 @@ export function AppSidebar({
     }
   })();
   const isAdmin = authRole === "admin";
-  const visibleSystemNavItems = systemNavItems.filter(
-    (item) => !item.adminOnly || isAdmin
-  );
 
   const handleLogout = () => {
     void apiPost("/auth/logout", {}).catch(() => {
@@ -186,51 +207,26 @@ export function AppSidebar({
 
       {/* Navigation */}
       <nav className="flex-1 py-4 overflow-y-auto">
-        {/* Main Section */}
-        {!isCollapsed && (
-          <div className="px-3 mb-2">
-            <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">
-              Operations
-            </span>
-          </div>
-        )}
-        <div className="space-y-1">
-          {mainNavItems.map((item) => (
-            <NavButton key={item.path} item={item} />
-          ))}
-        </div>
-
-        {/* Intelligence Section */}
-        <div className="mt-6">
-          {!isCollapsed && (
-            <div className="px-3 mb-2">
-              <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">
-                Intelligence
-              </span>
+        {NAV_SECTIONS.map((section, sectionIdx) => {
+          const visibleItems = section.items.filter((item) => !item.adminOnly || isAdmin);
+          if (visibleItems.length === 0) return null;
+          return (
+            <div key={section.label} className={sectionIdx > 0 ? "mt-4" : ""}>
+              {!isCollapsed && (
+                <div className="px-3 mb-1.5">
+                  <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">
+                    {section.label}
+                  </span>
+                </div>
+              )}
+              <div className="space-y-0.5">
+                {visibleItems.map((item) => (
+                  <NavButton key={item.path} item={item} />
+                ))}
+              </div>
             </div>
-          )}
-          <div className="space-y-1">
-            {intelligenceNavItems.map((item) => (
-              <NavButton key={item.path} item={item} />
-            ))}
-          </div>
-        </div>
-
-        {/* System Section */}
-        <div className="mt-6">
-          {!isCollapsed && (
-            <div className="px-3 mb-2">
-              <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-wider">
-                System
-              </span>
-            </div>
-          )}
-          <div className="space-y-1">
-            {visibleSystemNavItems.map((item) => (
-              <NavButton key={item.path} item={item} />
-            ))}
-          </div>
-        </div>
+          );
+        })}
       </nav>
 
       {/* Footer */}

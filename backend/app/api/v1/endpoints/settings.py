@@ -321,3 +321,96 @@ async def verify_single_tool_endpoint(
         message=f"Tool verification: {tool_key} → {result['status']}",
     )
     return result
+
+
+@router.get("/readiness", dependencies=[Depends(require_roles("admin", "operator"))])
+async def system_readiness(db: AsyncSession = Depends(get_db)) -> dict:
+    """Return a system readiness checklist for the setup wizard and dashboard.
+
+    Uses path-existence checks only (no subprocess). Fast enough to call on
+    every dashboard load. Returns an 'overall' status and per-item checklist.
+    """
+    from app.core.config import settings as config_settings
+    from app.crud.device import list_devices
+    from app.crud.collector import list_collectors
+
+    rt = await get_runtime_settings(db)
+
+    storage_path = rt.evidence_storage_path
+    storage_ok = bool(storage_path) and Path(storage_path).is_dir() and os.access(Path(storage_path), os.W_OK)
+
+    agent_secret_ok = bool(getattr(config_settings, "AGENT_SHARED_SECRET", ""))
+
+    ez_ok = bool(rt.ez_tools_path) and Path(rt.ez_tools_path).is_dir()
+    hayabusa_ok = bool(rt.hayabusa_path) and Path(rt.hayabusa_path).exists()
+    chainsaw_ok = bool(rt.chainsaw_path) and Path(rt.chainsaw_path).exists()
+    tools_any_configured = bool(rt.ez_tools_path or rt.hayabusa_path or rt.chainsaw_path)
+    tools_any_ok = ez_ok or hayabusa_ok or chainsaw_ok
+
+    devices = await list_devices(db, limit=1)
+    agents_enrolled = len(devices) > 0
+
+    collectors = await list_collectors(db)
+    collectors_ok = len(collectors) > 0
+
+    def _item(id_: str, label: str, description: str, ok: bool, action: str, action_path: str | None) -> dict:
+        return {
+            "id": id_,
+            "label": label,
+            "description": description,
+            "status": "ok" if ok else "not_configured",
+            "action": action,
+            "action_path": action_path,
+        }
+
+    checklist = [
+        _item(
+            "storage", "Evidence Storage",
+            f"Vault path is writable ({storage_path or 'not set'})",
+            storage_ok,
+            "Verify evidence_storage_path in Settings → System Config",
+            "/admin/settings",
+        ),
+        _item(
+            "agent_secret", "Agent Authentication",
+            "AGENT_SHARED_SECRET is configured — agents can authenticate",
+            agent_secret_ok,
+            "Set AGENT_SHARED_SECRET env var and restart the backend",
+            None,
+        ),
+        _item(
+            "tools", "Forensics Tools",
+            "At least one parser (EZ Tools, Hayabusa, or Chainsaw) is installed",
+            tools_any_ok,
+            "Configure tool paths in Settings → System Config → FORENSICS PIPELINE",
+            "/admin/settings",
+        ),
+        _item(
+            "collectors", "Collector Nodes",
+            "At least one collector node is registered",
+            collectors_ok,
+            "Add a collector in the COLLECTORS page",
+            "/collectors",
+        ),
+        _item(
+            "agents", "Enrolled Agents",
+            "At least one DFIR agent has registered from a target host",
+            agents_enrolled,
+            "Deploy the agent binary on target hosts (see DEVICES page)",
+            "/devices",
+        ),
+    ]
+
+    ok_count = sum(1 for c in checklist if c["status"] == "ok")
+    critical_ids = {"storage", "agent_secret"}
+    critical_ok = all(c["status"] == "ok" for c in checklist if c["id"] in critical_ids)
+    overall = "ready" if ok_count == len(checklist) else ("partial" if critical_ok else "not_ready")
+
+    return {
+        "overall": overall,
+        "ok_count": ok_count,
+        "total": len(checklist),
+        "tools_configured": tools_any_configured,
+        "tools_ok": tools_any_ok,
+        "checklist": checklist,
+    }

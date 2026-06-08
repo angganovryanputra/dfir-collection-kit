@@ -158,6 +158,62 @@ async def get_latest_processing_status_for_incident(
     return ProcessingJobOut.model_validate(proc_job)
 
 
+@router.get("/incident/{incident_id}/preflight", dependencies=[Depends(require_roles("admin", "operator"))])
+async def preflight_check(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Fast pre-flight readiness check before launching the parsing pipeline.
+
+    Uses filesystem path-existence checks only (no subprocess). Returns per-tool
+    status and an overall 'ready' flag so the frontend can warn before clicking
+    'Run Pipeline'.
+    """
+    rt = await get_runtime_settings(db)
+
+    def _check(path: str | None) -> dict:
+        if not path:
+            return {"ok": False, "status": "not_configured", "path": None}
+        p = Path(path)
+        exists = p.exists()
+        return {"ok": exists, "status": "ok" if exists else "missing", "path": path}
+
+    ez = _check(rt.ez_tools_path)
+    hayabusa = _check(rt.hayabusa_path)
+    chainsaw = _check(rt.chainsaw_path)
+    sigma = _check(rt.sigma_rules_path)
+    yara = _check(rt.yara_rules_path)
+
+    phase1_ready = ez["ok"]
+    phase2_ready = hayabusa["ok"] or chainsaw["ok"] or sigma["ok"]
+    phase4_ready = yara["ok"]
+
+    any_phase_ready = phase1_ready or phase2_ready or phase4_ready
+    warnings = []
+    if not phase1_ready:
+        warnings.append("EZ Tools not configured — Phase 1 (artifact parsing) will be skipped")
+    if not phase2_ready:
+        warnings.append("No detection engine configured — Phase 2 (Sigma/Hayabusa/Chainsaw) will be skipped")
+    if not phase4_ready:
+        warnings.append("YARA rules not configured — Phase 4 (YARA matching) will be skipped")
+
+    return {
+        "incident_id": incident_id,
+        "ready": any_phase_ready,
+        "warnings": warnings,
+        "phases": {
+            "phase1_artifact_parsing": {"ready": phase1_ready, "tool": "ez_tools", "status": ez},
+            "phase2_detection": {
+                "ready": phase2_ready,
+                "tools": {"hayabusa": hayabusa, "chainsaw": chainsaw, "sigma_rules": sigma},
+            },
+            "phase3_timeline": {"ready": True},
+            "phase4_analytics": {"ready": phase4_ready, "tool": "yara_rules", "status": yara},
+        },
+        "settings_path": "/admin/settings",
+    }
+
+
 @router.get("/incident/{incident_id}/logs")
 async def get_processing_logs(
     incident_id: str,

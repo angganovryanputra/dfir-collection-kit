@@ -14,10 +14,30 @@ import { apiGet } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
 import { useToast } from "@/components/ui/use-toast";
 
-interface ToolsStatus {
-  ez_tools_path: string | null;
-  hayabusa_path: string | null;
-  chainsaw_path: string | null;
+interface PreflightPhaseStatus {
+  ok: boolean;
+  status: "ok" | "not_configured" | "missing";
+  path: string | null;
+}
+
+interface PreflightResponse {
+  incident_id: string;
+  ready: boolean;
+  warnings: string[];
+  phases: {
+    phase1_artifact_parsing: { ready: boolean; tool: string; status: PreflightPhaseStatus };
+    phase2_detection: {
+      ready: boolean;
+      tools: {
+        hayabusa: PreflightPhaseStatus;
+        chainsaw: PreflightPhaseStatus;
+        sigma_rules: PreflightPhaseStatus;
+      };
+    };
+    phase3_timeline: { ready: boolean };
+    phase4_analytics: { ready: boolean; tool: string; status: PreflightPhaseStatus };
+  };
+  settings_path: string;
 }
 
 interface ProcessingJobOut {
@@ -37,28 +57,24 @@ const PHASES = [
         id: "parsing",
         label: "PHASE 1: ARTIFACT PARSING",
         desc: "EZ Tools parsing EVTX, MFT, Registry, Prefetch, LNK",
-        toolKey: "ez_tools_path" as keyof ToolsStatus,
         toolName: "EZ Tools",
     },
     {
         id: "sigma",
         label: "PHASE 2: SIGMA DETECTION",
         desc: "Hayabusa + Chainsaw hunting Sigma rules against event logs",
-        toolKey: "hayabusa_path" as keyof ToolsStatus,
         toolName: "Hayabusa / Chainsaw",
     },
     {
         id: "timeline",
         label: "PHASE 3: TIMELINE BUILD",
         desc: "Merging all parsed sources into Timesketch-compatible JSONL",
-        toolKey: null,
         toolName: null,
     },
     {
         id: "analytics",
         label: "PHASE 4: ADVANCED ANALYTICS",
         desc: "ATT&CK chain reconstruction, IOC matching, YARA scanning",
-        toolKey: null,
         toolName: null,
     },
 ];
@@ -169,11 +185,12 @@ export default function ProcessingStatus() {
     };
 
     const role = getStoredRole();
-    const { data: toolsStatus } = useQuery<ToolsStatus>({
-        queryKey: ["settings-tools"],
-        queryFn: () => apiGet<ToolsStatus>("/settings"),
-        enabled: role === "admin",
-        staleTime: 5 * 60 * 1000,
+    const { data: preflight } = useQuery<PreflightResponse>({
+        queryKey: ["processing-preflight", incidentId],
+        queryFn: () => apiGet<PreflightResponse>(`/processing/incident/${incidentId}/preflight`),
+        enabled: (role === "admin" || role === "operator") && Boolean(incidentId),
+        staleTime: 2 * 60 * 1000,
+        retry: false,
     });
 
     return (
@@ -188,6 +205,31 @@ export default function ProcessingStatus() {
             }
         >
             <div className="p-6 flex flex-col gap-6 max-w-3xl mx-auto w-full">
+                {/* Pre-flight Check Panel — shown to admin/operator when tools are missing */}
+                {preflight && !preflight.ready && preflight.warnings.length > 0 && (
+                    <TacticalPanel title="PRE-FLIGHT CHECK" status="warning">
+                        <div className="space-y-2">
+                            <p className="font-mono text-xs text-muted-foreground mb-3">
+                                Some pipeline phases will be skipped due to missing tools. The pipeline can still run with partial results.
+                            </p>
+                            {preflight.warnings.map((w, i) => (
+                                <div key={i} className="flex items-start gap-2 font-mono text-xs text-warning/90">
+                                    <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                                    <span>{w}</span>
+                                </div>
+                            ))}
+                            <div className="pt-2">
+                                <button
+                                    onClick={() => navigate("/admin/settings")}
+                                    className="font-mono text-[10px] text-primary hover:text-primary/80 underline transition-colors"
+                                >
+                                    CONFIGURE TOOLS IN SETTINGS →
+                                </button>
+                            </div>
+                        </div>
+                    </TacticalPanel>
+                )}
+
                 {/* Overall Status */}
                 <TacticalPanel
                     title="PIPELINE STATUS"
@@ -287,9 +329,13 @@ export default function ProcessingStatus() {
                             const st = job
                                 ? phaseStatus(job.phase, job.status, p.id)
                                 : "pending";
-                            const toolMissing = p.toolKey && toolsStatus
-                                ? !toolsStatus[p.toolKey]
-                                : false;
+                            const toolMissing = (() => {
+                                if (!preflight) return false;
+                                if (p.id === "parsing") return !preflight.phases.phase1_artifact_parsing.ready;
+                                if (p.id === "sigma") return !preflight.phases.phase2_detection.ready;
+                                if (p.id === "analytics") return !preflight.phases.phase4_analytics.ready;
+                                return false;
+                            })();
                             return (
                                 <div
                                     key={p.id}

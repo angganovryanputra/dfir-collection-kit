@@ -133,6 +133,15 @@ export default function Devices() {
   const isAdmin = getStoredRole() === "admin";
   const [isDownloadingAgent, setIsDownloadingAgent] = useState<Record<string, boolean>>({});
   const [agentDownloadError, setAgentDownloadError] = useState<string | null>(null);
+  const [enrollGuideCollapsed, setEnrollGuideCollapsed] = useState(
+    () => localStorage.getItem("dfir_enroll_guide_collapsed") === "true"
+  );
+
+  const toggleEnrollGuide = () => {
+    const next = !enrollGuideCollapsed;
+    localStorage.setItem("dfir_enroll_guide_collapsed", String(next));
+    setEnrollGuideCollapsed(next);
+  };
 
   const agentBinaryInfoQuery = useQuery<AgentBinaryInfo>({
     queryKey: ["agent-binary-info"],
@@ -444,6 +453,86 @@ export default function Devices() {
                   <span className="font-mono text-xs text-destructive">{agentDownloadError}</span>
                 )}
               </div>
+            </TacticalPanel>
+          </div>
+
+          {/* Agent Enrollment Guide */}
+          <div className="mb-6">
+            <TacticalPanel
+              title="AGENT ENROLLMENT GUIDE"
+              status="online"
+              headerActions={
+                <button
+                  onClick={toggleEnrollGuide}
+                  className="font-mono text-[10px] text-muted-foreground hover:text-foreground transition-colors uppercase tracking-wider"
+                >
+                  {enrollGuideCollapsed ? "▼ SHOW" : "▲ HIDE"}
+                </button>
+              }
+            >
+              {!enrollGuideCollapsed && (
+                <div className="space-y-4 font-mono text-xs">
+                  <p className="text-muted-foreground">
+                    Follow these steps to enroll a new endpoint. The agent self-registers — no manual device creation needed.
+                  </p>
+                  <div className="grid grid-cols-1 gap-3">
+                    <div className="flex items-start gap-3 p-3 border border-border bg-secondary/20">
+                      <span className="w-5 h-5 rounded-sm bg-primary/20 text-primary font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">1</span>
+                      <div className="space-y-1">
+                        <div className="font-bold text-foreground uppercase tracking-wide">Download the Agent Binary</div>
+                        <div className="text-muted-foreground">Use the DOWNLOAD AGENT panel above to get the binary for the target OS (Windows .exe or Linux ELF).</div>
+                        <div className="text-muted-foreground">Transfer the binary to the target endpoint via SCP, USB, or your preferred method.</div>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-3 border border-border bg-secondary/20">
+                      <span className="w-5 h-5 rounded-sm bg-primary/20 text-primary font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">2</span>
+                      <div className="space-y-1">
+                        <div className="font-bold text-foreground uppercase tracking-wide">Set Authentication Secret</div>
+                        <div className="text-muted-foreground">On the target host, set the same <span className="text-foreground">AGENT_SHARED_SECRET</span> that is configured on this server.</div>
+                        <div className="p-2 bg-background border border-border text-primary text-[11px] whitespace-nowrap overflow-x-auto mt-1">
+                          <div className="text-muted-foreground/60 mb-1"># Windows (PowerShell)</div>
+                          <div>$env:AGENT_SHARED_SECRET = "your-secret"</div>
+                          <div className="text-muted-foreground/60 mt-2 mb-1"># Linux / macOS (bash)</div>
+                          <div>export AGENT_SHARED_SECRET="your-secret"</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-3 border border-border bg-secondary/20">
+                      <span className="w-5 h-5 rounded-sm bg-primary/20 text-primary font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">3</span>
+                      <div className="space-y-1">
+                        <div className="font-bold text-foreground uppercase tracking-wide">Point Agent to This Server</div>
+                        <div className="text-muted-foreground">Set <span className="text-foreground">DFIR_SERVER_URL</span> to the URL of this DFIR Kit instance.</div>
+                        <div className="p-2 bg-background border border-border text-primary text-[11px] whitespace-nowrap overflow-x-auto mt-1">
+                          <div>export DFIR_SERVER_URL="https://dfir-kit.internal"</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-3 border border-border bg-secondary/20">
+                      <span className="w-5 h-5 rounded-sm bg-primary/20 text-primary font-bold text-[10px] flex items-center justify-center shrink-0 mt-0.5">4</span>
+                      <div className="space-y-1">
+                        <div className="font-bold text-foreground uppercase tracking-wide">Run the Agent</div>
+                        <div className="text-muted-foreground">Execute the agent binary. It will register itself and appear in this device list within 60 seconds.</div>
+                        <div className="p-2 bg-background border border-border text-primary text-[11px] whitespace-nowrap overflow-x-auto mt-1">
+                          <div className="text-muted-foreground/60 mb-1"># Windows (run as Administrator)</div>
+                          <div>.\agent-windows-amd64.exe</div>
+                          <div className="text-muted-foreground/60 mt-2 mb-1"># Linux (run as root or with sudo)</div>
+                          <div>chmod +x agent-linux-amd64 && sudo ./agent-linux-amd64</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-start gap-3 p-3 border border-primary/20 bg-primary/5">
+                      <Terminal className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                      <div className="space-y-1">
+                        <div className="font-bold text-primary uppercase tracking-wide">Auto-Registration</div>
+                        <div className="text-muted-foreground">
+                          The agent authenticates via <span className="text-foreground">X-Agent-Token</span> header, registers hostname + OS, and begins polling for collection jobs.
+                          No manual device creation is required. Refresh this page after 60 seconds to see the enrolled device.
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
             </TacticalPanel>
           </div>
 
