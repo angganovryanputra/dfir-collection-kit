@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from "react";
+import React, { useState, useEffect, useMemo, useCallback, memo } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -78,6 +78,7 @@ export default function SuperTimeline() {
     const { data: stStatus, isLoading: statusLoading, error: statusError } = useQuery<SuperTimelineStatusData | null>({
         queryKey: ["super-timeline-status", incidentId],
         queryFn: () => apiGet<SuperTimelineStatusData>(`/processing/incident/${incidentId}/super-timeline/status`),
+        staleTime: 10000,
         refetchInterval: (q) => {
             const s = q.state.data?.status;
             return s === "BUILDING" || s === "PENDING" ? 5000 : false;
@@ -87,35 +88,39 @@ export default function SuperTimeline() {
     const isDone = stStatus?.status === "DONE";
     const isFailed = stStatus?.status === "FAILED";
 
+    const timelineParams = useMemo(() => {
+        const params = new URLSearchParams({
+            page: String(page),
+            limit: String(pageSize),
+            sort_by: sortBy,
+            sort_order: sortOrder,
+        });
+        if (debouncedSearch) params.append("q", debouncedSearch);
+        if (dateFilterActive) {
+            if (dateFrom) params.append("start_date", dateFrom);
+            if (dateTo) params.append("end_date", dateTo);
+        }
+        if (!allHostsActive && activeHosts.size > 0) {
+            activeHosts.forEach(h => params.append("hosts", h));
+        }
+        if (!allSourcesActive && activeSources.size > 0) {
+            activeSources.forEach(s => params.append("sources", s));
+        }
+        return params.toString();
+    }, [page, pageSize, sortBy, sortOrder, debouncedSearch, dateFilterActive, dateFrom, dateTo, activeHosts, allHostsActive, activeSources, allSourcesActive]);
+
     const { data: timelineData, isLoading: tlLoading, error: tlError } = useQuery<SuperTimelineResponse>({
-        queryKey: ["super-timeline-data", incidentId, page, pageSize, sortBy, sortOrder, debouncedSearch, dateFilterActive ? dateFrom : "", dateFilterActive ? dateTo : "", Array.from(activeHosts), Array.from(activeSources)],
-        queryFn: async () => {
-            const params = new URLSearchParams({
-                page: String(page),
-                limit: String(pageSize),
-                sort_by: sortBy,
-                sort_order: sortOrder,
-            });
-            if (debouncedSearch) params.append("q", debouncedSearch);
-            if (dateFilterActive) {
-                if (dateFrom) params.append("start_date", dateFrom);
-                if (dateTo) params.append("end_date", dateTo);
-            }
-            if (!allHostsActive && activeHosts.size > 0) {
-                activeHosts.forEach(h => params.append("hosts", h));
-            }
-            if (!allSourcesActive && activeSources.size > 0) {
-                activeSources.forEach(s => params.append("sources", s));
-            }
-            return apiGet<SuperTimelineResponse>(`/processing/incident/${incidentId}/super-timeline?${params.toString()}`);
-        },
+        queryKey: ["super-timeline-data", incidentId, timelineParams],
+        queryFn: () => apiGet<SuperTimelineResponse>(`/processing/incident/${incidentId}/super-timeline?${timelineParams}`),
         enabled: isDone,
+        staleTime: 60_000,
     });
 
-    const { data: lmDetections, isLoading: lmLoading } = useQuery<LateralMovementDetection[]>({
+    const { data: lmDetections = [] } = useQuery<LateralMovementDetection[]>({
         queryKey: ["lateral-movements", incidentId],
         queryFn: () => apiGet<LateralMovementDetection[]>(`/processing/incident/${incidentId}/super-timeline/lateral-movement`),
         enabled: isDone,
+        staleTime: 60_000,
     });
 
     // ─── Effects ─────────────────────────────────────────────────────────────
@@ -133,8 +138,8 @@ export default function SuperTimeline() {
         }
     }, [incidentId]);
 
-    const saveBookmarks = (id: string, b: Bookmark[]) => localStorage.setItem(`bookmarks_${id}`, JSON.stringify(b));
-    const saveTags = (id: string, t: Record<string, EventTagValue | null>) => localStorage.setItem(`tags_${id}`, JSON.stringify(t));
+    const saveBookmarks = useCallback((id: string, b: Bookmark[]) => localStorage.setItem(`bookmarks_${id}`, JSON.stringify(b)), []);
+    const saveTags = useCallback((id: string, t: Record<string, EventTagValue | null>) => localStorage.setItem(`tags_${id}`, JSON.stringify(t)), []);
 
     // ─── Handlers ────────────────────────────────────────────────────────────
     const triggerBuild = async () => {
@@ -150,47 +155,60 @@ export default function SuperTimeline() {
         }
     };
 
-    const handleSort = (col: SortKey) => {
-        if (sortBy === col) setSortOrder(sortOrder === "asc" ? "desc" : "asc");
-        else { setSortBy(col); setSortOrder("asc"); }
+    const handleSort = useCallback((col: SortKey) => {
+        setSortBy(prev => {
+            if (prev === col) {
+                setSortOrder(curr => curr === "asc" ? "desc" : "asc");
+                return prev;
+            }
+            setSortOrder("asc");
+            return col;
+        });
         setPage(1);
-    };
+    }, []);
 
-    const toggleHost = (h: string) => {
-        const next = new Set(activeHosts);
-        if (allHostsActive) {
-            next.clear();
-            (timelineData?.hosts ?? []).forEach(x => { if (x !== h) next.add(x); });
-            setAllHostsActive(false);
-        } else {
-            if (next.has(h)) next.delete(h); else next.add(h);
-            if (next.size === 0 || next.size === (timelineData?.hosts ?? []).length) {
-                setAllHostsActive(true); next.clear();
+    const toggleHost = useCallback((h: string) => {
+        setActiveHosts(prev => {
+            const next = new Set(prev);
+            if (allHostsActive) {
+                next.clear();
+                (timelineData?.hosts ?? []).forEach(x => { if (x !== h) next.add(x); });
+                setAllHostsActive(false);
+            } else {
+                if (next.has(h)) next.delete(h); else next.add(h);
+                if (next.size === 0 || next.size === (timelineData?.hosts ?? []).length) {
+                    setAllHostsActive(true); return new Set();
+                }
             }
-        }
-        setActiveHosts(next); setPage(1);
-    };
+            return next;
+        });
+        setPage(1);
+    }, [allHostsActive, timelineData?.hosts]);
 
-    const toggleSource = (s: string) => {
-        const next = new Set(activeSources);
-        if (allSourcesActive) {
-            next.clear();
-            (timelineData?.source_shorts ?? []).forEach(x => { if (x !== s) next.add(x); });
-            setAllSourcesActive(false);
-        } else {
-            if (next.has(s)) next.delete(s); else next.add(s);
-            if (next.size === 0 || next.size === (timelineData?.source_shorts ?? []).length) {
-                setAllSourcesActive(true); next.clear();
+    const toggleSource = useCallback((s: string) => {
+        setActiveSources(prev => {
+            const next = new Set(prev);
+            if (allSourcesActive) {
+                next.clear();
+                (timelineData?.source_shorts ?? []).forEach(x => { if (x !== s) next.add(x); });
+                setAllSourcesActive(false);
+            } else {
+                if (next.has(s)) next.delete(s); else next.add(s);
+                if (next.size === 0 || next.size === (timelineData?.source_shorts ?? []).length) {
+                    setAllSourcesActive(true); return new Set();
+                }
             }
-        }
-        setActiveSources(next); setPage(1);
-    };
+            return next;
+        });
+        setPage(1);
+    }, [allSourcesActive, timelineData?.source_shorts]);
 
-    const applyQuickFilter = (qf: QuickFilter) => {
-        if (activeQuickFilter === qf.id) {
-            setActiveQuickFilter(null); setSearchInput(""); setAllSourcesActive(true); setActiveSources(new Set());
-        } else {
-            setActiveQuickFilter(qf.id);
+    const applyQuickFilter = useCallback((qf: QuickFilter) => {
+        setActiveQuickFilter(curr => {
+            if (curr === qf.id) {
+                setSearchInput(""); setAllSourcesActive(true); setActiveSources(new Set());
+                return null;
+            }
             if (qf.q) setSearchInput(qf.q);
             if (qf.sources) {
                 setAllSourcesActive(false);
@@ -198,9 +216,10 @@ export default function SuperTimeline() {
             } else {
                 setAllSourcesActive(true); setActiveSources(new Set());
             }
-        }
+            return qf.id;
+        });
         setPage(1);
-    };
+    }, []);
 
     const handleExport = async () => {
         if (!incidentId) return;
@@ -214,41 +233,45 @@ export default function SuperTimeline() {
         }
     };
 
-    const toggleBookmark = (event: Record<string, unknown>, note: string) => {
+    const toggleBookmark = useCallback((event: Record<string, unknown>, note: string) => {
         if (!incidentId) return;
         const hash = hashEvent(event);
-        const existing = bookmarks.find(b => b.eventHash === hash);
-        let next: Bookmark[];
-        if (existing) {
-            next = bookmarks.filter(b => b.eventHash !== hash);
-        } else {
-            next = [...bookmarks, {
-                eventHash: hash,
-                note,
-                createdAt: new Date().toISOString(),
-                datetime: String(event["datetime"]),
-                host: String(event["host"] ?? event["computer"] ?? "UNKNOWN"),
-                message: String(event["message"] ?? event["description"] ?? ""),
-                source_short: String(event["source_short"] ?? ""),
-            }];
-        }
-        setBookmarks(next);
-        saveBookmarks(incidentId, next);
-    };
+        setBookmarks(prev => {
+            const existing = prev.find(b => b.eventHash === hash);
+            let next: Bookmark[];
+            if (existing) {
+                next = prev.filter(b => b.eventHash !== hash);
+            } else {
+                next = [...prev, {
+                    eventHash: hash,
+                    note,
+                    createdAt: new Date().toISOString(),
+                    datetime: String(event["datetime"]),
+                    host: String(event["host"] ?? event["computer"] ?? "UNKNOWN"),
+                    message: String(event["message"] ?? event["description"] ?? ""),
+                    source_short: String(event["source_short"] ?? ""),
+                }];
+            }
+            saveBookmarks(incidentId, next);
+            return next;
+        });
+    }, [incidentId, saveBookmarks]);
 
-    const setEventTag = (hash: string, tag: EventTagValue | null) => {
+    const setEventTag = useCallback((hash: string, tag: EventTagValue | null) => {
         if (!incidentId) return;
-        const next = { ...eventTags, [hash]: tag };
-        setEventTags(next);
-        saveTags(incidentId, next);
-    };
+        setEventTags(prev => {
+            const next = { ...prev, [hash]: tag };
+            saveTags(incidentId, next);
+            return next;
+        });
+    }, [incidentId, saveTags]);
 
-    const onSelectChartWindow = (from: string, to: string) => {
+    const onSelectChartWindow = useCallback((from: string, to: string) => {
         setDateFrom(from.replace(" ", "T"));
         setDateTo(to.replace(" ", "T"));
         setDateFilterActive(true);
         setPage(1);
-    };
+    }, []);
 
     // ─── Caches ──────────────────────────────────────────────────────────────
     const highlightCache = useMemo(() => {
@@ -272,10 +295,13 @@ export default function SuperTimeline() {
 
     const lmWindowSet = useMemo(() => {
         const s = new Set<Record<string, unknown>>();
+        // LM detection logic here if needed for visual cues
         return s;
     }, [lmDetections, timelineData?.data]);
 
-    const activeFilterCount = (debouncedSearch ? 1 : 0) + (dateFilterActive ? 1 : 0) + (allHostsActive ? 0 : 1) + (allSourcesActive ? 0 : 1);
+    const activeFilterCount = useMemo(() => 
+        (debouncedSearch ? 1 : 0) + (dateFilterActive ? 1 : 0) + (allHostsActive ? 0 : 1) + (allSourcesActive ? 0 : 1),
+    [debouncedSearch, dateFilterActive, allHostsActive, allSourcesActive]);
 
     return (
         <AppLayout

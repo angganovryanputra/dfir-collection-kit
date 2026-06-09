@@ -39,10 +39,14 @@ export default function AgentConsole() {
   const histIdxRef = useRef(-1);
 
   const addLine = (type: OutputLine["type"], text: string) =>
-    setLines((prev) => [
-      ...prev,
-      { ts: new Date().toLocaleTimeString("en-US", { hour12: false }), type, text },
-    ]);
+    setLines((prev) => {
+        const next = [
+          ...prev,
+          { ts: new Date().toLocaleTimeString("en-US", { hour12: false }), type, text },
+        ];
+        // Limit terminal history to 500 lines for performance
+        return next.length > 500 ? next.slice(-500) : next;
+    });
 
   const connect = () => {
     if (wsRef.current) return;

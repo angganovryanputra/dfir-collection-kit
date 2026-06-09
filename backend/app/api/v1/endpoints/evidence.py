@@ -230,15 +230,20 @@ async def create_folder_endpoint(
     return EvidenceFolderOut.model_validate(folder)
 
 
-@router.get("/items", response_model=list[EvidenceItemOut])
+@router.get("/items", response_model=EvidenceItemListOut)
 async def get_items(
     incident_id: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
-) -> list[EvidenceItemOut]:
+) -> EvidenceItemListOut:
     safe_incident_id = _validate_identifier(incident_id, "incident_id") if incident_id else None
-    items = await list_items(db, safe_incident_id)
-    return [EvidenceItemOut.model_validate(item) for item in items]
+    items, total = await list_items(db, safe_incident_id, limit=limit, offset=offset)
+    return EvidenceItemListOut(
+        items=[EvidenceItemOut.model_validate(item) for item in items],
+        total=total
+    )
 
 
 @router.post(

@@ -1,4 +1,4 @@
-from sqlalchemy import select, update
+from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.evidence import EvidenceFolder, EvidenceItem
@@ -28,12 +28,22 @@ async def create_folder(db: AsyncSession, payload: EvidenceFolderCreate) -> Evid
     return folder
 
 
-async def list_items(db: AsyncSession, incident_id: str | None = None, limit: int = 5000) -> list[EvidenceItem]:
+async def list_items(
+    db: AsyncSession, incident_id: str | None = None, limit: int = 100, offset: int = 0
+) -> tuple[list[EvidenceItem], int]:
     stmt = select(EvidenceItem)
+    count_stmt = select(func.count()).select_from(EvidenceItem)
     if incident_id:
         stmt = stmt.where(EvidenceItem.incident_id == incident_id)
-    result = await db.execute(stmt.order_by(EvidenceItem.collected_at.desc()).limit(limit))
-    return list(result.scalars().all())
+        count_stmt = count_stmt.where(EvidenceItem.incident_id == incident_id)
+    
+    total_result = await db.execute(count_stmt)
+    total = total_result.scalar_one()
+
+    result = await db.execute(
+        stmt.order_by(EvidenceItem.collected_at.desc()).limit(limit).offset(offset)
+    )
+    return list(result.scalars().all()), total
 
 
 async def get_item(db: AsyncSession, evidence_id: str) -> EvidenceItem | None:

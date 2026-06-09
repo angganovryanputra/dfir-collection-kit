@@ -40,3 +40,8 @@ class EvidenceItemOut(EvidenceItemBase):
 
     class Config:
         from_attributes = True
+
+
+class EvidenceItemListOut(BaseModel):
+    items: list[EvidenceItemOut]
+    total: int

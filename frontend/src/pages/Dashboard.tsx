@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useState, useMemo, memo, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -8,6 +8,8 @@ import { StatusIndicator } from "@/components/StatusIndicator";
 import { TablePagination } from "@/components/TablePagination";
 import { StatCard } from "@/components/common/StatCard";
 import { usePagination } from "@/hooks/usePagination";
+import { useAdaptivePolling } from "@/lib/useAdaptivePolling";
+import { useDebounce } from "@/hooks/useDebounce";
 import {
   Plus,
   Activity,
@@ -21,6 +23,7 @@ import {
 import type { Incident, Collector } from "@/types/dfir";
 import { apiGet } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
+import { cn } from "@/lib/utils";
 
 interface SystemSettingsPartial {
   ez_tools_path: string | null;
@@ -84,83 +87,138 @@ const mapCollector = (collector: CollectorResponse): Collector => ({
   lastSeen: collector.last_heartbeat,
 });
 
+// ─── Memoized Components ──────────────────────────────────────────────────
+
+const IncidentRow = memo(({ incident, onClick }: { incident: Incident; onClick: (i: Incident) => void }) => {
+    const isCollectionDone = incident.status === "COLLECTION_COMPLETE" || incident.status === "CLOSED";
+    const isCollecting = incident.status === "COLLECTION_IN_PROGRESS";
+
+    const getIndicator = (status: Incident["status"]) => {
+        switch (status) {
+          case "PENDING":                return <StatusIndicator status="pending" label="PENDING" />;
+          case "ACTIVE":                 return <StatusIndicator status="online" label="ACTIVE" />;
+          case "COLLECTION_IN_PROGRESS": return <StatusIndicator status="active" label="COLLECTING" pulse />;
+          case "COLLECTION_COMPLETE":    return <StatusIndicator status="verified" label="COMPLETE" />;
+          case "COLLECTION_FAILED":      return <StatusIndicator status="offline" label="FAILED" />;
+          case "CLOSED":                 return <StatusIndicator status="offline" label="CLOSED" />;
+          default:                       return <StatusIndicator status="pending" label={status} />;
+        }
+    };
+
+    return (
+        <div
+            className="border border-border bg-secondary/30 p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all cursor-pointer group"
+            onClick={() => onClick(incident)}
+        >
+            <div className="flex items-start justify-between gap-4">
+                <div className="space-y-2 flex-1 min-w-0">
+                    <div className="flex items-center gap-3 flex-wrap">
+                        <span className="font-mono text-sm font-bold text-foreground">{incident.id}</span>
+                        <span className="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary border border-primary/30">
+                            {incident.type.replace(/_/g, " ")}
+                        </span>
+                        {isCollectionDone && (
+                            <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 border border-green-500/30 bg-green-500/10 text-green-400 rounded-sm">
+                                <CheckCircle2 className="w-2.5 h-2.5" />
+                                ANALYSIS READY
+                            </span>
+                        )}
+                        {isCollecting && (
+                            <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 border border-primary/30 bg-primary/10 text-primary rounded-sm animate-pulse">
+                                COLLECTING…
+                            </span>
+                        )}
+                    </div>
+                    <div className="font-mono text-xs text-muted-foreground space-y-1">
+                        <div>TARGETS: {incident.targetEndpoints.slice(0, 4).join(", ")}{incident.targetEndpoints.length > 4 ? ` +${incident.targetEndpoints.length - 4}` : ""}</div>
+                        <div>OPERATOR: {incident.operator}</div>
+                    </div>
+                </div>
+                <div className="text-right space-y-2 shrink-0">
+                    {getIndicator(incident.status)}
+                    <div className="font-mono text-xs text-muted-foreground">
+                        {new Date(incident.updatedAt).toLocaleString()}
+                    </div>
+                    <ArrowUpRight className="w-4 h-4 text-primary opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
+                </div>
+            </div>
+        </div>
+    );
+});
+IncidentRow.displayName = "IncidentRow";
+
+// ─── Main Page ─────────────────────────────────────────────────────────────
+
 export default function Dashboard() {
   const navigate = useNavigate();
-  const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [collectors, setCollectors] = useState<Collector[]>([]);
-  const [evidenceFolders, setEvidenceFolders] = useState<EvidenceFolderResponse[]>([]);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [incidentSearch, setIncidentSearch] = useState("");
   const [incidentStatusFilter, setIncidentStatusFilter] = useState("");
+  const debouncedSearch = useDebounce(incidentSearch, 350);
 
-  const incidentParams = new URLSearchParams({ limit: "1000" });
-  if (incidentSearch) incidentParams.set("search", incidentSearch);
-  if (incidentStatusFilter) incidentParams.set("status", incidentStatusFilter);
+  const incidentParams = useMemo(() => {
+      const p = new URLSearchParams({ limit: "1000" });
+      if (debouncedSearch) p.set("search", debouncedSearch);
+      if (incidentStatusFilter) p.set("status", incidentStatusFilter);
+      return p.toString();
+  }, [debouncedSearch, incidentStatusFilter]);
 
-  const incidentsQuery = useQuery<{ total: number; items: IncidentResponse[] }>({
-    queryKey: ["incidents", incidentSearch, incidentStatusFilter],
-    queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>(`/incidents?${incidentParams.toString()}`),
+  const { data: incidents = [], error: incError } = useQuery({
+    queryKey: ["incidents", debouncedSearch, incidentStatusFilter],
+    queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>(`/incidents?${incidentParams}`),
+    select: (data) => data.items.map(mapIncident),
+    staleTime: 20_000,
   });
 
-  const collectorsQuery = useQuery<CollectorResponse[]>({
+  const { data: collectors = [], refetch: refetchCollectors } = useQuery<CollectorResponse[], Error, Collector[]>({
     queryKey: ["collectors"],
     queryFn: () => apiGet<CollectorResponse[]>("/collectors"),
+    select: (data) => data.map(mapCollector),
+    staleTime: 15_000,
   });
 
-  const evidenceQuery = useQuery<EvidenceFolderResponse[]>({
+  useAdaptivePolling({
+      enabled: true,
+      onPoll: async () => {
+          await refetchCollectors();
+          return "polled";
+      },
+      initialInterval: 15000,
+      maxInterval: 60000,
+  });
+
+  const { data: evidenceFolders = [] } = useQuery<EvidenceFolderResponse[]>({
     queryKey: ["evidence-folders"],
     queryFn: () => apiGet<EvidenceFolderResponse[]>("/evidence/folders"),
+    staleTime: 30_000,
   });
 
-  const diagnosticsQuery = useQuery<DiagnosticsResponse>({
+  const { data: diagnostics } = useQuery<DiagnosticsResponse>({
     queryKey: ["diagnostics"],
     queryFn: () => apiGet<DiagnosticsResponse>("/status/diagnostics"),
     enabled: getStoredRole() !== "viewer",
+    staleTime: 60_000,
   });
 
   const role = getStoredRole();
-  const settingsQuery = useQuery<SystemSettingsPartial>({
+  const { data: settings } = useQuery<SystemSettingsPartial>({
     queryKey: ["settings-tools"],
     queryFn: () => apiGet<SystemSettingsPartial>("/settings"),
     enabled: role === "admin",
     staleTime: 5 * 60 * 1000,
   });
 
-  const toolsConfigured = !settingsQuery.data
+  const toolsConfigured = !settings
     ? true // can't check → don't show warning
-    : Boolean(settingsQuery.data.ez_tools_path || settingsQuery.data.hayabusa_path);
+    : Boolean(settings.ez_tools_path || settings.hayabusa_path);
 
-  useEffect(() => {
-    const err = incidentsQuery.error ?? collectorsQuery.error ?? evidenceQuery.error;
-    if (!err) return;
-    const msg = err instanceof Error ? err.message : String(err);
+  const errorMessage = useMemo(() => {
+    if (!incError) return null;
+    const msg = incError instanceof Error ? incError.message : String(incError);
     if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("ECONNREFUSED")) {
-      setErrorMessage("Cannot reach the backend server. Check network or service status.");
-    } else {
-      setErrorMessage("Unable to load dashboard data. The server returned an error.");
+      return "Cannot reach the backend server. Check network or service status.";
     }
-  }, [incidentsQuery.error, collectorsQuery.error, evidenceQuery.error]);
-
-  useEffect(() => {
-    if (incidentsQuery.data) {
-      setIncidents(incidentsQuery.data.items.map(mapIncident));
-      setErrorMessage(null);
-    }
-  }, [incidentsQuery.data]);
-
-  useEffect(() => {
-    if (collectorsQuery.data) {
-      setCollectors(collectorsQuery.data.map(mapCollector));
-      setErrorMessage(null);
-    }
-  }, [collectorsQuery.data]);
-
-  useEffect(() => {
-    if (evidenceQuery.data) {
-      setEvidenceFolders(evidenceQuery.data);
-      setErrorMessage(null);
-    }
-  }, [evidenceQuery.data]);
+    return "Unable to load dashboard data. The server returned an error.";
+  }, [incError]);
 
 
   const {
@@ -175,60 +233,28 @@ export default function Dashboard() {
 
   const activeIncidents = incidents.filter((i) => i.status !== "CLOSED").length;
   const onlineCollectors = collectors.filter((c) => c.status !== "OFFLINE").length;
-  const statusBreakdown = {
+  
+  const statusBreakdown = useMemo(() => ({
     active: incidents.filter((i) => i.status === "ACTIVE" || i.status === "PENDING").length,
     collecting: incidents.filter((i) => i.status === "COLLECTION_IN_PROGRESS").length,
     complete: incidents.filter((i) => i.status === "COLLECTION_COMPLETE").length,
     closed: incidents.filter((i) => i.status === "CLOSED").length,
-  };
-  const hasActiveCollection = incidents.some((i) => i.status === "COLLECTION_IN_PROGRESS");
-  const totalEvidenceFiles = evidenceFolders.reduce((total, folder) => total + folder.files_count, 0);
+  }), [incidents]);
+
+  const hasActiveCollection = statusBreakdown.collecting > 0;
+  const totalEvidenceFiles = useMemo(() => evidenceFolders.reduce((total, folder) => total + folder.files_count, 0), [evidenceFolders]);
   const offlineCollectors = collectors.filter((c) => c.status === "OFFLINE").length;
-  const storageUsedPercent = diagnosticsQuery.data?.storage_used_percent ?? null;
+  const storageUsedPercent = diagnostics?.storage_used_percent ?? null;
   const hasStorageWarning = storageUsedPercent !== null && storageUsedPercent >= 75;
   const systemAlerts = offlineCollectors + (hasStorageWarning ? 1 : 0);
+  
   const offlineCollector = collectors.find((collector) => collector.status === "OFFLINE");
-  const formattedStoragePercent = storageUsedPercent !== null
-    ? `${Math.round(storageUsedPercent)}%`
-    : "--";
-  const offlineCollectorLastSeen = offlineCollector
-    ? new Date(offlineCollector.lastSeen).toLocaleString()
-    : "";
+  const formattedStoragePercent = storageUsedPercent !== null ? `${Math.round(storageUsedPercent)}%` : "--";
+  const offlineCollectorLastSeen = offlineCollector ? new Date(offlineCollector.lastSeen).toLocaleString() : "";
 
-  const getIncidentStatusIndicator = (status: Incident["status"]) => {
-    switch (status) {
-      case "PENDING":
-        return <StatusIndicator status="pending" label="PENDING" />;
-      case "ACTIVE":
-        return <StatusIndicator status="online" label="ACTIVE" />;
-      case "COLLECTION_IN_PROGRESS":
-        return <StatusIndicator status="active" label="COLLECTING" pulse />;
-      case "COLLECTION_COMPLETE":
-        return <StatusIndicator status="verified" label="COMPLETE" />;
-      case "COLLECTION_FAILED":
-        return <StatusIndicator status="offline" label="FAILED" />;
-      case "CLOSED":
-        return <StatusIndicator status="offline" label="CLOSED" />;
-      default:
-        return <StatusIndicator status="pending" label={status} />;
-    }
-  };
-
-  const getCollectorStatus = (status: Collector["status"]) => {
-    switch (status) {
-      case "ONLINE":
-        return <StatusIndicator status="online" size="sm" />;
-      case "BUSY":
-        return <StatusIndicator status="pending" label="BUSY" size="sm" />;
-      default:
-        return <StatusIndicator status="offline" size="sm" />;
-    }
-  };
-
-  // All incidents route to the IncidentHub — the hub decides the right state view.
-  const handleIncidentClick = (incident: Incident) => {
+  const handleIncidentClick = useCallback((incident: Incident) => {
     navigate(`/incidents/${incident.id}`);
-  };
+  }, [navigate]);
 
   return (
     <AppLayout
@@ -309,11 +335,10 @@ export default function Dashboard() {
               status="active"
               headerActions={
                 <span className="font-mono text-xs text-primary">
-                  {activeIncidents} ACTIVE · {incidentsQuery.data?.total ?? incidents.length} TOTAL
+                  {activeIncidents} ACTIVE · {totalItems} TOTAL
                 </span>
               }
             >
-              {/* Search + filter bar */}
               <div className="flex items-center gap-2 mb-3">
                 <input
                   className="flex-1 h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary"
@@ -341,54 +366,13 @@ export default function Dashboard() {
                     No incidents available.
                   </div>
                 ) : (
-                  paginatedIncidents.map((incident) => {
-                    const isCollectionDone =
-                      incident.status === "COLLECTION_COMPLETE" || incident.status === "CLOSED";
-                    const isCollecting = incident.status === "COLLECTION_IN_PROGRESS";
-                    return (
-                      <div
-                        key={incident.id}
-                        className="border border-border bg-secondary/30 p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all cursor-pointer group"
-                        onClick={() => handleIncidentClick(incident)}
-                      >
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="space-y-2 flex-1 min-w-0">
-                            <div className="flex items-center gap-3 flex-wrap">
-                              <span className="font-mono text-sm font-bold text-foreground">
-                                {incident.id}
-                              </span>
-                              <span className="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary border border-primary/30">
-                                {incident.type.replace(/_/g, " ")}
-                              </span>
-                              {/* Status badge for collection-complete incidents */}
-                              {isCollectionDone && (
-                                <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 border border-green-500/30 bg-green-500/10 text-green-400 rounded-sm">
-                                  <CheckCircle2 className="w-2.5 h-2.5" />
-                                  ANALYSIS READY
-                                </span>
-                              )}
-                              {isCollecting && (
-                                <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 border border-primary/30 bg-primary/10 text-primary rounded-sm animate-pulse">
-                                  COLLECTING…
-                                </span>
-                              )}
-                            </div>
-                            <div className="font-mono text-xs text-muted-foreground space-y-1">
-                              <div>TARGETS: {incident.targetEndpoints.slice(0, 4).join(", ")}{incident.targetEndpoints.length > 4 ? ` +${incident.targetEndpoints.length - 4}` : ""}</div>
-                              <div>OPERATOR: {incident.operator}</div>
-                            </div>
-                          </div>
-                          <div className="text-right space-y-2 shrink-0">
-                            {getIncidentStatusIndicator(incident.status)}
-                            <div className="font-mono text-xs text-muted-foreground">
-                              {new Date(incident.updatedAt).toLocaleString()}
-                            </div>
-                            <ArrowUpRight className="w-4 h-4 text-primary opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })
+                  paginatedIncidents.map((incident) => (
+                      <IncidentRow 
+                        key={incident.id} 
+                        incident={incident} 
+                        onClick={handleIncidentClick} 
+                      />
+                  ))
                 )}
               </div>
               <TablePagination
@@ -410,18 +394,28 @@ export default function Dashboard() {
               status={onlineCollectors === collectors.length ? "online" : "warning"}
             >
               <div className="space-y-3">
-                {collectors.map((collector) => (
+                {collectors.slice(0, 10).map((collector) => (
                   <div
                     key={collector.id}
                     className="flex items-center justify-between py-2 border-b border-border last:border-0"
                   >
-                    <div className="flex items-center gap-3">
-                      <HardDrive className="w-4 h-4 text-muted-foreground" />
-                      <span className="font-mono text-sm">{collector.name}</span>
+                    <div className="flex items-center gap-3 min-w-0">
+                      <HardDrive className="w-4 h-4 text-muted-foreground shrink-0" />
+                      <span className="font-mono text-sm truncate">{collector.name}</span>
                     </div>
-                    {getCollectorStatus(collector.status)}
+                    <StatusIndicator 
+                        status={collector.status === "ONLINE" ? "online" : collector.status === "BUSY" ? "pending" : "offline"} 
+                        size="sm" 
+                    />
                   </div>
                 ))}
+                {collectors.length > 10 && (
+                    <div className="text-center pt-2">
+                        <Button variant="link" size="sm" onClick={() => navigate("/collectors")} className="text-[10px] h-auto p-0">
+                            VIEW ALL {collectors.length} COLLECTORS →
+                        </Button>
+                    </div>
+                )}
               </div>
             </TacticalPanel>
 

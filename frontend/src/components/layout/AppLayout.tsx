@@ -1,32 +1,30 @@
-import React, { useEffect, useState } from "react";
+import { ReactNode, useState, useEffect, useMemo, memo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { AppLayout } from "@/components/layout/AppLayout";
-import { Button } from "@/components/ui/button";
-import { TacticalPanel } from "@/components/TacticalPanel";
-import { StatusIndicator } from "@/components/StatusIndicator";
-import { TablePagination } from "@/components/TablePagination";
-import { StatCard } from "@/components/common/StatCard";
-import { usePagination } from "@/hooks/usePagination";
+import { AppSidebar } from "@/components/layout/AppSidebar";
+import { WarningBanner } from "@/components/WarningBanner";
+import { EvidenceProvider } from "@/context/EvidenceContext";
+import { EvidenceWorkspace } from "@/components/EvidenceWorkspace";
 import {
-  Plus,
-  Activity,
-  HardDrive,
-  AlertTriangle,
-  ArrowUpRight,
-  CheckCircle2,
-  ShieldAlert,
-  Database
+    CommandDialog,
+    CommandInput,
+    CommandList,
+    CommandEmpty,
+    CommandGroup,
+    CommandItem,
+    CommandSeparator
+} from "@/components/ui/command";
+import {
+    Activity,
+    FolderOpen,
+    Server,
+    Target,
+    Terminal,
+    HeartPulse,
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
 import { apiGet } from "@/lib/api";
-import { getStoredRole } from "@/lib/auth";
-
-interface SystemSettingsPartial {
-  ez_tools_path: string | null;
-  hayabusa_path: string | null;
-  chainsaw_path: string | null;
-}
+import { cn } from "@/lib/utils";
 
 interface IncidentResponse {
   id: string;
@@ -44,18 +42,6 @@ interface CollectorResponse {
   name: string;
   status: string;
   last_heartbeat: string;
-}
-
-interface EvidenceFolderResponse {
-  id: string;
-  incident_id: string;
-  files_count: number;
-  total_size: string;
-  status: string;
-}
-
-interface DiagnosticsResponse {
-  storage_used_percent: number | null;
 }
 
 const normalizeCollectorStatus = (status: string): Collector["status"] => {
@@ -84,385 +70,268 @@ const mapCollector = (collector: CollectorResponse): Collector => ({
   lastSeen: collector.last_heartbeat,
 });
 
-export default function Dashboard() {
+export interface AppLayoutProps {
+  children: ReactNode;
+  title: string;
+  subtitle?: string;
+  showWarning?: boolean;
+  warningMessage?: string;
+  warningVariant?: "warning" | "critical";
+  headerActions?: ReactNode;
+}
+
+// ─── Isolated clock components — only these re-render every second, not the page
+
+const LiveClock = memo(() => {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <span className="font-mono text-[10px] text-muted-foreground tabular-nums border-l border-border pl-4">
+      {now.toISOString()}
+    </span>
+  );
+});
+LiveClock.displayName = "LiveClock";
+
+const FooterClock = memo(() => {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return <span className="tabular-nums">{now.toLocaleTimeString()}</span>;
+});
+FooterClock.displayName = "FooterClock";
+
+// ─── Static decorative heartbeat bar
+
+const SystemHeartbeat = memo(() => (
+  <div className="flex items-center gap-2 px-3 py-1 border border-primary/20 bg-primary/5 rounded-sm">
+    <HeartPulse className="w-3 h-3 text-primary animate-pulse" />
+    <div className="flex gap-0.5 items-end h-3 w-12">
+      {[40, 70, 45, 90, 30, 60, 50, 80].map((h, i) => (
+        <div key={i} className="w-1 bg-primary/40 rounded-t-[1px]" style={{ height: `${h}%` }} />
+      ))}
+    </div>
+    <span className="font-mono text-[9px] text-primary font-bold tracking-tighter">SYS.HEALTH</span>
+  </div>
+));
+SystemHeartbeat.displayName = "SystemHeartbeat";
+
+// ─── Main layout ──────────────────────────────────────────────────────────────
+
+export function AppLayout({
+  children,
+  title,
+  subtitle,
+  showWarning,
+  warningMessage,
+  warningVariant = "warning",
+  headerActions,
+}: AppLayoutProps) {
   const navigate = useNavigate();
-  const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [collectors, setCollectors] = useState<Collector[]>([]);
-  const [evidenceFolders, setEvidenceFolders] = useState<EvidenceFolderResponse[]>([]);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [incidentSearch, setIncidentSearch] = useState("");
-  const [incidentStatusFilter, setIncidentStatusFilter] = useState("");
+  const [open, setOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [currentUser, setCurrentUser] = useState<{ username: string; role: string } | null>(null);
 
-  const incidentParams = new URLSearchParams({ limit: "1000" });
-  if (incidentSearch) incidentParams.set("search", incidentSearch);
-  if (incidentStatusFilter) incidentParams.set("status", incidentStatusFilter);
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setOpen((prev) => !prev);
+      }
+    };
+    document.addEventListener("keydown", down);
+    return () => document.removeEventListener("keydown", down);
+  }, []);
 
-  const incidentsQuery = useQuery<{ total: number; items: IncidentResponse[] }>({
-    queryKey: ["incidents", incidentSearch, incidentStatusFilter],
-    queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>(`/incidents?${incidentParams.toString()}`),
+  // Shared queries — React Query caches these. If Dashboard already fetched them
+  // with the same query key, no extra network request is made.
+  const { data: incidentsRaw = [] } = useQuery({
+    queryKey: ["incidents"],
+    queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>("/incidents?limit=1000"),
+    select: (d) => d.items,
+    staleTime: 30_000,
   });
 
-  const collectorsQuery = useQuery<CollectorResponse[]>({
+  const { data: collectorsRaw = [] } = useQuery({
     queryKey: ["collectors"],
     queryFn: () => apiGet<CollectorResponse[]>("/collectors"),
+    staleTime: 15_000,
   });
 
-  const evidenceQuery = useQuery<EvidenceFolderResponse[]>({
-    queryKey: ["evidence-folders"],
-    queryFn: () => apiGet<EvidenceFolderResponse[]>("/evidence/folders"),
-  });
-
-  const diagnosticsQuery = useQuery<DiagnosticsResponse>({
-    queryKey: ["diagnostics"],
-    queryFn: () => apiGet<DiagnosticsResponse>("/status/diagnostics"),
-    enabled: getStoredRole() !== "viewer",
-  });
-
-  const role = getStoredRole();
-  const settingsQuery = useQuery<SystemSettingsPartial>({
-    queryKey: ["settings-tools"],
-    queryFn: () => apiGet<SystemSettingsPartial>("/settings"),
-    enabled: role === "admin",
-    staleTime: 5 * 60 * 1000,
-  });
-
-  const toolsConfigured = !settingsQuery.data
-    ? true // can't check → don't show warning
-    : Boolean(settingsQuery.data.ez_tools_path || settingsQuery.data.hayabusa_path);
+  const incidents = useMemo(() => incidentsRaw.map(mapIncident), [incidentsRaw]);
+  const collectors = useMemo(() => collectorsRaw.map(mapCollector), [collectorsRaw]);
 
   useEffect(() => {
-    const err = incidentsQuery.error ?? collectorsQuery.error ?? evidenceQuery.error;
-    if (!err) return;
-    const msg = err instanceof Error ? err.message : String(err);
-    if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("ECONNREFUSED")) {
-      setErrorMessage("Cannot reach the backend server. Check network or service status.");
-    } else {
-      setErrorMessage("Unable to load dashboard data. The server returned an error.");
+    const raw = localStorage.getItem("dfir_auth");
+    if (raw) {
+      try {
+        const parsed = JSON.parse(raw) as { username?: string; role?: string };
+        if (parsed.username && parsed.role) {
+          setCurrentUser({ username: parsed.username, role: parsed.role });
+        }
+      } catch { /* ignore */ }
     }
-  }, [incidentsQuery.error, collectorsQuery.error, evidenceQuery.error]);
+    apiGet<{ username: string; role: string }>("/users/me")
+      .then((data) => setCurrentUser({ username: data.username, role: data.role }))
+      .catch(() => { /* ignore */ });
+  }, []);
 
-  useEffect(() => {
-    if (incidentsQuery.data) {
-      setIncidents(incidentsQuery.data.items.map(mapIncident));
-      setErrorMessage(null);
-    }
-  }, [incidentsQuery.data]);
+  const activeIncidents = useMemo(
+    () => incidents.filter((i) => i.status !== "CLOSED").length,
+    [incidents]
+  );
+  const onlineCollectors = useMemo(
+    () => collectors.filter((c) => c.status !== "OFFLINE").length,
+    [collectors]
+  );
+  const hasActiveCollection = useMemo(
+    () => incidents.some((i) => i.status === "COLLECTION_IN_PROGRESS"),
+    [incidents]
+  );
 
-  useEffect(() => {
-    if (collectorsQuery.data) {
-      setCollectors(collectorsQuery.data.map(mapCollector));
-      setErrorMessage(null);
-    }
-  }, [collectorsQuery.data]);
+  // Memoized so it only recomputes when incidents change, not every clock tick
+  const tickerText = useMemo(
+    () =>
+      incidents.slice(0, 3).map((i) => `[INCIDENT ${i.id} - ${i.type}]`).join("  •  ") +
+      "  •  COLLECTOR HEARTBEAT: STABLE  •  STORAGE INTEGRITY: 100%  •  ENCRYPTION: AES-256-GCM ACTIVE",
+    [incidents]
+  );
 
-  useEffect(() => {
-    if (evidenceQuery.data) {
-      setEvidenceFolders(evidenceQuery.data);
-      setErrorMessage(null);
-    }
-  }, [evidenceQuery.data]);
-
-
-  const {
-    paginatedItems: paginatedIncidents,
-    currentPage,
-    totalPages,
-    totalItems,
-    itemsPerPage,
-    goToPage,
-    setPerPage,
-  } = usePagination(incidents);
-
-  const activeIncidents = incidents.filter((i) => i.status !== "CLOSED").length;
-  const onlineCollectors = collectors.filter((c) => c.status !== "OFFLINE").length;
-  const statusBreakdown = {
-    active: incidents.filter((i) => i.status === "ACTIVE" || i.status === "PENDING").length,
-    collecting: incidents.filter((i) => i.status === "COLLECTION_IN_PROGRESS").length,
-    complete: incidents.filter((i) => i.status === "COLLECTION_COMPLETE").length,
-    closed: incidents.filter((i) => i.status === "CLOSED").length,
-  };
-  const hasActiveCollection = incidents.some((i) => i.status === "COLLECTION_IN_PROGRESS");
-  const totalEvidenceFiles = evidenceFolders.reduce((total, folder) => total + folder.files_count, 0);
-  const offlineCollectors = collectors.filter((c) => c.status === "OFFLINE").length;
-  const storageUsedPercent = diagnosticsQuery.data?.storage_used_percent ?? null;
-  const hasStorageWarning = storageUsedPercent !== null && storageUsedPercent >= 75;
-  const systemAlerts = offlineCollectors + (hasStorageWarning ? 1 : 0);
-  const offlineCollector = collectors.find((collector) => collector.status === "OFFLINE");
-  const formattedStoragePercent = storageUsedPercent !== null
-    ? `${Math.round(storageUsedPercent)}%`
-    : "--";
-  const offlineCollectorLastSeen = offlineCollector
-    ? new Date(offlineCollector.lastSeen).toLocaleString()
-    : "";
-
-  const getIncidentStatusIndicator = (status: Incident["status"]) => {
-    switch (status) {
-      case "PENDING":
-        return <StatusIndicator status="pending" label="PENDING" />;
-      case "ACTIVE":
-        return <StatusIndicator status="online" label="ACTIVE" />;
-      case "COLLECTION_IN_PROGRESS":
-        return <StatusIndicator status="active" label="COLLECTING" pulse />;
-      case "COLLECTION_COMPLETE":
-        return <StatusIndicator status="verified" label="COMPLETE" />;
-      case "COLLECTION_FAILED":
-        return <StatusIndicator status="offline" label="FAILED" />;
-      case "CLOSED":
-        return <StatusIndicator status="offline" label="CLOSED" />;
-      default:
-        return <StatusIndicator status="pending" label={status} />;
-    }
-  };
-
-  const getCollectorStatus = (status: Collector["status"]) => {
-    switch (status) {
-      case "ONLINE":
-        return <StatusIndicator status="online" size="sm" />;
-      case "BUSY":
-        return <StatusIndicator status="pending" label="BUSY" size="sm" />;
-      default:
-        return <StatusIndicator status="offline" size="sm" />;
-    }
-  };
-
-  // All incidents route to the IncidentHub — the hub decides the right state view.
-  const handleIncidentClick = (incident: Incident) => {
-    navigate(`/incidents/${incident.id}`);
+  const runCommand = (command: () => void) => {
+    setOpen(false);
+    command();
   };
 
   return (
-    <AppLayout
-      title="COMMAND CENTER"
-      subtitle="DFIR RAPID COLLECTION KIT"
-      showWarning={hasActiveCollection}
-      headerActions={
-        <Button variant="tactical" onClick={() => navigate("/incidents/create")}>
-          <Plus className="w-4 h-4 mr-2" />
-          CREATE INCIDENT
-        </Button>
-      }
-    >
-      <div className="p-6 space-y-6">
-        {/* Alerts Section */}
-        {(!toolsConfigured || errorMessage) && (
-            <div className="space-y-2">
-                {!toolsConfigured && (
-                  <div className="border border-warning/40 bg-warning/5 p-3 font-mono text-xs text-warning flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                        <ShieldAlert className="w-4 h-4" />
-                        <span>
-                          CRITICAL: FORENSICS TOOLS NOT CONFIGURED — Analysis capabilities (Hayabusa/Chainsaw) are currently offline.
-                        </span>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0 text-warning border border-warning/40 hover:bg-warning/10 h-7"
-                      onClick={() => navigate("/admin/settings")}
-                    >
-                      RESOLVE
-                    </Button>
-                  </div>
-                )}
-                {errorMessage && (
-                  <div className="border border-destructive/40 bg-destructive/5 p-3 font-mono text-xs text-destructive flex items-center gap-3">
-                    <AlertTriangle className="w-4 h-4" />
-                    <span>{errorMessage}</span>
-                  </div>
-                )}
-            </div>
-        )}
-
-        {/* Stats HUD */}
-        <div className="grid grid-cols-4 gap-4">
-          <StatCard
-            icon={<Activity className="w-5 h-5 text-primary" />}
-            value={activeIncidents}
-            valueClassName="text-primary"
-            label="Active Incidents"
-          />
-          <StatCard
-            icon={<HardDrive className="w-5 h-5 text-primary" />}
-            value={`${onlineCollectors}/${collectors.length}`}
-            valueClassName="text-primary"
-            label="Collectors Online"
-          />
-          <StatCard
-            icon={<Database className="w-5 h-5 text-primary" />}
-            value={String(totalEvidenceFiles)}
-            valueClassName="text-primary"
-            label="Evidence Items"
-          />
-          <StatCard
-            icon={<AlertTriangle className={cn("w-5 h-5", systemAlerts > 0 ? "text-warning" : "text-muted-foreground")} />}
-            value={String(systemAlerts)}
-            valueClassName={systemAlerts > 0 ? "text-warning" : "text-muted-foreground"}
-            label="System Alerts"
-          />
-        </div>
-
-        <div className="grid grid-cols-12 gap-6">
-          {/* Main Content - Incidents */}
-          <div className="col-span-8 space-y-6">
-            <TacticalPanel
-              title="ACTIVE INCIDENTS"
-              status="active"
-              headerActions={
-                <span className="font-mono text-xs text-primary">
-                  {activeIncidents} ACTIVE · {incidentsQuery.data?.total ?? incidents.length} TOTAL
-                </span>
-              }
-            >
-              {/* Search + filter bar */}
-              <div className="flex items-center gap-2 mb-3">
-                <input
-                  className="flex-1 h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-                  placeholder="Search incident ID or operator..."
-                  value={incidentSearch}
-                  onChange={e => setIncidentSearch(e.target.value)}
-                />
-                <select
-                  className="h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none"
-                  value={incidentStatusFilter}
-                  onChange={e => setIncidentStatusFilter(e.target.value)}
-                >
-                  <option value="">ALL STATUS</option>
-                  <option value="PENDING">PENDING</option>
-                  <option value="ACTIVE">ACTIVE</option>
-                  <option value="COLLECTION_IN_PROGRESS">COLLECTING</option>
-                  <option value="COLLECTION_COMPLETE">COMPLETE</option>
-                  <option value="COLLECTION_FAILED">FAILED</option>
-                  <option value="CLOSED">CLOSED</option>
-                </select>
-              </div>
-              <div className="space-y-3">
-                {paginatedIncidents.length === 0 ? (
-                  <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">
-                    No incidents available.
-                  </div>
-                ) : (
-                  paginatedIncidents.map((incident) => {
-                    const isCollectionDone =
-                      incident.status === "COLLECTION_COMPLETE" || incident.status === "CLOSED";
-                    const isCollecting = incident.status === "COLLECTION_IN_PROGRESS";
-                    return (
-                      <div
-                        key={incident.id}
-                        className="border border-border bg-secondary/30 p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all cursor-pointer group"
-                        onClick={() => handleIncidentClick(incident)}
-                      >
-                        <div className="flex items-start justify-between gap-4">
-                          <div className="space-y-2 flex-1 min-w-0">
-                            <div className="flex items-center gap-3 flex-wrap">
-                              <span className="font-mono text-sm font-bold text-foreground">
-                                {incident.id}
-                              </span>
-                              <span className="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary border border-primary/30">
-                                {incident.type.replace(/_/g, " ")}
-                              </span>
-                              {/* Status badge for collection-complete incidents */}
-                              {isCollectionDone && (
-                                <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 border border-green-500/30 bg-green-500/10 text-green-400 rounded-sm">
-                                  <CheckCircle2 className="w-2.5 h-2.5" />
-                                  ANALYSIS READY
-                                </span>
-                              )}
-                              {isCollecting && (
-                                <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 border border-primary/30 bg-primary/10 text-primary rounded-sm animate-pulse">
-                                  COLLECTING…
-                                </span>
-                              )}
-                            </div>
-                            <div className="font-mono text-xs text-muted-foreground space-y-1">
-                              <div>TARGETS: {incident.targetEndpoints.slice(0, 4).join(", ")}{incident.targetEndpoints.length > 4 ? ` +${incident.targetEndpoints.length - 4}` : ""}</div>
-                              <div>OPERATOR: {incident.operator}</div>
-                            </div>
-                          </div>
-                          <div className="text-right space-y-2 shrink-0">
-                            {getIncidentStatusIndicator(incident.status)}
-                            <div className="font-mono text-xs text-muted-foreground">
-                              {new Date(incident.updatedAt).toLocaleString()}
-                            </div>
-                            <ArrowUpRight className="w-4 h-4 text-primary opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-              <TablePagination
-                currentPage={currentPage}
-                totalPages={totalPages}
-                totalItems={totalItems}
-                itemsPerPage={itemsPerPage}
-                onPageChange={goToPage}
-                onItemsPerPageChange={setPerPage}
-              />
-            </TacticalPanel>
-          </div>
-
-          {/* Sidebar - System Status */}
-          <div className="col-span-4 space-y-6">
-            {/* Collectors Status */}
-            <TacticalPanel
-              title="COLLECTOR STATUS"
-              status={onlineCollectors === collectors.length ? "online" : "warning"}
-            >
-              <div className="space-y-3">
-                {collectors.map((collector) => (
-                  <div
-                    key={collector.id}
-                    className="flex items-center justify-between py-2 border-b border-border last:border-0"
+    <EvidenceProvider>
+      <div className="min-h-screen bg-background flex relative">
+        {/* Global Command Palette */}
+        <CommandDialog open={open} onOpenChange={setOpen}>
+          <CommandInput placeholder="Type a command or search..." />
+          <CommandList className="font-mono">
+            <CommandEmpty>No results found.</CommandEmpty>
+            <CommandGroup heading="Investigations">
+              <CommandItem onSelect={() => runCommand(() => navigate("/dashboard"))}>
+                <Activity className="mr-2 h-4 w-4" />
+                <span>Incident Dashboard</span>
+              </CommandItem>
+              <CommandItem onSelect={() => runCommand(() => navigate("/evidence"))}>
+                <FolderOpen className="mr-2 h-4 w-4" />
+                <span>Evidence Vault</span>
+              </CommandItem>
+            </CommandGroup>
+            <CommandSeparator />
+            <CommandGroup heading="Active Incidents">
+              {incidents
+                .filter((i) => i.status !== "CLOSED")
+                .slice(0, 5)
+                .map((incident) => (
+                  <CommandItem
+                    key={incident.id}
+                    onSelect={() => runCommand(() => navigate(`/incidents/${incident.id}`))}
                   >
-                    <div className="flex items-center gap-3">
-                      <HardDrive className="w-4 h-4 text-muted-foreground" />
-                      <span className="font-mono text-sm">{collector.name}</span>
-                    </div>
-                    {getCollectorStatus(collector.status)}
-                  </div>
+                    <Target className="mr-2 h-4 w-4 text-orange-400" />
+                    <span>{incident.id}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground uppercase">{incident.type}</span>
+                  </CommandItem>
                 ))}
-              </div>
-            </TacticalPanel>
+            </CommandGroup>
+            <CommandSeparator />
+            <CommandGroup heading="Active Collectors">
+              {collectors
+                .filter((c) => c.status !== "OFFLINE")
+                .slice(0, 5)
+                .map((collector) => (
+                  <CommandItem
+                    key={collector.id}
+                    onSelect={() => runCommand(() => navigate(`/agents/${collector.id}/console`))}
+                  >
+                    <Server className="mr-2 h-4 w-4 text-green-400" />
+                    <span>{collector.name}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground uppercase">{collector.status}</span>
+                  </CommandItem>
+                ))}
+            </CommandGroup>
+          </CommandList>
+        </CommandDialog>
 
-            {/* System Alerts */}
-            <TacticalPanel title="SYSTEM ALERTS" status={systemAlerts > 0 ? "warning" : "online"}>
-              <div className="space-y-3">
-                {systemAlerts === 0 ? (
-                  <div className="p-3 text-center font-mono text-xs text-muted-foreground">
-                    No active alerts.
-                  </div>
-                ) : (
-                  <>
-                    {hasStorageWarning && (
-                      <div className="flex items-start gap-3 p-3 bg-warning/5 border border-warning/20">
-                        <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
-                        <div className="font-mono text-xs space-y-1">
-                          <div className="text-warning font-bold">STORAGE WARNING</div>
-                          <div className="text-muted-foreground">
-                            Evidence vault at {formattedStoragePercent} capacity
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                    {offlineCollector && (
-                      <div className="flex items-start gap-3 p-3 bg-destructive/5 border border-destructive/20">
-                        <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
-                        <div className="font-mono text-xs space-y-1">
-                          <div className="text-destructive font-bold">COLLECTOR OFFLINE</div>
-                          <div className="text-muted-foreground">
-                            {offlineCollector.name} last seen {offlineCollectorLastSeen}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
+        <AppSidebar
+          activeIncidents={activeIncidents}
+          onlineCollectors={onlineCollectors}
+          totalCollectors={collectors.length}
+          isCollapsed={isSidebarCollapsed}
+          onCollapsedChange={setIsSidebarCollapsed}
+        />
+
+        <EvidenceWorkspace />
+
+        <div
+          className={cn(
+            "flex-1 flex flex-col min-h-screen overflow-hidden transition-[padding] duration-300",
+            isSidebarCollapsed ? "pl-16" : "pl-64"
+          )}
+        >
+          <header className="border-b border-border bg-card/80 backdrop-blur-md px-6 py-4 z-30">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-6">
+                <div>
+                  <h1 className="font-mono text-lg font-bold tracking-wider text-foreground flex items-center gap-2">
+                    <span className="text-primary/40 text-xs">//</span> {title}
+                  </h1>
+                  {subtitle && (
+                    <p className="font-mono text-[10px] text-muted-foreground mt-0.5 uppercase tracking-tighter">
+                      {subtitle}
+                    </p>
+                  )}
+                </div>
+                <SystemHeartbeat />
               </div>
-            </TacticalPanel>
-          </div>
+              <div className="flex items-center gap-4">
+                <div className="hidden lg:flex items-center gap-1.5 px-2 py-1 border border-border bg-secondary/50 rounded-sm text-[10px] text-muted-foreground font-mono">
+                  <Terminal className="w-3 h-3" />
+                  <span>PRESS</span>
+                  <kbd className="px-1.5 py-0.5 bg-background border border-border rounded text-foreground font-bold text-[9px]">⌘K</kbd>
+                  <span>TO NAVIGATE</span>
+                </div>
+                {headerActions}
+                <LiveClock />
+              </div>
+            </div>
+          </header>
+
+          {(showWarning || hasActiveCollection) && (
+            <WarningBanner variant={warningVariant}>
+              {warningMessage || "COLLECTION IN PROGRESS — DO NOT INTERRUPT TARGET SYSTEMS"}
+            </WarningBanner>
+          )}
+
+          <main className="flex-1 overflow-auto tactical-grid relative z-10">
+            {children}
+          </main>
+
+          <footer className="border-t border-border bg-card px-6 py-1.5 flex items-center justify-between font-mono text-[10px] text-muted-foreground relative z-20">
+            <div className="flex items-center gap-6 flex-1 overflow-hidden">
+              <span className="flex items-center gap-2 whitespace-nowrap">
+                <span className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse shadow-[0_0_8px_hsl(var(--primary))]" />
+                OP.STATUS: ACTIVE
+              </span>
+              <div className="flex-1 overflow-hidden border-x border-border/40 px-4">
+                <span className="whitespace-nowrap inline-block text-primary/60">{tickerText}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-4 border-l border-border pl-4">
+              <span>OPERATOR: <span className="text-foreground font-bold">{currentUser?.username ?? "UNKNOWN"}</span></span>
+              <span>ROLE: <span className="text-primary font-bold">{currentUser?.role?.toUpperCase() ?? "UNKNOWN"}</span></span>
+              <FooterClock />
+            </div>
+          </footer>
         </div>
       </div>
-    </AppLayout>
+    </EvidenceProvider>
   );
 }

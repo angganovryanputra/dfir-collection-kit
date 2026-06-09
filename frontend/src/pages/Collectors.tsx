@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState, useMemo, memo, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -16,6 +16,7 @@ import {
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+import { useAdaptivePolling } from "@/lib/useAdaptivePolling";
 
 interface CollectorOut {
   id: string;
@@ -24,6 +25,59 @@ interface CollectorOut {
   status: string;
   last_heartbeat: string | null;
 }
+
+// ─── Memoized Components ──────────────────────────────────────────────────
+
+const CollectorRow = memo(({ 
+    collector, 
+    isAdmin, 
+    onDelete 
+}: { 
+    collector: CollectorOut; 
+    isAdmin: boolean; 
+    onDelete: (id: string) => Promise<void>; 
+}) => {
+  const fmtHeartbeat = (ts: string | null) => {
+    if (!ts) return "—";
+    return new Date(ts).toLocaleString();
+  };
+
+  const upperStatus = collector.status.toUpperCase();
+  const statusType = upperStatus === "ONLINE" ? "online" : upperStatus === "BUSY" ? "pending" : "offline";
+
+  return (
+    <div
+      className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors items-center"
+    >
+      <div className="col-span-3 flex items-center gap-2">
+        <Server className="w-4 h-4 text-muted-foreground shrink-0" />
+        <span className="font-mono text-sm font-bold truncate">{collector.name}</span>
+      </div>
+      <div className="col-span-4 font-mono text-xs text-muted-foreground truncate">{collector.endpoint}</div>
+      <div className="col-span-2">
+        <StatusIndicator status={statusType as any} label={upperStatus} size="sm" />
+      </div>
+      <div className="col-span-2 font-mono text-xs text-muted-foreground">
+        {fmtHeartbeat(collector.last_heartbeat)}
+      </div>
+      <div className="col-span-1 flex justify-end">
+        {isAdmin && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => void onDelete(collector.id)}
+            title="Remove collector"
+          >
+            <Trash2 className="w-3 h-3 text-destructive" />
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+});
+CollectorRow.displayName = "CollectorRow";
+
+// ─── Main Page ─────────────────────────────────────────────────────────────
 
 export default function Collectors() {
   const queryClient = useQueryClient();
@@ -39,12 +93,23 @@ export default function Collectors() {
   const { data: collectors = [], isLoading, refetch, isRefetching } = useQuery<CollectorOut[]>({
     queryKey: ["collectors-page"],
     queryFn: () => apiGet<CollectorOut[]>("/collectors"),
-    refetchInterval: 15000,
-    refetchIntervalInBackground: false,
     staleTime: 10_000,
   });
 
-  const onlineCount = collectors.filter((c) => c.status.toUpperCase() === "ONLINE").length;
+  useAdaptivePolling({
+      enabled: true,
+      onPoll: async () => {
+          await refetch();
+          return "polled";
+      },
+      initialInterval: 15000,
+      maxInterval: 60000,
+  });
+
+  const onlineCount = useMemo(() => 
+    collectors.filter((c) => c.status.toUpperCase() === "ONLINE").length,
+    [collectors]
+  );
 
   const handleAdd = async () => {
     if (!newName.trim() || !newEndpoint.trim()) {
@@ -66,26 +131,14 @@ export default function Collectors() {
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = useCallback(async (id: string) => {
     try {
       await apiDelete(`/collectors/${id}`);
       await queryClient.invalidateQueries({ queryKey: ["collectors-page"] });
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : "Failed to delete collector.");
     }
-  };
-
-  const fmtHeartbeat = (ts: string | null) => {
-    if (!ts) return "—";
-    return new Date(ts).toLocaleString();
-  };
-
-  const statusChip = (status: string) => {
-    const upper = status.toUpperCase();
-    if (upper === "ONLINE") return <StatusIndicator status="online" label="ONLINE" size="sm" />;
-    if (upper === "BUSY")   return <StatusIndicator status="pending" label="BUSY" size="sm" />;
-    return <StatusIndicator status="offline" label="OFFLINE" size="sm" />;
-  };
+  }, [queryClient]);
 
   return (
     <AppLayout
@@ -212,32 +265,12 @@ export default function Collectors() {
                 <div className="col-span-1" />
               </div>
               {collectors.map((c) => (
-                <div
-                  key={c.id}
-                  className="grid grid-cols-12 gap-4 px-4 py-3 border-b border-border/50 hover:bg-secondary/30 transition-colors items-center"
-                >
-                  <div className="col-span-3 flex items-center gap-2">
-                    <Server className="w-4 h-4 text-muted-foreground shrink-0" />
-                    <span className="font-mono text-sm font-bold truncate">{c.name}</span>
-                  </div>
-                  <div className="col-span-4 font-mono text-xs text-muted-foreground truncate">{c.endpoint}</div>
-                  <div className="col-span-2">{statusChip(c.status)}</div>
-                  <div className="col-span-2 font-mono text-xs text-muted-foreground">
-                    {fmtHeartbeat(c.last_heartbeat)}
-                  </div>
-                  <div className="col-span-1 flex justify-end">
-                    {isAdmin && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => void handleDelete(c.id)}
-                        title="Remove collector"
-                      >
-                        <Trash2 className="w-3 h-3 text-destructive" />
-                      </Button>
-                    )}
-                  </div>
-                </div>
+                <CollectorRow 
+                    key={c.id} 
+                    collector={c} 
+                    isAdmin={isAdmin} 
+                    onDelete={handleDelete} 
+                />
               ))}
             </div>
           )}

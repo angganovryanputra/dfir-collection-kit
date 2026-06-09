@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useDebounce } from "@/hooks/useDebounce";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -280,9 +281,9 @@ export default function AdminSettings() {
     const params = new URLSearchParams();
     params.set("limit", String(extra?.limit ?? auditItemsPerPage));
     params.set("offset", String(extra?.offset ?? (auditPage - 1) * auditItemsPerPage));
-    if (auditEventType.trim()) params.set("event_type", auditEventType.trim());
-    if (auditActorId.trim()) params.set("actor_id", auditActorId.trim());
-    if (auditTargetId.trim()) params.set("target_id", auditTargetId.trim());
+    if (debouncedAuditEventType.trim()) params.set("event_type", debouncedAuditEventType.trim());
+    if (debouncedAuditActorId.trim()) params.set("actor_id", debouncedAuditActorId.trim());
+    if (debouncedAuditTargetId.trim()) params.set("target_id", debouncedAuditTargetId.trim());
     if (auditDateFrom) params.set("date_from", auditDateFrom);
     if (auditDateTo) params.set("date_to", auditDateTo);
     if (auditStatusFilter !== "all") params.set("status", auditStatusFilter);
@@ -320,11 +321,16 @@ export default function AdminSettings() {
     }
   };
 
+  // Debounce free-text audit filters to avoid firing an API call on every keystroke
+  const debouncedAuditEventType = useDebounce(auditEventType, 400);
+  const debouncedAuditActorId = useDebounce(auditActorId, 400);
+  const debouncedAuditTargetId = useDebounce(auditTargetId, 400);
+
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (activeTab !== "audit") return;
     loadAuditLogs();
-  }, [activeTab, auditPage, auditItemsPerPage, auditEventType, auditActorId, auditTargetId, auditDateFrom, auditDateTo, auditStatusFilter]);
+  }, [activeTab, auditPage, auditItemsPerPage, debouncedAuditEventType, debouncedAuditActorId, debouncedAuditTargetId, auditDateFrom, auditDateTo, auditStatusFilter]);
 
   const loadIOCIndicators = async () => {
     setErrorMessage(null);

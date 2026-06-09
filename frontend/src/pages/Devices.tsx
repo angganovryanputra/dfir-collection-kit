@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -10,6 +10,7 @@ import { SearchInput } from "@/components/common/SearchInput";
 import { SelectableButton } from "@/components/common/SelectableButton";
 import { TableHeaderRow } from "@/components/common/TableHeaderRow";
 import { usePagination } from "@/hooks/usePagination";
+import { useDebounce } from "@/hooks/useDebounce";
 import {
   Dialog,
   DialogContent,
@@ -114,6 +115,7 @@ type FilterType = "all" | "workstation" | "server" | "laptop" | "virtual";
 
 export default function Devices() {
   const [searchQuery, setSearchQuery] = useState("");
+  const debouncedSearch = useDebounce(searchQuery, 200);
   const [filterStatus, setFilterStatus] = useState<FilterStatus>("all");
   const [filterType, setFilterType] = useState<FilterType>("all");
   const [devices, setDevices] = useState<Device[]>([]);
@@ -244,15 +246,18 @@ export default function Devices() {
     devicesQuery.refetch();
   };
 
-  const filteredDevices = devices.filter((device) => {
-    const matchesSearch =
-      device.hostname.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      device.ipAddress.includes(searchQuery) ||
-      device.os.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesStatus = filterStatus === "all" || device.status === filterStatus;
-    const matchesType = filterType === "all" || device.type === filterType;
-    return matchesSearch && matchesStatus && matchesType;
-  });
+  const filteredDevices = useMemo(() => {
+    const q = debouncedSearch.toLowerCase();
+    return devices.filter((device) => {
+      const matchesSearch = !q ||
+        device.hostname.toLowerCase().includes(q) ||
+        device.ipAddress.includes(debouncedSearch) ||
+        device.os.toLowerCase().includes(q);
+      const matchesStatus = filterStatus === "all" || device.status === filterStatus;
+      const matchesType = filterType === "all" || device.type === filterType;
+      return matchesSearch && matchesStatus && matchesType;
+    });
+  }, [devices, debouncedSearch, filterStatus, filterType]);
 
   const {
     paginatedItems,
@@ -264,9 +269,11 @@ export default function Devices() {
     setPerPage,
   } = usePagination(filteredDevices);
 
-  const onlineCount = devices.filter((d) => d.status === "online").length;
-  const offlineCount = devices.filter((d) => d.status === "offline").length;
-  const degradedCount = devices.filter((d) => d.status === "degraded").length;
+  const { onlineCount, offlineCount, degradedCount } = useMemo(() => ({
+    onlineCount: devices.filter((d) => d.status === "online").length,
+    offlineCount: devices.filter((d) => d.status === "offline").length,
+    degradedCount: devices.filter((d) => d.status === "degraded").length,
+  }), [devices]);
 
   const getDeviceIcon = (type: Device["type"]) => {
     switch (type) {

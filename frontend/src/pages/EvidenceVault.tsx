@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo, memo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams, useNavigate } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -20,11 +20,14 @@ import {
   ShieldAlert,
   Search,
   Bug,
+  Loader2,
+  Target,
 } from "lucide-react";
 import type { Evidence } from "@/types/dfir";
 import { apiGet, apiPost } from "@/lib/api";
 import { TimelineExplorer } from "@/components/TimelineExplorer";
-import { Target } from "lucide-react";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface EvidenceFolder {
   id: string;
@@ -73,6 +76,8 @@ interface ProcessingJobOut {
   created_at: string;
 }
 
+// ─── Mapping ──────────────────────────────────────────────────────────────────
+
 const mapFolder = (folder: EvidenceFolderResponse): EvidenceFolder => ({
   id: folder.id,
   incidentId: folder.incident_id,
@@ -94,157 +99,136 @@ const mapEvidence = (item: EvidenceItemResponse): Evidence => ({
   collectedAt: item.collected_at,
 });
 
+// ─── Memoized Row ─────────────────────────────────────────────────────────────
+
+const EvidenceRow = memo(({ 
+    evidence, 
+    onExport, 
+    onHunt, 
+    isExporting 
+}: { 
+    evidence: Evidence; 
+    onExport: (id: string) => void; 
+    onHunt: (id: string) => void;
+    isExporting: boolean;
+}) => (
+    <div
+      className="grid grid-cols-12 gap-4 px-4 py-3 bg-secondary/20 hover:bg-secondary/40 transition-colors border border-transparent hover:border-border/60 group"
+      style={{ contentVisibility: "auto", containIntrinsicSize: "0 48px" }}
+    >
+      <div className="col-span-4 flex items-center gap-2 min-w-0">
+        <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
+        <span className="font-mono text-sm truncate font-bold">{evidence.name}</span>
+      </div>
+      <div className="col-span-2 font-mono text-xs text-muted-foreground uppercase">{evidence.type}</div>
+      <div className="col-span-2 font-mono text-xs text-muted-foreground tabular-nums">{evidence.size}</div>
+      <div className="col-span-2">
+        <div className="flex items-center gap-1.5">
+          {evidence.status === "HASH_VERIFIED" ? (
+            <><CheckCircle2 className="w-3.5 h-3.5 text-green-400" /><span className="font-mono text-[10px] text-green-400 font-bold uppercase">VERIFIED</span></>
+          ) : (
+            <><Lock className="w-3.5 h-3.5 text-primary/60" /><span className="font-mono text-[10px] text-primary/60 uppercase">LOCKED</span></>
+          )}
+        </div>
+      </div>
+      <div className="col-span-2 flex items-center gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+        <Button variant="ghost" size="sm" onClick={() => onExport(evidence.id)} disabled={isExporting} title="Download Raw File" className="h-7 w-8 p-0">
+          <Download className="w-4 h-4" />
+        </Button>
+        {(evidence.type === 'PROCESSED_TIMELINE' || evidence.name.includes("super_timeline")) && (
+          <Button variant="tactical" size="sm" onClick={() => onHunt(evidence.id)} className="h-7 px-3 bg-primary/10 border-primary/40 text-primary text-[10px]">
+            <Target className="w-3.5 h-3.5 mr-1.5" /> HUNT
+          </Button>
+        )}
+      </div>
+    </div>
+));
+EvidenceRow.displayName = "EvidenceRow";
+
+// ─── Main Page ─────────────────────────────────────────────────────────────
 
 export default function EvidenceVault() {
   const { id: incidentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const [folders, setFolders] = useState<EvidenceFolder[]>([]);
-  const [evidenceItems, setEvidenceItems] = useState<Evidence[]>([]);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [selectedTimelineId, setSelectedTimelineId] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (!incidentId) return;
-    const match = folders.find((folder) => folder.incidentId === incidentId);
-    if (match) {
-      setSelectedFolder(match.id);
-    }
-  }, [incidentId, folders]);
-
-  const foldersQuery = useQuery<EvidenceFolderResponse[]>({
+  // Queries
+  const { data: folders = [], isLoading: foldersLoading } = useQuery<EvidenceFolderResponse[], Error, EvidenceFolder[]>({
     queryKey: ["evidence-folders", incidentId ?? "all"],
-    queryFn: () => {
-      const url = incidentId
-        ? `/evidence/folders?incident_id=${encodeURIComponent(incidentId)}`
-        : "/evidence/folders";
-      return apiGet<EvidenceFolderResponse[]>(url);
-    },
+    queryFn: () => apiGet<EvidenceFolderResponse[]>(incidentId ? `/evidence/folders?incident_id=${encodeURIComponent(incidentId)}` : "/evidence/folders"),
+    select: (data) => data.map(mapFolder),
+    staleTime: 30_000,
   });
 
-  const diagnosticsQuery = useQuery<DiagnosticsResponse>({
+  const { data: diagnostics } = useQuery<DiagnosticsResponse>({
     queryKey: ["diagnostics"],
     queryFn: () => apiGet<DiagnosticsResponse>("/status/diagnostics"),
+    staleTime: 60_000,
   });
 
-  useEffect(() => {
-    if (foldersQuery.data) {
-      setFolders(foldersQuery.data.map(mapFolder));
-      setErrorMessage(null);
-    }
-  }, [foldersQuery.data]);
+  const selectedFolder = useMemo(() => {
+      if (selectedFolderId) return folders.find(f => f.id === selectedFolderId);
+      if (incidentId) return folders.find(f => f.incidentId === incidentId);
+      return undefined;
+  }, [folders, selectedFolderId, incidentId]);
 
-  const selectedFolderData = folders.find((f) => f.id === selectedFolder);
-
-  const itemsQuery = useQuery<EvidenceItemResponse[]>({
-    queryKey: ["evidence-items", selectedFolderData?.incidentId],
-    queryFn: () =>
-      apiGet<EvidenceItemResponse[]>(
-        `/evidence/items?incident_id=${selectedFolderData?.incidentId}`
-      ),
-    enabled: Boolean(selectedFolderData?.incidentId),
+  const { data: evidenceItems = [], isLoading: itemsLoading } = useQuery<EvidenceItemResponse[], Error, Evidence[]>({
+    queryKey: ["evidence-items", selectedFolder?.incidentId],
+    queryFn: () => apiGet<EvidenceItemResponse[]>(`/evidence/items?incident_id=${selectedFolder?.incidentId}`),
+    enabled: !!selectedFolder,
+    select: (data) => data.map(mapEvidence),
+    staleTime: 30_000,
   });
 
-  // Forensics pipeline processing status — uses new ProcessingJob endpoint
-  const processingQuery = useQuery<ProcessingJobOut>({
-    queryKey: ["processing-job-status", selectedFolderData?.incidentId],
-    queryFn: () =>
-      apiGet<ProcessingJobOut>(
-        `/processing/incident/${selectedFolderData?.incidentId}/status`
-      ),
-    enabled: Boolean(selectedFolderData?.incidentId),
-    retry: false,
-    refetchInterval: (query) => {
-      const s = query.state.data?.status;
-      if (s === "RUNNING" || s === "PENDING") return 5000;
-      if (!query.state.data) return 30000; // slow-poll: catch pipeline starting after page load
-      return false;
+  const { data: procJob } = useQuery<ProcessingJobOut>({
+    queryKey: ["processing-job-status", selectedFolder?.incidentId],
+    queryFn: () => apiGet<ProcessingJobOut>(`/processing/incident/${selectedFolder?.incidentId}/status`),
+    enabled: !!selectedFolder,
+    refetchInterval: (q) => {
+        const s = q.state.data?.status;
+        return (s === "RUNNING" || s === "PENDING") ? 5000 : 30000;
     },
   });
 
-  useEffect(() => {
-    if (foldersQuery.error || itemsQuery.error) {
-      setErrorMessage("Unable to load evidence data.");
-    }
-  }, [foldersQuery.error, itemsQuery.error]);
+  const filteredEvidence = useMemo(() => {
+      if (!searchQuery.trim()) return evidenceItems;
+      const q = searchQuery.toLowerCase();
+      return evidenceItems.filter((e) => e.name.toLowerCase().includes(q));
+  }, [evidenceItems, searchQuery]);
 
-  useEffect(() => {
-    if (itemsQuery.data) {
-      setEvidenceItems(itemsQuery.data.map(mapEvidence));
-      setErrorMessage(null);
-    }
-  }, [itemsQuery.data]);
-
-  const evidenceList = selectedFolder ? evidenceItems : [];
-
-  const filteredEvidence = evidenceList.filter((e) =>
-    e.name.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const capacityPercent = diagnosticsQuery.data?.storage_used_percent ?? null;
-  const formattedCapacity = capacityPercent !== null
-    ? `${Math.round(capacityPercent)}%`
-    : "--";
-
-  const buildExportUrl = (downloadUrl: string, signature?: string | null): string => {
-    // Reject anything that is not a server-relative path — prevents open redirect
-    // if the backend were ever to return an attacker-controlled absolute URL.
-    if (!downloadUrl.startsWith("/")) {
-      throw new Error("Unexpected download_url format");
-    }
-    const baseUrl = import.meta.env.VITE_API_BASE_URL as string | undefined;
-    const url = baseUrl ? `${baseUrl.replace(/\/$/, "")}${downloadUrl}` : downloadUrl;
-    const sig = signature ? `?signature=${encodeURIComponent(signature)}` : "";
-    return `${url}${sig}`;
-  };
+  const capacityPercent = diagnostics?.storage_used_percent ?? null;
+  const formattedCapacity = capacityPercent !== null ? `${Math.round(capacityPercent)}%` : "--";
 
   const handleExportAll = async () => {
-    if (!selectedFolderData) return;
+    if (!selectedFolder) return;
     setIsExporting(true);
-    setErrorMessage(null);
     try {
-      const response = await apiPost<{ download_url: string; signature?: string | null }>(
-        "/evidence/exports",
-        {
-          incident_id: selectedFolderData.incidentId,
-        }
-      );
-      window.location.assign(buildExportUrl(response.download_url, response.signature));
-    } catch {
-      setErrorMessage("Unable to export evidence package.");
+      const response = await apiPost<{ download_url: string; signature?: string | null }>("/evidence/exports", { incident_id: selectedFolder.incidentId });
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || "/api/v1";
+      const sig = response.signature ? `?signature=${encodeURIComponent(response.signature)}` : "";
+      window.location.assign(`${baseUrl}${response.download_url}${sig}`);
     } finally {
       setIsExporting(false);
     }
   };
 
-  const handleExportItem = async (evidenceId: string) => {
+  const handleExportItem = useCallback(async (evidenceId: string) => {
     setIsExporting(true);
-    setErrorMessage(null);
     try {
-      const response = await apiPost<{ download_url: string; signature?: string | null }>(
-        "/evidence/exports",
-        {
-          evidence_id: evidenceId,
-        }
-      );
-      window.location.assign(buildExportUrl(response.download_url, response.signature));
-    } catch {
-      setErrorMessage("Unable to export evidence file.");
+      const response = await apiPost<{ download_url: string; signature?: string | null }>("/evidence/exports", { evidence_id: evidenceId });
+      const baseUrl = import.meta.env.VITE_API_BASE_URL || "/api/v1";
+      const sig = response.signature ? `?signature=${encodeURIComponent(response.signature)}` : "";
+      window.location.assign(`${baseUrl}${response.download_url}${sig}`);
     } finally {
       setIsExporting(false);
     }
-  };
+  }, []);
 
-  if (selectedTimelineId && selectedFolderData) {
-    return (
-      <TimelineExplorer
-        evidenceId={selectedTimelineId}
-        incidentId={selectedFolderData.incidentId}
-        onBack={() => setSelectedTimelineId(null)}
-      />
-    );
+  if (selectedTimelineId && selectedFolder) {
+    return <TimelineExplorer evidenceId={selectedTimelineId} incidentId={selectedFolder.incidentId} onBack={() => setSelectedTimelineId(null)} />;
   }
 
   return (
@@ -252,70 +236,43 @@ export default function EvidenceVault() {
       title="EVIDENCE VAULT"
       subtitle="SECURE FORENSIC STORAGE"
       headerActions={
-        <div className="flex items-center gap-2 font-mono text-xs">
-          <HardDrive className="w-4 h-4 text-muted-foreground" />
-          <span className="text-muted-foreground">CAPACITY:</span>
-          <span className={capacityPercent !== null && capacityPercent >= 75 ? "text-warning" : "text-muted-foreground"}>
-            {formattedCapacity}
-          </span>
+        <div className="flex items-center gap-3 font-mono text-[10px] tracking-widest uppercase text-muted-foreground border-l border-border pl-4">
+          <HardDrive className="w-3.5 h-3.5" />
+          <span>CAPACITY: <span className={cn("font-bold", capacityPercent && capacityPercent >= 75 ? "text-warning" : "text-foreground")}>{formattedCapacity}</span></span>
         </div>
       }
     >
-      <div className="p-6 h-full">
-        {errorMessage && (
-          <div className="mb-4 border border-destructive/40 bg-destructive/10 p-3 font-mono text-xs text-destructive">
-            {errorMessage}
-          </div>
-        )}
-        <div className="grid grid-cols-12 gap-6 h-full">
-          {/* Left - Folder Structure */}
-          <div className="col-span-4">
-            <TacticalPanel title="CASE FOLDERS" status="online" className="h-full">
-              <div className="space-y-2">
-                {folders.length === 0 ? (
-                  <div className="p-4 text-center font-mono text-xs text-muted-foreground">
-                    No evidence folders available.
-                  </div>
+      <div className="p-6 h-full flex flex-col gap-6">
+        <div className="grid grid-cols-12 gap-6 flex-1 min-h-0">
+          
+          {/* Case Navigator */}
+          <div className="col-span-4 flex flex-col min-h-0">
+            <TacticalPanel title="CASE FOLDERS" status={foldersLoading ? "active" : "online"} className="flex-1 flex flex-col overflow-hidden">
+              <div className="flex-1 overflow-auto space-y-1 pr-1 custom-scrollbar">
+                {foldersLoading ? (
+                    <div className="flex items-center justify-center py-12 text-primary/40"><Loader2 className="w-6 h-6 animate-spin" /></div>
+                ) : folders.length === 0 ? (
+                    <div className="p-8 text-center font-mono text-xs text-muted-foreground uppercase opacity-40">Empty database</div>
                 ) : (
-                  folders.map((folder) => (
+                  folders.map((f) => (
                     <button
-                      key={folder.id}
-                      onClick={() => setSelectedFolder(folder.id)}
-                      className={`w-full text-left p-4 border transition-all ${selectedFolder === folder.id
-                        ? "border-primary bg-primary/10"
-                        : "border-border bg-secondary/50 hover:border-muted-foreground"
-                        }`}
+                      key={f.id}
+                      onClick={() => setSelectedFolderId(f.id)}
+                      className={cn(
+                          "w-full text-left p-3 border transition-all rounded-sm flex items-start gap-3 group",
+                          (selectedFolderId === f.id || incidentId === f.incidentId) ? "border-primary bg-primary/10" : "border-border/40 bg-secondary/15 hover:border-border"
+                      )}
                     >
-                      <div className="flex items-start gap-3">
-                        <Folder
-                          className={`w-5 h-5 mt-0.5 ${selectedFolder === folder.id
-                            ? "text-primary"
-                            : "text-muted-foreground"
-                            }`}
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-sm font-bold truncate">
-                              {folder.incidentId}
-                            </span>
-                            {folder.status === "HASH_VERIFIED" && (
-                              <CheckCircle2 className="w-3 h-3 text-status-verified shrink-0" />
-                            )}
-                          </div>
-                          <div className="font-mono text-xs text-muted-foreground mt-1">
-                            {folder.type.replace(/_/g, " ")}
-                          </div>
-                          <div className="font-mono text-xs text-muted-foreground">
-                            {folder.filesCount} files • {folder.totalSize}
-                          </div>
+                      <Folder className={cn("w-4 h-4 mt-0.5", (selectedFolderId === f.id || incidentId === f.incidentId) ? "text-primary" : "text-muted-foreground group-hover:text-foreground")} />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs font-bold truncate tracking-tighter uppercase">{f.incidentId}</span>
+                          {f.status === "HASH_VERIFIED" && <CheckCircle2 className="w-3 h-3 text-green-400 shrink-0" />}
                         </div>
-                        <ChevronRight
-                          className={`w-4 h-4 shrink-0 ${selectedFolder === folder.id
-                            ? "text-primary"
-                            : "text-muted-foreground"
-                            }`}
-                        />
+                        <div className="font-mono text-[10px] text-muted-foreground uppercase opacity-70">{f.type.replace(/_/g, " ")}</div>
+                        <div className="font-mono text-[9px] text-muted-foreground mt-1 uppercase tracking-tight">{f.filesCount} FILES • {f.totalSize}</div>
                       </div>
+                      <ChevronRight className={cn("w-3.5 h-3.5 self-center", (selectedFolderId === f.id || incidentId === f.incidentId) ? "text-primary" : "text-muted-foreground opacity-0 group-hover:opacity-100")} />
                     </button>
                   ))
                 )}
@@ -323,222 +280,68 @@ export default function EvidenceVault() {
             </TacticalPanel>
           </div>
 
-          {/* Right - Evidence List */}
-          <div className="col-span-8 flex flex-col gap-6">
+          {/* Evidence Browser */}
+          <div className="col-span-8 flex flex-col gap-4 min-h-0">
             {selectedFolder ? (
               <>
-                {/* Case Info */}
-                <TacticalPanel
-                  title={`CASE: ${selectedFolderData?.incidentId}`}
-                  status={selectedFolderData?.status === "HASH_VERIFIED" ? "verified" : "locked"}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-6 font-mono text-sm">
-                      <div>
-                        <span className="text-muted-foreground">TYPE: </span>
-                        <span className="text-foreground">
-                          {selectedFolderData?.type.replace(/_/g, " ")}
-                        </span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">DATE: </span>
-                        <span className="text-foreground">{selectedFolderData?.date}</span>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">SIZE: </span>
-                        <span className="text-foreground">{selectedFolderData?.totalSize}</span>
-                      </div>
+                <TacticalPanel title={`ANALYSIS_HUB_ROOT:/${selectedFolder.incidentId}`} status={selectedFolder.status === "HASH_VERIFIED" ? "verified" : "locked"}>
+                  <div className="flex items-center justify-between font-mono text-[11px] uppercase tracking-wider">
+                    <div className="flex gap-6">
+                        <div><span className="text-muted-foreground">ORIGIN: </span><span className="text-foreground">{selectedFolder.type.replace(/_/g, " ")}</span></div>
+                        <div><span className="text-muted-foreground">STAMP: </span><span className="text-foreground">{selectedFolder.date}</span></div>
+                        <div><span className="text-muted-foreground">VOLUME: </span><span className="text-foreground">{selectedFolder.totalSize}</span></div>
                     </div>
-                    <StatusIndicator
-                      status={selectedFolderData?.status === "HASH_VERIFIED" ? "verified" : "locked"}
-                    />
+                    <StatusIndicator status={selectedFolder.status === "HASH_VERIFIED" ? "verified" : "locked"} />
                   </div>
                 </TacticalPanel>
 
-                {/* Forensics Pipeline Status */}
-                {processingQuery.data && (
-                  <div className={`flex flex-wrap items-center gap-3 px-4 py-3 border font-mono text-xs ${processingQuery.data.status === "DONE"
-                    ? "border-primary/40 bg-primary/10 text-primary"
-                    : processingQuery.data.status === "FAILED"
-                    ? "border-destructive/40 bg-destructive/10 text-destructive"
-                    : "border-warning/40 bg-warning/10 text-warning"
-                    }`}>
-                    {processingQuery.data.status === "RUNNING" || processingQuery.data.status === "PENDING" ? (
-                      <>
-                        <Activity className="w-4 h-4 animate-pulse" />
-                        <span>FORENSICS PIPELINE: {processingQuery.data.phase?.toUpperCase() ?? "PROCESSING"}...</span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/processing`)}
-                          className="ml-auto h-6 px-3 text-warning border border-warning/50 hover:bg-warning/20"
-                        >
-                          VIEW PIPELINE
-                        </Button>
-                      </>
-                    ) : processingQuery.data.status === "DONE" ? (
-                      <>
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>FORENSICS PIPELINE: ANALYSIS READY</span>
-                        <div className="ml-auto flex items-center gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/processing`)}
-                            className="h-6 px-3 text-primary border border-primary/50 hover:bg-primary/20"
-                          >
-                            <Search className="w-3 h-3 mr-1.5" />
-                            SIGMA
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/attack-chains`)}
-                            className="h-6 px-3 text-primary border border-primary/50 hover:bg-primary/20"
-                          >
-                            <GitBranch className="w-3 h-3 mr-1.5" />
-                            ATT&CK
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/ioc-matches`)}
-                            className="h-6 px-3 text-primary border border-primary/50 hover:bg-primary/20"
-                          >
-                            <ShieldAlert className="w-3 h-3 mr-1.5" />
-                            IOC
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/yara-matches`)}
-                            className="h-6 px-3 text-primary border border-primary/50 hover:bg-primary/20"
-                          >
-                            <Bug className="w-3 h-3 mr-1.5" />
-                            YARA
-                          </Button>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <Activity className="w-4 h-4" />
-                        <span>FORENSICS PIPELINE: {processingQuery.data.error_message ?? "FAILED"}</span>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => navigate(`/incidents/${selectedFolderData?.incidentId}/processing`)}
-                          className="ml-auto h-6 px-3 text-destructive border border-destructive/50 hover:bg-destructive/20"
-                        >
-                          VIEW DETAILS
-                        </Button>
-                      </>
-                    )}
-                  </div>
+                {procJob && (
+                    <div className={cn(
+                        "flex items-center gap-3 px-4 py-2 border font-mono text-[10px] uppercase tracking-widest rounded-sm",
+                        procJob.status === "DONE" ? "border-green-500/40 bg-green-500/5 text-green-400" :
+                        procJob.status === "FAILED" ? "border-red-500/40 bg-red-500/5 text-red-400" : "border-primary/40 bg-primary/5 text-primary"
+                    )}>
+                        {procJob.status === "DONE" ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Activity className={cn("w-3.5 h-3.5", (procJob.status === "RUNNING" || procJob.status === "PENDING") && "animate-pulse")} />}
+                        <span>Pipeline: {procJob.status} {procJob.phase && `(${procJob.phase})`}</span>
+                        <Button variant="ghost" size="sm" onClick={() => navigate(`/incidents/${selectedFolder.incidentId}/processing`)} className="ml-auto h-6 px-2 text-[9px] border border-border/60 hover:border-primary/40">VIEW PIPELINE →</Button>
+                    </div>
                 )}
 
-                {/* Search & Actions */}
-                <div className="flex items-center gap-4">
-                  <SearchInput
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search evidence files..."
-                  />
-                  <Button variant="tactical" onClick={handleExportAll} disabled={isExporting}>
-                    <Download className="w-4 h-4 mr-2" />
-                    {isExporting ? "EXPORTING" : "EXPORT ALL"}
+                <div className="flex items-center gap-3">
+                  <SearchInput value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Filter artifacts..." className="flex-1 h-8 text-[11px]" />
+                  <Button variant="tactical" size="sm" onClick={handleExportAll} disabled={isExporting} className="h-8 font-mono text-[10px] tracking-widest">
+                    <Download className="w-3.5 h-3.5 mr-2" /> EXPORT ALL
                   </Button>
                 </div>
 
-                {/* Evidence Table */}
-                <TacticalPanel title="EVIDENCE FILES" className="flex-1">
-                  <div className="space-y-2">
-                    {/* Header */}
-                    <TableHeaderRow className="grid grid-cols-12 gap-4 py-2">
-                      <div className="col-span-4">Filename</div>
-                      <div className="col-span-2">Type</div>
-                      <div className="col-span-2">Size</div>
-                      <div className="col-span-2">Status</div>
-                      <div className="col-span-2">Actions</div>
-                    </TableHeaderRow>
-
-                    {/* Rows */}
-                    {filteredEvidence.length === 0 ? (
-                      <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">
-                        No evidence items available.
-                      </div>
-                    ) : (
-                      filteredEvidence.map((evidence) => (
-                        <div
-                          key={evidence.id}
-                          className="grid grid-cols-12 gap-4 px-4 py-3 bg-secondary/30 hover:bg-secondary/50 transition-colors border border-transparent hover:border-border"
-                        >
-                          <div className="col-span-4 flex items-center gap-2">
-                            <FileText className="w-4 h-4 text-muted-foreground shrink-0" />
-                            <span className="font-mono text-sm truncate">
-                              {evidence.name}
-                            </span>
-                          </div>
-                          <div className="col-span-2 font-mono text-sm text-muted-foreground">
-                            {evidence.type}
-                          </div>
-                          <div className="col-span-2 font-mono text-sm text-muted-foreground">
-                            {evidence.size}
-                          </div>
-                          <div className="col-span-2">
-                            <div className="flex items-center gap-1.5">
-                              {evidence.status === "HASH_VERIFIED" ? (
-                                <>
-                                  <CheckCircle2 className="w-3 h-3 text-status-verified" />
-                                  <span className="font-mono text-xs text-status-verified">
-                                    VERIFIED
-                                  </span>
-                                </>
-                              ) : (
-                                <>
-                                  <Lock className="w-3 h-3 text-status-locked" />
-                                  <span className="font-mono text-xs text-status-locked">
-                                    LOCKED
-                                  </span>
-                                </>
-                              )}
-                            </div>
-                          </div>
-                          <div className="col-span-2 flex items-center gap-1">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleExportItem(evidence.id)}
-                              disabled={isExporting}
-                              title="Download Raw File"
-                            >
-                              <Download className="w-4 h-4" />
-                            </Button>
-
-                            {(evidence.type === 'PROCESSED_TIMELINE' || evidence.name.includes("super_timeline")) && (
-                              <Button
-                                variant="tactical"
-                                size="sm"
-                                onClick={() => setSelectedTimelineId(evidence.id)}
-                                className="ml-2 h-7 px-3 bg-primary/20 hover:bg-primary/40 text-primary border-primary/50"
-                              >
-                                <Target className="w-3 h-3 mr-1.5" />
-                                HUNT
-                              </Button>
+                <TacticalPanel title="ARTIFACT_MANIFEST" className="flex-1 flex flex-col min-h-0" status={itemsLoading ? "active" : "online"}>
+                    <div className="flex-1 overflow-auto pr-1 custom-scrollbar">
+                        <TableHeaderRow className="grid grid-cols-12 gap-4 py-2 px-4 border-b border-border/40 font-mono text-[10px] uppercase text-muted-foreground tracking-widest sticky top-0 bg-background/95 backdrop-blur z-10">
+                          <div className="col-span-4 text-left">Entity</div>
+                          <div className="col-span-2">Type</div>
+                          <div className="col-span-2">Size</div>
+                          <div className="col-span-2">Status</div>
+                          <div className="col-span-2 text-right">Ops</div>
+                        </TableHeaderRow>
+                        <div className="divide-y divide-border/10">
+                            {itemsLoading ? (
+                                <div className="flex items-center justify-center py-12 text-primary/40 font-mono text-xs animate-pulse">INDEXING FILESYSTEM...</div>
+                            ) : filteredEvidence.length === 0 ? (
+                                <div className="py-12 text-center font-mono text-xs text-muted-foreground uppercase opacity-40">No entries in manifest</div>
+                            ) : (
+                                filteredEvidence.map((e) => (
+                                    <EvidenceRow key={e.id} evidence={e} onExport={handleExportItem} onHunt={setSelectedTimelineId} isExporting={isExporting} />
+                                ))
                             )}
-                          </div>
                         </div>
-                      ))
-                    )}
-                  </div>
+                    </div>
                 </TacticalPanel>
               </>
             ) : (
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center space-y-4">
-                  <Folder className="w-16 h-16 text-muted-foreground mx-auto" />
-                  <div className="font-mono text-muted-foreground">
-                    SELECT A CASE FOLDER TO VIEW EVIDENCE
-                  </div>
+              <div className="flex-1 flex items-center justify-center border border-dashed border-border/40 rounded-sm bg-secondary/5">
+                <div className="text-center space-y-4 opacity-30 group">
+                  <Folder className="w-16 h-16 text-muted-foreground mx-auto transition-transform group-hover:scale-110" />
+                  <div className="font-mono text-xs text-muted-foreground uppercase tracking-[0.3em]">Select Case Sequence</div>
                 </div>
               </div>
             )}

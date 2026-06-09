@@ -6,7 +6,7 @@
  */
 import { useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useState, useMemo, memo, useCallback } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,7 @@ import {
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { getStoredAuth, getStoredRole } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+import { useAdaptivePolling } from "@/lib/useAdaptivePolling";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -105,108 +106,59 @@ interface SigmaHitListOut {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function fmtTs(ts: string | null | undefined): string {
+const fmtTs = (ts: string | null | undefined): string => {
     if (!ts) return "—";
     return new Date(ts).toLocaleString();
-}
+};
 
-function fmtStatus(s: string): string {
-    return s.replace(/_/g, " ");
-}
+const fmtStatus = (s: string): string => s.replace(/_/g, " ");
 
-/** Returns Tailwind classes for an incident status chip. */
 function incidentStatusChip(status: string): string {
     switch (status) {
-        case "COLLECTION_IN_PROGRESS":
-            return "border-primary/50 bg-primary/10 text-primary animate-pulse";
-        case "COLLECTION_COMPLETE":
-            return "border-green-500/40 bg-green-500/10 text-green-400";
-        case "COLLECTION_FAILED":
-            return "border-destructive/40 bg-destructive/10 text-destructive";
-        case "CLOSED":
-            return "border-border/40 bg-secondary/30 text-muted-foreground";
-        case "ACTIVE":
-            return "border-yellow-500/40 bg-yellow-500/10 text-yellow-400";
-        default:
-            return "border-border/40 bg-secondary/30 text-muted-foreground";
+        case "COLLECTION_IN_PROGRESS": return "border-primary/50 bg-primary/10 text-primary animate-pulse";
+        case "COLLECTION_COMPLETE":    return "border-green-500/40 bg-green-500/10 text-green-400";
+        case "COLLECTION_FAILED":      return "border-destructive/40 bg-destructive/10 text-destructive";
+        case "CLOSED":                 return "border-border/40 bg-secondary/30 text-muted-foreground";
+        case "ACTIVE":                 return "border-yellow-500/40 bg-yellow-500/10 text-yellow-400";
+        default:                       return "border-border/40 bg-secondary/30 text-muted-foreground";
     }
 }
 
-/** Safe API fetch that returns null on 404 instead of throwing. */
 async function apiGetOrNull<T>(path: string): Promise<T | null> {
     try {
         return await apiGet<T>(path);
     } catch (err) {
         const msg = err instanceof Error ? err.message : "";
-        if (msg.includes("404") || msg.includes("not found") || msg.includes("Not Found")) {
-            return null;
-        }
+        if (msg.includes("404") || msg.includes("not found")) return null;
         throw err;
     }
 }
 
-// ─── Lateral Movement Labels ─────────────────────────────────────────────────
+// ─── Memoized Components ──────────────────────────────────────────────────
 
-const LM_DT_LABEL: Record<string, { label: string; color: string }> = {
-    account_pivot:    { label: "ACCOUNT PIVOT",  color: "border-red-500/40 bg-red-500/10 text-red-400" },
-    process_spread:   { label: "PROCESS SPREAD", color: "border-orange-500/40 bg-orange-500/10 text-orange-400" },
-    credential_reuse: { label: "CRED REUSE",     color: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400" },
-};
-
-
-// ─── Quick Action Card ────────────────────────────────────────────────────────
-
-interface ActionCardProps {
-    icon: React.ReactNode;
-    title: string;
-    description: string;
-    badge?: React.ReactNode;
-    status?: "ready" | "pending" | "unavailable" | "warning";
-    onClick: () => void;
-    disabled?: boolean;
-    highlight?: boolean;
-}
-
-function ActionCard({
-    icon,
-    title,
-    description,
-    badge,
-    status = "ready",
-    onClick,
-    disabled = false,
-    highlight = false,
-}: ActionCardProps) {
-    const borderColor =
-        highlight
-            ? "border-primary/60 hover:border-primary"
-            : status === "warning"
-            ? "border-red-500/40 hover:border-red-500/60"
-            : status === "unavailable"
-            ? "border-border/30"
-            : "border-border/60 hover:border-primary/50";
-
-    const bgColor =
-        highlight
-            ? "bg-primary/5 hover:bg-primary/10"
-            : status === "warning" ? "bg-red-500/5 hover:bg-red-500/8"
-            : status === "unavailable" ? "bg-secondary/10"
-            : "bg-secondary/20 hover:bg-secondary/40";
+const ActionCard = memo(({
+    icon, title, description, badge, status = "ready", onClick, disabled = false, highlight = false,
+}: {
+    icon: React.ReactNode; title: string; description: string; badge?: React.ReactNode;
+    status?: "ready" | "pending" | "unavailable" | "warning"; onClick: () => void;
+    disabled?: boolean; highlight?: boolean;
+}) => {
+    const borderColor = highlight ? "border-primary/60 hover:border-primary" : status === "warning" ? "border-red-500/40 hover:border-red-500/60" : status === "unavailable" ? "border-border/30" : "border-border/60 hover:border-primary/50";
+    const bgColor = highlight ? "bg-primary/5 hover:bg-primary/10" : status === "warning" ? "bg-red-500/5 hover:bg-red-500/8" : status === "unavailable" ? "bg-secondary/10" : "bg-secondary/20 hover:bg-secondary/40";
 
     return (
         <button
             onClick={onClick}
             disabled={disabled}
             className={cn(
-                "flex flex-col gap-3 p-4 rounded-sm border text-left transition-all w-full group",
-                borderColor,
-                bgColor,
+                "flex flex-col gap-2 p-3 rounded-sm border text-left transition-all w-full group min-h-[110px]",
+                borderColor, bgColor,
                 disabled && "opacity-40 cursor-not-allowed hover:bg-secondary/10 hover:border-border/30"
             )}
         >
             <div className="flex items-start justify-between">
                 <div className={cn(
-                    "p-2 rounded-sm",
+                    "p-1.5 rounded-sm",
                     highlight ? "bg-primary/20 text-primary" :
                     status === "warning" ? "bg-red-500/15 text-red-400" :
                     status === "unavailable" ? "bg-secondary/40 text-muted-foreground" :
@@ -218,202 +170,55 @@ function ActionCard({
             </div>
             <div>
                 <div className={cn(
-                    "font-mono text-sm font-bold mb-0.5",
+                    "font-mono text-[11px] font-bold mb-0.5",
                     highlight ? "text-primary" :
                     status === "warning" ? "text-red-400" :
                     status === "unavailable" ? "text-muted-foreground" : "text-foreground"
                 )}>
                     {title}
                 </div>
-                <div className="font-mono text-xs text-muted-foreground leading-relaxed">
+                <div className="font-mono text-[10px] text-muted-foreground leading-tight line-clamp-2">
                     {description}
                 </div>
             </div>
-            {!disabled && (
-                <div className={cn(
-                    "flex items-center gap-1 font-mono text-xs opacity-0 group-hover:opacity-100 transition-opacity mt-auto",
-                    highlight ? "text-primary" : "text-muted-foreground"
-                )}>
-                    OPEN <ArrowRight className="w-3 h-3" />
-                </div>
-            )}
         </button>
     );
-}
+});
+ActionCard.displayName = "ActionCard";
 
-// ─── Timeline step ────────────────────────────────────────────────────────────
-
-function TimelineStep({
-    done,
-    active,
-    failed,
-    label,
-    detail,
-}: {
-    done: boolean;
-    active: boolean;
-    failed: boolean;
-    label: string;
-    detail?: string;
-}) {
-    const icon = failed ? (
-        <AlertTriangle className="w-4 h-4 text-destructive" />
-    ) : done ? (
-        <CheckCircle2 className="w-4 h-4 text-green-400" />
-    ) : active ? (
-        <Loader2 className="w-4 h-4 text-primary animate-spin" />
-    ) : (
-        <div className="w-4 h-4 rounded-full border-2 border-border/40" />
-    );
-
-    return (
-        <div className="flex items-start gap-3">
-            <div className="shrink-0 mt-0.5">{icon}</div>
-            <div className="flex-1 min-w-0">
-                <div className={cn(
-                    "font-mono text-xs font-bold",
-                    failed ? "text-destructive" :
-                    done ? "text-foreground" :
-                    active ? "text-primary" :
-                    "text-muted-foreground"
-                )}>
-                    {label}
+const TimelineStep = memo(({ done, active, failed, label, detail }: {
+    done: boolean; active: boolean; failed: boolean; label: string; detail: string;
+}) => (
+    <div className="flex items-start gap-3">
+        <div className="flex flex-col items-center shrink-0 pt-0.5">
+            {done ? (
+                <div className="w-4 h-4 rounded-full bg-green-500/20 border border-green-500/40 flex items-center justify-center">
+                    <CheckCircle2 className="w-2.5 h-2.5 text-green-400" />
                 </div>
-                {detail && (
-                    <div className="font-mono text-xs text-muted-foreground mt-0.5">{detail}</div>
-                )}
-            </div>
+            ) : active ? (
+                <div className="w-4 h-4 rounded-full bg-primary/20 border border-primary/50 flex items-center justify-center animate-pulse">
+                    <div className="w-2 h-2 rounded-full bg-primary" />
+                </div>
+            ) : failed ? (
+                <div className="w-4 h-4 rounded-full bg-destructive/20 border border-destructive/40 flex items-center justify-center">
+                    <XCircle className="w-2.5 h-2.5 text-destructive" />
+                </div>
+            ) : (
+                <div className="w-4 h-4 rounded-full bg-secondary/60 border border-border/50" />
+            )}
         </div>
-    );
-}
-
-// ─── Lateral Movement Graph ─────────────────────────────────────────────────
-
-interface LateralMovementGraphProps {
-    detections: LateralMovementOut[];
-    incidentId: string;
-}
-
-function LateralMovementGraph({ detections, incidentId }: LateralMovementGraphProps) {
-    const navigate = useNavigate();
-    
-    // Extract unique hosts
-    const hosts = Array.from(new Set([
-        ...detections.map(d => d.source_host),
-        ...detections.map(d => d.target_host)
-    ]));
-
-    // Simple radial layout for nodes
-    const width = 600;
-    const height = 300;
-    const centerX = width / 2;
-    const centerY = height / 2;
-    const radius = Math.min(width, height) / 2.5;
-
-    const nodePositions: Record<string, { x: number; y: number }> = {};
-    hosts.forEach((h, i) => {
-        const angle = (i / hosts.length) * 2 * Math.PI - Math.PI / 2;
-        nodePositions[h] = {
-            x: centerX + radius * Math.cos(angle),
-            y: centerY + radius * Math.sin(angle),
-        };
-    });
-
-    return (
-        <div className="w-full h-[320px] bg-secondary/5 border border-border/40 rounded-sm relative overflow-hidden group/graph mb-4">
-            <div className="absolute top-2 left-3 font-mono text-[10px] text-muted-foreground uppercase tracking-widest pointer-events-none">
-                <Network className="w-3 h-3 inline mr-1.5 text-primary" />
-                Network Spread Visualization
+        <div className="flex-1 min-w-0">
+            <div className={cn(
+                "font-mono text-xs font-bold mb-0.5",
+                done ? "text-green-400" : active ? "text-primary" : failed ? "text-destructive" : "text-muted-foreground"
+            )}>
+                {label}
             </div>
-            
-            <svg width="100%" height="100%" viewBox={`0 0 ${width} ${height}`} className="drop-shadow-2xl">
-                <defs>
-                    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="19" refY="3.5" orient="auto">
-                        <polygon points="0 0, 10 3.5, 0 7" fill="currentColor" />
-                    </marker>
-                    <filter id="glow">
-                        <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
-                        <feMerge>
-                            <feMergeNode in="coloredBlur"/>
-                            <feMergeNode in="SourceGraphic"/>
-                        </feMerge>
-                    </filter>
-                </defs>
-
-                {/* Draw Edges */}
-                {detections.map((d) => {
-                    const start = nodePositions[d.source_host];
-                    const end = nodePositions[d.target_host];
-                    if (!start || !end) return null;
-
-                    const color = d.confidence >= 0.8 ? "text-red-500" : d.confidence >= 0.5 ? "text-orange-400" : "text-yellow-400";
-                    
-                    return (
-                        <g key={d.id} className={cn("cursor-pointer transition-all hover:opacity-100 opacity-70", color)}
-                           onClick={() => {
-                               const q = `host:${d.source_host} OR host:${d.target_host}`;
-                               const startTs = d.first_seen ? d.first_seen.replace(" ", "T") : "";
-                               const endTs = d.last_seen ? d.last_seen.replace(" ", "T") : "";
-                               const params = new URLSearchParams({ q });
-                               if (startTs) params.append("start_date", startTs);
-                               if (endTs) params.append("end_date", endTs);
-                               navigate(`/incidents/${incidentId}/super-timeline?${params.toString()}`);
-                           }}>
-                            <path
-                                d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`}
-                                stroke="currentColor"
-                                strokeWidth={Math.max(1, d.confidence * 3)}
-                                fill="none"
-                                markerEnd="url(#arrowhead)"
-                                className="animate-in fade-in duration-1000"
-                                strokeDasharray="5,5"
-                            >
-                                <animate attributeName="stroke-dashoffset" from="100" to="0" dur="5s" repeatCount="indefinite" />
-                            </path>
-                            {/* Hover hit area */}
-                            <path
-                                d={`M ${start.x} ${start.y} L ${end.x} ${end.y}`}
-                                stroke="transparent"
-                                strokeWidth="20"
-                                fill="none"
-                            />
-                        </g>
-                    );
-                })}
-
-                {/* Draw Nodes */}
-                {hosts.map((h) => (
-                    <g key={h} transform={`translate(${nodePositions[h].x}, ${nodePositions[h].y})`} className="select-none">
-                        <circle
-                            r="12"
-                            className="fill-card stroke-primary/50"
-                            strokeWidth="1.5"
-                            filter="url(#glow)"
-                        />
-                        <text
-                            y="-18"
-                            textAnchor="middle"
-                            className="fill-foreground font-mono font-bold text-[10px] uppercase tracking-tighter"
-                        >
-                            {h}
-                        </text>
-                    </g>
-                ))}
-            </svg>
-            
-            <div className="absolute bottom-2 right-3 flex gap-4 pointer-events-none">
-                <div className="flex items-center gap-1.5">
-                    <div className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]" />
-                    <span className="font-mono text-[9px] text-muted-foreground uppercase">High Confidence</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                    <div className="w-2 h-2 rounded-full bg-yellow-400 shadow-[0_0_8px_rgba(250,204,21,0.6)]" />
-                    <span className="font-mono text-[9px] text-muted-foreground uppercase">Med/Low</span>
-                </div>
-            </div>
+            <div className="font-mono text-[10px] text-muted-foreground">{detail}</div>
         </div>
-    );
-}
+    </div>
+));
+TimelineStep.displayName = "TimelineStep";
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
@@ -436,69 +241,73 @@ export default function IncidentHub() {
         queryKey: ["incident", incidentId],
         queryFn: () => apiGetOrNull<IncidentOut>(`/incidents/${incidentId}`),
         enabled: !!incidentId,
+        staleTime: 30_000,
     });
 
-    const { data: procJob } = useQuery<ProcessingJobOut | null>({
+    const { data: procJob, refetch: refetchProc } = useQuery<ProcessingJobOut | null>({
         queryKey: ["processing-status", incidentId],
         queryFn: () => apiGetOrNull<ProcessingJobOut>(`/processing/incident/${incidentId}/status`),
         enabled: !!incidentId,
-        refetchInterval: (q) => {
-            const status = q.state.data?.status;
-            return status === "RUNNING" || status === "PENDING" ? 5000 : false;
-        },
+        staleTime: 5000,
     });
 
-    const { data: superTimeline } = useQuery<SuperTimelineOut | null>({
+    const { data: superTimeline, refetch: refetchST } = useQuery<SuperTimelineOut | null>({
         queryKey: ["super-timeline-status", incidentId],
         queryFn: () => apiGetOrNull<SuperTimelineOut>(`/processing/incident/${incidentId}/super-timeline/status`),
         enabled: !!incidentId,
-        refetchInterval: (q) => {
-            const status = q.state.data?.status;
-            return status === "BUILDING" || status === "PENDING" ? 4000 : false;
-        },
+        staleTime: 10000,
     });
 
-    const { data: lmDetections } = useQuery<LateralMovementOut[]>({
+    const pollingEnabled = useMemo(() => {
+        const pStatus = procJob?.status;
+        const sStatus = superTimeline?.status;
+        return pStatus === "RUNNING" || pStatus === "PENDING" || sStatus === "BUILDING" || sStatus === "PENDING";
+    }, [procJob?.status, superTimeline?.status]);
+
+    useAdaptivePolling({
+        enabled: pollingEnabled,
+        onPoll: async () => {
+            await Promise.all([refetchProc(), refetchST()]);
+            return "polled";
+        },
+        initialInterval: 5000,
+        maxInterval: 30000,
+    });
+
+    const { data: lmDetections = [] } = useQuery<LateralMovementOut[]>({
         queryKey: ["lateral-movements", incidentId],
         queryFn: () => apiGet<LateralMovementOut[]>(`/processing/incident/${incidentId}/super-timeline/lateral-movement`),
         enabled: superTimeline?.status === "DONE",
+        staleTime: 60_000,
     });
 
-    const { data: evidenceFolders } = useQuery<EvidenceFolderOut[]>({
+    const { data: evidenceFolders = [] } = useQuery<EvidenceFolderOut[]>({
         queryKey: ["evidence-folders", incidentId],
-        queryFn: () => apiGet<EvidenceFolderOut[]>(
-            incidentId
-                ? `/evidence/folders?incident_id=${encodeURIComponent(incidentId)}`
-                : "/evidence/folders"
-        ),
+        queryFn: () => apiGet<EvidenceFolderOut[]>(`/evidence/folders?incident_id=${encodeURIComponent(incidentId!)}`),
         enabled: !!incidentId,
+        staleTime: 60_000,
     });
 
     const { data: sigmaHits } = useQuery<SigmaHitListOut | null>({
         queryKey: ["sigma-hits-count", incidentId],
         queryFn: () => apiGetOrNull<SigmaHitListOut>(`/processing/incident/${incidentId}/sigma-hits?limit=1`),
         enabled: procJob?.status === "DONE",
+        staleTime: 60_000,
     });
 
     // ── Derived state ─────────────────────────────────────────────────────────
-    const evidenceFolder = evidenceFolders?.find((f) => f.incident_id === incidentId);
+    const evidenceFolder = useMemo(() => evidenceFolders?.find((f) => f.incident_id === incidentId), [evidenceFolders, incidentId]);
 
-    const collectionDone =
-        incident?.status === "COLLECTION_COMPLETE" ||
-        incident?.status === "CLOSED";
-
+    const collectionDone = incident?.status === "COLLECTION_COMPLETE" || incident?.status === "CLOSED";
     const procDone   = procJob?.status === "DONE";
     const procFailed = procJob?.status === "FAILED";
     const procActive = procJob?.status === "RUNNING" || procJob?.status === "PENDING";
-
     const stDone    = superTimeline?.status === "DONE";
     const stFailed  = superTimeline?.status === "FAILED";
     const stActive  = superTimeline?.status === "BUILDING" || superTimeline?.status === "PENDING";
-    const lmCount   = lmDetections?.length ?? 0;
-
+    const lmCount   = lmDetections.length;
     const criticalSigmaCount = sigmaHits?.severity_counts?.["critical"] ?? 0;
-    const highSigmaCount     = sigmaHits?.severity_counts?.["high"] ?? 0;
-    const sigmaTotal         = sigmaHits?.total ?? 0;
+    const sigmaTotal = sigmaHits?.total ?? 0;
 
     const handleCloseIncident = async () => {
         if (!incidentId) return;
@@ -513,95 +322,43 @@ export default function IncidentHub() {
 
     const handlePushTimesketch = async () => {
         if (!procJob?.job_id) return;
-        setIsPushingTs(true);
-        setTsError(null);
-        try {
-            await apiPost(`/processing/${procJob.job_id}/timeline/push-timesketch`, {});
-        } catch (err) {
-            setTsError(err instanceof Error ? err.message : "Push failed");
-        } finally {
-            setIsPushingTs(false);
-        }
+        setIsPushingTs(true); setTsError(null);
+        try { await apiPost(`/processing/${procJob.job_id}/timeline/push-timesketch`, {}); } 
+        catch (err) { setTsError(err instanceof Error ? err.message : "Push failed"); } 
+        finally { setIsPushingTs(false); }
     };
 
     const handleRetryJobs = async () => {
         if (!incidentId) return;
-        setIsRetrying(true);
-        setRetryResult(null);
-        setRetryError(null);
+        setIsRetrying(true); setRetryResult(null); setRetryError(null);
         try {
             const result = await apiPost<{ reset: number }>(`/incidents/${incidentId}/collect/retry`, {});
             setRetryResult(`${result.reset} job${result.reset !== 1 ? "s" : ""} reset to pending`);
             await queryClient.invalidateQueries({ queryKey: ["incident", incidentId] });
-        } catch (err) {
-            setRetryError(err instanceof Error ? err.message : "Retry failed");
-        } finally {
-            setIsRetrying(false);
-        }
-    };
-
-    const showRetryButton =
-        incident?.status === "COLLECTION_FAILED" ||
-        (userRole === "admin" || userRole === "operator");
-
-    const downloadWithAuth = async (url: string, filename: string) => {
-        const auth = getStoredAuth();
-        const resp = await fetch(url, {
-            headers: { Authorization: `Bearer ${auth?.token ?? ""}` },
-        });
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        const blob = await resp.blob();
-        const objUrl = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = objUrl;
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(objUrl);
+        } catch (err) { setRetryError(err instanceof Error ? err.message : "Retry failed"); } 
+        finally { setIsRetrying(false); }
     };
 
     const handleNavigatorExport = async () => {
         if (!incidentId) return;
-        setIsDownloadingNavigator(true);
-        setNavigatorError(null);
+        setIsDownloadingNavigator(true); setNavigatorError(null);
         try {
             const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "/api/v1";
-            await downloadWithAuth(
-                `${baseUrl}/processing/incident/${incidentId}/attack-chains/navigator`,
-                `navigator-${incidentId}.json`
-            );
-        } catch (err) {
-            setNavigatorError(err instanceof Error ? err.message : "Export failed");
-        } finally {
-            setIsDownloadingNavigator(false);
-        }
+            const auth = getStoredAuth();
+            const resp = await fetch(`${baseUrl}/processing/incident/${incidentId}/attack-chains/navigator`, {
+                headers: { Authorization: `Bearer ${auth?.token ?? ""}` },
+            });
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const blob = await resp.blob();
+            const objUrl = URL.createObjectURL(blob);
+            const a = document.createElement("a"); a.href = objUrl; a.download = `navigator-${incidentId}.json`; a.click();
+            URL.revokeObjectURL(objUrl);
+        } catch (err) { setNavigatorError(err instanceof Error ? err.message : "Export failed"); } 
+        finally { setIsDownloadingNavigator(false); }
     };
 
-    if (incLoading) {
-        return (
-            <AppLayout title="INCIDENT HUB" subtitle="LOADING...">
-                <div className="flex items-center justify-center h-64">
-                    <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                </div>
-            </AppLayout>
-        );
-    }
-
-    if (incError || !incident) {
-        return (
-            <AppLayout title="INCIDENT HUB" subtitle="ERROR">
-                <div className="p-6">
-                    <TacticalPanel title="INCIDENT NOT FOUND" status="offline">
-                        <div className="font-mono text-sm text-destructive py-4">
-                            {incError instanceof Error ? incError.message : `Incident ${incidentId} not found.`}
-                        </div>
-                        <Button variant="outline" onClick={() => navigate("/dashboard")}>
-                            <ChevronLeft className="w-4 h-4 mr-2" /> BACK TO DASHBOARD
-                        </Button>
-                    </TacticalPanel>
-                </div>
-            </AppLayout>
-        );
-    }
+    if (incLoading) return <AppLayout title="INCIDENT HUB" subtitle="LOADING..."><div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div></AppLayout>;
+    if (incError || !incident) return <AppLayout title="INCIDENT HUB" subtitle="ERROR"><div className="p-6"><TacticalPanel title="INCIDENT NOT FOUND" status="offline"><div className="font-mono text-sm text-destructive py-4">{incError instanceof Error ? incError.message : `Incident ${incidentId} not found.`}</div><Button variant="outline" onClick={() => navigate("/dashboard")}><ChevronLeft className="w-4 h-4 mr-2" /> BACK TO DASHBOARD</Button></TacticalPanel></div></AppLayout>;
 
     return (
         <AppLayout
@@ -609,581 +366,169 @@ export default function IncidentHub() {
             subtitle={`${fmtStatus(incident.type).toUpperCase()} INCIDENT`}
             headerActions={
                 <div className="flex items-center gap-2">
-                    <Button variant="ghost" size="sm" onClick={() => navigate("/dashboard")}>
-                        <ChevronLeft className="w-4 h-4 mr-2" />
-                        DASHBOARD
-                    </Button>
-                    {/* Retry Failed Jobs */}
-                    {showRetryButton && incident?.status !== "CLOSED" && (
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => void handleRetryJobs()}
-                            disabled={isRetrying}
-                            className="gap-2 border-orange-500/40 text-orange-400 hover:bg-orange-500/10"
-                        >
-                            {isRetrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}
-                            RETRY FAILED JOBS
-                        </Button>
+                    <Button variant="ghost" size="sm" onClick={() => navigate("/dashboard")}><ChevronLeft className="w-4 h-4 mr-2" />DASHBOARD</Button>
+                    {incident?.status !== "CLOSED" && (
+                        <>
+                            {(userRole === "admin" || userRole === "operator") && (
+                                <Button variant="outline" size="sm" onClick={() => void handleRetryJobs()} disabled={isRetrying} className="gap-2 border-orange-500/40 text-orange-400 hover:bg-orange-500/10">
+                                    {isRetrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <AlertCircle className="w-4 h-4" />}RETRY FAILED JOBS
+                                </Button>
+                            )}
+                            {(userRole === "admin" || userRole === "operator") && (
+                                <Button variant="outline" size="sm" onClick={() => void handleCloseIncident()} disabled={isClosing} className="gap-2 border-destructive/40 text-destructive hover:bg-destructive/10">
+                                    {isClosing ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}CLOSE INCIDENT
+                                </Button>
+                            )}
+                        </>
                     )}
-                    {/* Close Incident */}
-                    {incident?.status !== "CLOSED" && (userRole === "admin" || userRole === "operator") && (
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => void handleCloseIncident()}
-                            disabled={isClosing}
-                            className="gap-2 border-destructive/40 text-destructive hover:bg-destructive/10"
-                        >
-                            {isClosing ? <Loader2 className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
-                            CLOSE INCIDENT
-                        </Button>
-                    )}
-                    {/* Primary CTA: Super Timeline when ready */}
-                    {stDone && (
-                        <Button
-                            variant="tactical"
-                            size="sm"
-                            onClick={() => navigate(`/incidents/${incidentId}/super-timeline`)}
-                            className="gap-2"
-                        >
-                            <Layers className="w-4 h-4" />
-                            OPEN SUPER TIMELINE
-                        </Button>
-                    )}
+                    {stDone && <Button variant="tactical" size="sm" onClick={() => navigate(`/incidents/${incidentId}/super-timeline`)} className="gap-2"><Layers className="w-4 h-4" />OPEN SUPER TIMELINE</Button>}
                 </div>
             }
         >
-            <div className="p-6 space-y-5">
+            <div className="p-6 space-y-6">
 
                 {/* ── Incident Header Card ─────────────────────────────────── */}
-                <TacticalPanel
-                    title="INCIDENT OVERVIEW"
-                    status={
-                        incident.status === "COLLECTION_IN_PROGRESS" ? "active" :
-                        incident.status === "COLLECTION_COMPLETE"    ? "verified" :
-                        incident.status === "COLLECTION_FAILED"      ? "offline" :
-                        "online"
-                    }
-                >
+                <TacticalPanel title="INCIDENT OVERVIEW" status={incident.status === "COLLECTION_IN_PROGRESS" ? "active" : incident.status === "COLLECTION_COMPLETE" ? "verified" : incident.status === "COLLECTION_FAILED" ? "offline" : "online"}>
                     <div className="flex items-start justify-between gap-6 flex-wrap">
                         <div className="space-y-3 flex-1 min-w-0">
                             <div className="flex items-center gap-3 flex-wrap">
-                                <span className={cn(
-                                    "px-2.5 py-1 rounded-sm border font-mono text-xs font-bold",
-                                    incidentStatusChip(incident.status)
-                                )}>
-                                    {fmtStatus(incident.status)}
-                                </span>
-                                <span className="px-2.5 py-1 rounded-sm border border-primary/30 bg-primary/10 font-mono text-xs text-primary">
-                                    {incident.type.replace(/_/g, " ").toUpperCase()}
-                                </span>
+                                <span className={cn("px-2.5 py-1 rounded-sm border font-mono text-xs font-bold", incidentStatusChip(incident.status))}>{fmtStatus(incident.status)}</span>
+                                <span className="px-2.5 py-1 rounded-sm border border-primary/30 bg-primary/10 font-mono text-xs text-primary">{incident.type.replace(/_/g, " ").toUpperCase()}</span>
                             </div>
-
                             <div className="grid grid-cols-2 gap-x-8 gap-y-1 font-mono text-xs">
-                                <div>
-                                    <span className="text-muted-foreground">OPERATOR: </span>
-                                    <span className="text-foreground">{incident.operator}</span>
-                                </div>
-                                <div>
-                                    <span className="text-muted-foreground">CREATED: </span>
-                                    <span className="text-foreground">{fmtTs(incident.created_at)}</span>
-                                </div>
-                                <div>
-                                    <span className="text-muted-foreground">LAST UPDATED: </span>
-                                    <span className="text-foreground">{fmtTs(incident.updated_at)}</span>
-                                </div>
-                                <div>
-                                    <span className="text-muted-foreground">TEMPLATE: </span>
-                                    <span className="text-foreground">{incident.template_id ?? "—"}</span>
-                                </div>
+                                <div><span className="text-muted-foreground">OPERATOR: </span><span className="text-foreground">{incident.operator}</span></div>
+                                <div><span className="text-muted-foreground">CREATED: </span><span className="text-foreground">{fmtTs(incident.created_at)}</span></div>
+                                <div><span className="text-muted-foreground">LAST UPDATED: </span><span className="text-foreground">{fmtTs(incident.updated_at)}</span></div>
+                                <div><span className="text-muted-foreground">TEMPLATE: </span><span className="text-foreground">{incident.template_id ?? "—"}</span></div>
                             </div>
-
                             {incident.target_endpoints.length > 0 && (
                                 <div className="flex items-center gap-2 flex-wrap">
-                                    <span className="font-mono text-xs text-muted-foreground flex items-center gap-1">
-                                        <Server className="w-3 h-3" />
-                                        TARGETS:
-                                    </span>
-                                    {incident.target_endpoints.map((ep) => (
-                                        <span
-                                            key={ep}
-                                            className="px-2 py-0.5 border border-border/50 bg-secondary/40 rounded-sm font-mono text-xs"
-                                        >
-                                            {ep}
-                                        </span>
-                                    ))}
+                                    <span className="font-mono text-xs text-muted-foreground flex items-center gap-1"><Server className="w-3 h-3" />TARGETS:</span>
+                                    {incident.target_endpoints.map((ep) => <span key={ep} className="px-2 py-0.5 border border-border/50 bg-secondary/40 rounded-sm font-mono text-xs">{ep}</span>)}
                                 </div>
                             )}
                         </div>
-
-                        {/* Summary stats */}
                         <div className="flex items-center gap-3 flex-wrap shrink-0">
-                            {evidenceFolder && (
-                                <div className="flex flex-col items-center gap-1 px-4 py-2 border border-border/50 bg-secondary/30 rounded-sm">
-                                    <span className="font-mono text-lg font-bold text-foreground">
-                                        {evidenceFolder.files_count.toLocaleString()}
-                                    </span>
-                                    <span className="font-mono text-[10px] text-muted-foreground uppercase">
-                                        Evidence Files
-                                    </span>
-                                </div>
-                            )}
-                            {stDone && (
-                                <div className="flex flex-col items-center gap-1 px-4 py-2 border border-border/50 bg-secondary/30 rounded-sm">
-                                    <span className="font-mono text-lg font-bold text-foreground">
-                                        {superTimeline?.event_count?.toLocaleString() ?? "—"}
-                                    </span>
-                                    <span className="font-mono text-[10px] text-muted-foreground uppercase">
-                                        Timeline Events
-                                    </span>
-                                </div>
-                            )}
-                            {stDone && lmCount > 0 && (
-                                <div className="flex flex-col items-center gap-1 px-4 py-2 border border-red-500/40 bg-red-500/10 rounded-sm">
-                                    <span className="font-mono text-lg font-bold text-red-400">
-                                        {lmCount}
-                                    </span>
-                                    <span className="font-mono text-[10px] text-red-400/70 uppercase">
-                                        Lateral Movements
-                                    </span>
-                                </div>
-                            )}
-                            {procDone && sigmaTotal > 0 && (
-                                <div className={cn(
-                                    "flex flex-col items-center gap-1 px-4 py-2 border rounded-sm",
-                                    criticalSigmaCount > 0
-                                        ? "border-red-500/40 bg-red-500/10"
-                                        : "border-orange-500/30 bg-orange-500/5"
-                                )}>
-                                    <span className={cn(
-                                        "font-mono text-lg font-bold",
-                                        criticalSigmaCount > 0 ? "text-red-400" : "text-orange-400"
-                                    )}>
-                                        {sigmaTotal}
-                                    </span>
-                                    <span className={cn(
-                                        "font-mono text-[10px] uppercase",
-                                        criticalSigmaCount > 0 ? "text-red-400/70" : "text-orange-400/70"
-                                    )}>
-                                        Sigma Hits
-                                    </span>
-                                </div>
-                            )}
+                            {evidenceFolder && <div className="flex flex-col items-center gap-1 px-4 py-2 border border-border/50 bg-secondary/30 rounded-sm"><span className="font-mono text-lg font-bold text-foreground">{evidenceFolder.files_count.toLocaleString()}</span><span className="font-mono text-[10px] text-muted-foreground uppercase">Evidence Files</span></div>}
+                            {stDone && <div className="flex flex-col items-center gap-1 px-4 py-2 border border-border/50 bg-secondary/30 rounded-sm"><span className="font-mono text-lg font-bold text-foreground">{superTimeline?.event_count?.toLocaleString() ?? "—"}</span><span className="font-mono text-[10px] text-muted-foreground uppercase">Timeline Events</span></div>}
+                            {stDone && lmCount > 0 && <div className="flex flex-col items-center gap-1 px-4 py-2 border border-red-500/40 bg-red-500/10 rounded-sm"><span className="font-mono text-lg font-bold text-red-400">{lmCount}</span><span className="font-mono text-[10px] text-red-400/70 uppercase">Lateral Movements</span></div>}
+                            {procDone && sigmaTotal > 0 && <div className={cn("flex flex-col items-center gap-1 px-4 py-2 border rounded-sm", criticalSigmaCount > 0 ? "border-red-500/40 bg-red-500/10" : "border-orange-500/30 bg-orange-500/5")}><span className={cn("font-mono text-lg font-bold", criticalSigmaCount > 0 ? "text-red-400" : "text-orange-400")}>{sigmaTotal}</span><span className={cn("font-mono text-[10px] uppercase", criticalSigmaCount > 0 ? "text-red-400/70" : "text-orange-400/70")}>Sigma Hits</span></div>}
                         </div>
                     </div>
                 </TacticalPanel>
 
-                {/* ── Lateral movement alert banner (if detections exist) ───── */}
-                {stDone && lmCount > 0 && (
-                    <div
-                        className="flex items-center gap-3 p-3 border border-red-500/40 bg-red-500/5 rounded-sm cursor-pointer hover:bg-red-500/10 transition-colors"
-                        onClick={() => navigate(`/incidents/${incidentId}/super-timeline`)}
-                    >
-                        <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" />
-                        <div className="flex-1 min-w-0">
-                            <div className="font-mono text-xs font-bold text-red-400">
-                                {lmCount} LATERAL MOVEMENT DETECTION{lmCount > 1 ? "S" : ""} — IMMEDIATE ATTENTION REQUIRED
+                {/* ── Action Grid Sections ────────────────────────────────── */}
+                <div className="grid grid-cols-12 gap-6">
+                    
+                    {/* Left Column: Investigation & Analysis */}
+                    <div className="col-span-8 space-y-6">
+                        <section className="space-y-3">
+                            <h3 className="font-mono text-[10px] text-muted-foreground uppercase tracking-[0.2em] px-1 flex items-center gap-2">
+                                <Layers className="w-3 h-3" /> Core Analysis
+                            </h3>
+                            <div className="grid grid-cols-2 gap-3">
+                                <ActionCard
+                                    icon={<Layers className="w-5 h-5" />} title="SUPER TIMELINE" highlight={stDone}
+                                    status={stDone ? "ready" : stFailed ? "warning" : stActive ? "pending" : "unavailable"}
+                                    description={stDone ? `${superTimeline?.host_count ?? "?"} hosts · ${(superTimeline?.event_count ?? 0).toLocaleString()} events` : stFailed ? "Build failed" : stActive ? "Building..." : "Requires processing"}
+                                    badge={stDone && lmCount > 0 ? <span className="px-2 py-0.5 border border-red-500/40 bg-red-500/15 text-red-400 font-mono text-[10px] rounded-sm font-bold">{lmCount} DETECTIONS</span> : stDone ? <span className="px-2 py-0.5 border border-green-500/30 bg-green-500/10 text-green-400 font-mono text-[10px] rounded-sm">READY</span> : undefined}
+                                    onClick={() => navigate(`/incidents/${incidentId}/super-timeline`)} disabled={!collectionDone}
+                                />
+                                <ActionCard
+                                    icon={<Search className="w-5 h-5" />} title="SIGMA HITS"
+                                    status={procDone && sigmaTotal > 0 ? (criticalSigmaCount > 0 ? "warning" : "ready") : "unavailable"}
+                                    description={procDone ? (sigmaTotal > 0 ? `${sigmaTotal} detections · ${criticalSigmaCount} critical` : "No detections") : "Requires processing"}
+                                    badge={criticalSigmaCount > 0 ? <span className="px-2 py-0.5 border border-red-500/40 bg-red-500/15 text-red-400 font-mono text-[10px] rounded-sm font-bold">{criticalSigmaCount} CRIT</span> : undefined}
+                                    onClick={() => navigate(`/incidents/${incidentId}/sigma-hits`)} disabled={!procDone}
+                                />
+                                <ActionCard
+                                    icon={<GitBranch className="w-5 h-5" />} title="ATTACK CHAINS"
+                                    status={procDone ? "ready" : "unavailable"}
+                                    description={procDone ? "ATT&CK kill-chain reconstruction" : "Requires processing"}
+                                    onClick={() => navigate(`/incidents/${incidentId}/attack-chains`)} disabled={!procDone}
+                                />
+                                <ActionCard
+                                    icon={<Activity className="w-5 h-5" />} title="PROCESSING PIPELINE"
+                                    status={procDone ? "ready" : procFailed ? "warning" : procActive ? "pending" : "unavailable"}
+                                    description={procDone ? "Pipeline complete" : procActive ? "Running phases..." : "Manual trigger"}
+                                    onClick={() => navigate(`/incidents/${incidentId}/processing`)} disabled={!collectionDone}
+                                />
                             </div>
-                            <div className="font-mono text-xs text-muted-foreground mt-0.5">
-                                {lmDetections?.map((d) => `${d.source_host} → ${d.target_host}`).join("   •   ")}
+                        </section>
+
+                        <section className="space-y-3">
+                            <h3 className="font-mono text-[10px] text-muted-foreground uppercase tracking-[0.2em] px-1 flex items-center gap-2">
+                                <ShieldAlert className="w-3 h-3" /> Malware & Threat Intel
+                            </h3>
+                            <div className="grid grid-cols-2 gap-3">
+                                <ActionCard
+                                    icon={<ShieldAlert className="w-5 h-5" />} title="IOC MATCHES" status={procDone ? "ready" : "unavailable"}
+                                    description="Known bad indicator cross-reference" onClick={() => navigate(`/incidents/${incidentId}/ioc-matches`)} disabled={!procDone}
+                                />
+                                <ActionCard
+                                    icon={<Bug className="w-5 h-5" />} title="YARA MATCHES" status={procDone ? "ready" : "unavailable"}
+                                    description="Malware signature detections" onClick={() => navigate(`/incidents/${incidentId}/yara-matches`)} disabled={!procDone}
+                                />
                             </div>
-                        </div>
-                        <div className="font-mono text-xs text-red-400 flex items-center gap-1 shrink-0">
-                            VIEW <ArrowRight className="w-3 h-3" />
-                        </div>
+                        </section>
+
+                        <section className="space-y-3">
+                            <h3 className="font-mono text-[10px] text-muted-foreground uppercase tracking-[0.2em] px-1 flex items-center gap-2">
+                                <Target className="w-3 h-3" /> Investigation Tools
+                            </h3>
+                            <div className="grid grid-cols-2 gap-3">
+                                <ActionCard
+                                    icon={<Target className="w-5 h-5" />} title="HYPOTHESES" status="ready"
+                                    description="ATT&CK-framed investigation goals" onClick={() => navigate(`/incidents/${incidentId}/hypotheses`)}
+                                />
+                                <ActionCard
+                                    icon={<Share2 className="w-5 h-5" />} title="SIEM EXPORT" status={procDone ? "ready" : "unavailable"}
+                                    description="Push to Splunk / Elastic / Timesketch" onClick={() => navigate(`/incidents/${incidentId}/siem-export`)} disabled={!procDone}
+                                />
+                            </div>
+                        </section>
                     </div>
-                )}
 
-                {/* ── Lateral movement grid summary ───────────────────────── */}
-                {stDone && lmDetections && lmDetections.length > 0 && (
-                    <TacticalPanel title={`LATERAL MOVEMENT DETECTED (${lmDetections.length})`} status="offline">
-                        <LateralMovementGraph detections={lmDetections} incidentId={incidentId ?? ""} />
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {lmDetections.map((det) => (
-                                <div
-                                    key={det.id}
-                                    className="p-3 border border-border/60 bg-secondary/15 rounded-sm space-y-3 font-mono cursor-pointer hover:border-primary/50 hover:bg-secondary/30 transition-all group"
-                                    onClick={() => {
-                                        const q = `host:${det.source_host} OR host:${det.target_host}`;
-                                        const start = det.first_seen ? det.first_seen.replace(" ", "T") : "";
-                                        const end = det.last_seen ? det.last_seen.replace(" ", "T") : "";
-                                        const params = new URLSearchParams({ q });
-                                        if (start) params.append("start_date", start);
-                                        if (end) params.append("end_date", end);
-                                        navigate(`/incidents/${incidentId}/super-timeline?${params.toString()}`);
-                                    }}
-                                >
-                                    <div className="flex items-center justify-between gap-2">
-                                        <span className={cn(
-                                            "px-2 py-0.5 border text-[10px] rounded-sm uppercase font-bold",
-                                            det.detection_type === "account_pivot" ? "border-red-500/40 bg-red-500/10 text-red-400" :
-                                            det.detection_type === "process_spread" ? "border-orange-500/40 bg-orange-500/10 text-orange-400" :
-                                            "border-yellow-500/40 bg-yellow-500/10 text-yellow-400"
-                                        )}>
-                                            {det.detection_type.replace(/_/g, " ")}
-                                        </span>
-                                        <span className={cn(
-                                            "text-[10px]",
-                                            det.confidence >= 0.8 ? "text-red-400" :
-                                            det.confidence >= 0.5 ? "text-orange-400" :
-                                            "text-yellow-400"
-                                        )}>
-                                            {Math.round(det.confidence * 100)}% CONF
-                                        </span>
-                                    </div>
+                    {/* Right Column: Evidence & Management */}
+                    <div className="col-span-4 space-y-6">
+                        <section className="space-y-3">
+                            <h3 className="font-mono text-[10px] text-muted-foreground uppercase tracking-[0.2em] px-1 flex items-center gap-2">
+                                <FolderOpen className="w-3 h-3" /> Evidence Vault
+                            </h3>
+                            <div className="flex flex-col gap-3">
+                                <ActionCard
+                                    icon={<FolderOpen className="w-5 h-5" />} title="EVIDENCE VAULT" status={collectionDone ? "ready" : "unavailable"}
+                                    description={evidenceFolder ? `${evidenceFolder.files_count} files · ${evidenceFolder.total_size}` : "Locked items"}
+                                    onClick={() => navigate(`/evidence/${incidentId}`)} disabled={!collectionDone}
+                                />
+                                <ActionCard
+                                    icon={<FileText className="w-5 h-5" />} title="CHAIN OF CUSTODY" status={collectionDone ? "ready" : "unavailable"}
+                                    description="Evidence handling audit log" onClick={() => navigate("/chain-of-custody")} disabled={!collectionDone}
+                                />
+                            </div>
+                        </section>
 
-                                    <div className="flex items-center gap-3 justify-center py-1">
-                                        <div className="text-center">
-                                            <div className="text-[10px] text-muted-foreground uppercase mb-1">Source</div>
-                                            <div className="px-2 py-1 border border-border bg-card rounded-sm text-xs group-hover:border-primary/30">
-                                                {det.source_host}
-                                            </div>
-                                        </div>
-                                        <ArrowRight className="w-4 h-4 text-muted-foreground mt-4 group-hover:text-primary" />
-                                        <div className="text-center">
-                                            <div className="text-[10px] text-muted-foreground uppercase mb-1">Target</div>
-                                            <div className="px-2 py-1 border border-border bg-card rounded-sm text-xs group-hover:border-primary/30">
-                                                {det.target_host}
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {det.actor && (
-                                        <div className="flex items-center gap-2 text-[10px] text-muted-foreground bg-secondary/30 p-1.5 rounded-sm">
-                                            <Shield className="w-3 h-3" />
-                                            ACTOR: <span className="text-foreground">{det.actor}</span>
-                                        </div>
-                                    )}
-
-                                    <div className="flex justify-between items-center text-[9px] text-muted-foreground/70 pt-1">
-                                        <div className="flex flex-col">
-                                            <span>FIRST: {det.first_seen ? new Date(det.first_seen).toLocaleTimeString() : "—"}</span>
-                                            <span>LAST: {det.last_seen ? new Date(det.last_seen).toLocaleTimeString() : "—"}</span>
-                                        </div>
-                                        <span className="text-primary opacity-0 group-hover:opacity-100 transition-opacity font-bold">PIVOT →</span>
-                                    </div>
-                                </div>
-                            ))}
-                        </div>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            className="w-full font-mono text-[10px] mt-4 h-8"
-                            onClick={() => navigate(`/incidents/${incidentId}/super-timeline`)}
-                        >
-                            <Layers className="w-3.5 h-3.5 mr-2" />
-                            INVESTIGATE IN SUPER TIMELINE
-                        </Button>
-                    </TacticalPanel>
-                )}
-
-                {/* ── Retry feedback banners ──────────────────────────────── */}
-                {retryResult && (
-                    <div className="flex items-center gap-3 p-3 border border-green-500/40 bg-green-500/5 rounded-sm">
-                        <CheckCircle2 className="w-4 h-4 text-green-400 shrink-0" />
-                        <span className="font-mono text-xs text-green-400">{retryResult}</span>
+                        <section className="space-y-3">
+                            <h3 className="font-mono text-[10px] text-muted-foreground uppercase tracking-[0.2em] px-1 flex items-center gap-2">
+                                <Users className="w-3 h-3" /> Operations
+                            </h3>
+                            <div className="flex flex-col gap-3">
+                                <ActionCard
+                                    icon={<Users className="w-5 h-5" />} title="COLLECTION SETUP" status="ready"
+                                    description="Configure agent collection jobs" onClick={() => navigate(`/incidents/${incidentId}/setup`)}
+                                />
+                                <ActionCard
+                                    icon={<Clock className="w-5 h-5" />} title="SCHEDULED" status="ready"
+                                    description="Automated re-collection" onClick={() => navigate(`/incidents/${incidentId}/scheduled`)}
+                                />
+                                <ActionCard
+                                    icon={<Lock className="w-5 h-5" />} title="LEGAL HOLDS" status="ready"
+                                    description="Retention policy management" onClick={() => navigate(`/incidents/${incidentId}/legal-holds`)}
+                                />
+                            </div>
+                        </section>
                     </div>
-                )}
-                {retryError && (
-                    <div className="flex items-center gap-3 p-3 border border-destructive/40 bg-destructive/5 rounded-sm">
-                        <AlertCircle className="w-4 h-4 text-destructive shrink-0" />
-                        <span className="font-mono text-xs text-destructive">{retryError}</span>
-                    </div>
-                )}
-                {navigatorError && (
-                    <div className="flex items-center gap-3 p-3 border border-destructive/40 bg-destructive/5 rounded-sm">
-                        <AlertCircle className="w-4 h-4 text-destructive shrink-0" />
-                        <span className="font-mono text-xs text-destructive">Navigator export failed: {navigatorError}</span>
-                    </div>
-                )}
-
-                {/* ── Quick Action Grid ────────────────────────────────────── */}
-                <TacticalPanel title="ANALYSIS ACTIONS">
-                    <div className="grid grid-cols-3 gap-3">
-
-                        {/* Super Timeline — primary action */}
-                        <ActionCard
-                            icon={<Layers className="w-5 h-5" />}
-                            title="SUPER TIMELINE"
-                            highlight={stDone}
-                            status={
-                                stDone    ? "ready" :
-                                stFailed  ? "warning" :
-                                stActive  ? "pending" :
-                                "unavailable"
-                            }
-                            description={
-                                stDone
-                                    ? `${superTimeline?.host_count ?? "?"} hosts · ${(superTimeline?.event_count ?? 0).toLocaleString()} events${lmCount > 0 ? ` · ${lmCount} lateral movements` : ""}`
-                                    : stFailed
-                                    ? `Build failed: ${superTimeline?.error_message ?? "unknown error"}`
-                                    : stActive
-                                    ? "Building cross-host merged timeline…"
-                                    : collectionDone && procDone
-                                    ? "Ready to build — trigger from this page or pipeline"
-                                    : "Available after processing pipeline completes"
-                            }
-                            badge={
-                                stDone && lmCount > 0 ? (
-                                    <span className="px-2 py-0.5 border border-red-500/40 bg-red-500/15 text-red-400 font-mono text-[10px] rounded-sm font-bold">
-                                        {lmCount} DETECTIONS
-                                    </span>
-                                ) : stDone ? (
-                                    <span className="px-2 py-0.5 border border-green-500/30 bg-green-500/10 text-green-400 font-mono text-[10px] rounded-sm">
-                                        READY
-                                    </span>
-                                ) : stActive ? (
-                                    <span className="px-2 py-0.5 border border-primary/30 bg-primary/10 text-primary font-mono text-[10px] rounded-sm animate-pulse">
-                                        BUILDING
-                                    </span>
-                                ) : undefined
-                            }
-                            onClick={() => navigate(`/incidents/${incidentId}/super-timeline`)}
-                            disabled={!collectionDone}
-                        />
-
-                        {/* Processing Pipeline */}
-                        <ActionCard
-                            icon={<Activity className="w-5 h-5" />}
-                            title="PROCESSING PIPELINE"
-                            status={
-                                procDone   ? "ready" :
-                                procFailed ? "warning" :
-                                procActive ? "pending" :
-                                "unavailable"
-                            }
-                            description={
-                                procDone
-                                    ? `Pipeline complete · Phase: ${procJob?.phase ?? "timeline"}`
-                                    : procFailed
-                                    ? `Failed: ${procJob?.error_message ?? "unknown error"}`
-                                    : procActive
-                                    ? `Running: ${procJob?.phase ?? "initializing"}…`
-                                    : "Trigger after collection completes"
-                            }
-                            badge={
-                                procDone ? (
-                                    <CheckCircle2 className="w-4 h-4 text-green-400" />
-                                ) : procActive ? (
-                                    <Loader2 className="w-4 h-4 text-primary animate-spin" />
-                                ) : procFailed ? (
-                                    <AlertTriangle className="w-4 h-4 text-destructive" />
-                                ) : undefined
-                            }
-                            onClick={() => navigate(`/incidents/${incidentId}/processing`)}
-                            disabled={!collectionDone}
-                        />
-
-                        {/* Evidence Vault */}
-                        <ActionCard
-                            icon={<FolderOpen className="w-5 h-5" />}
-                            title="EVIDENCE VAULT"
-                            status={collectionDone ? "ready" : "unavailable"}
-                            description={
-                                evidenceFolder
-                                    ? `${evidenceFolder.files_count} files · ${evidenceFolder.total_size} · ${evidenceFolder.status}`
-                                    : collectionDone
-                                    ? "Evidence collected and locked"
-                                    : "Available after collection"
-                            }
-                            onClick={() => navigate(`/evidence/${incidentId}`)}
-                            disabled={!collectionDone}
-                        />
-
-                        {/* Sigma Hits */}
-                        <ActionCard
-                            icon={<Search className="w-5 h-5" />}
-                            title="SIGMA HITS"
-                            status={
-                                procDone && sigmaTotal > 0
-                                    ? criticalSigmaCount > 0 ? "warning" : "ready"
-                                    : "unavailable"
-                            }
-                            description={
-                                procDone
-                                    ? sigmaTotal > 0
-                                        ? `${sigmaTotal} detections · ${criticalSigmaCount} critical · ${highSigmaCount} high`
-                                        : "No Sigma detections found"
-                                    : "Available after processing"
-                            }
-                            badge={
-                                criticalSigmaCount > 0 ? (
-                                    <span className="px-2 py-0.5 border border-red-500/40 bg-red-500/15 text-red-400 font-mono text-[10px] rounded-sm font-bold">
-                                        {criticalSigmaCount} CRIT
-                                    </span>
-                                ) : undefined
-                            }
-                            onClick={() => navigate(`/incidents/${incidentId}/sigma-hits`)}
-                            disabled={!procDone}
-                        />
-
-                        {/* IOC Matches */}
-                        <ActionCard
-                            icon={<ShieldAlert className="w-5 h-5" />}
-                            title="IOC MATCHES"
-                            status={procDone ? "ready" : "unavailable"}
-                            description={
-                                procDone
-                                    ? "Cross-reference against known bad indicators"
-                                    : "Available after processing"
-                            }
-                            onClick={() => navigate(`/incidents/${incidentId}/ioc-matches`)}
-                            disabled={!procDone}
-                        />
-
-                        {/* YARA Matches */}
-                        <ActionCard
-                            icon={<Bug className="w-5 h-5" />}
-                            title="YARA MATCHES"
-                            status={procDone ? "ready" : "unavailable"}
-                            description={
-                                procDone
-                                    ? "File-level malware signature detections"
-                                    : "Available after processing"
-                            }
-                            onClick={() => navigate(`/incidents/${incidentId}/yara-matches`)}
-                            disabled={!procDone}
-                        />
-
-                        {/* Attack Chains */}
-                        <ActionCard
-                            icon={<GitBranch className="w-5 h-5" />}
-                            title="ATTACK CHAINS"
-                            status={procDone ? "ready" : "unavailable"}
-                            description={
-                                procDone
-                                    ? "ATT&CK kill-chain reconstruction"
-                                    : "Available after processing"
-                            }
-                            onClick={() => navigate(`/incidents/${incidentId}/attack-chains`)}
-                            disabled={!procDone}
-                        />
-
-                        {/* ATT&CK Navigator Export */}
-                        <ActionCard
-                            icon={isDownloadingNavigator
-                                ? <Loader2 className="w-5 h-5 animate-spin" />
-                                : <Shield className="w-5 h-5" />
-                            }
-                            title="ATT&CK NAVIGATOR"
-                            status={procDone ? "ready" : "unavailable"}
-                            description={
-                                isDownloadingNavigator
-                                    ? "Generating Navigator layer…"
-                                    : procDone
-                                    ? "Export MITRE ATT&CK Navigator layer JSON"
-                                    : "Available after processing"
-                            }
-                            badge={
-                                procDone ? (
-                                    <span className="px-2 py-0.5 border border-primary/30 bg-primary/10 text-primary font-mono text-[10px] rounded-sm">
-                                        JSON
-                                    </span>
-                                ) : undefined
-                            }
-                            onClick={() => void handleNavigatorExport()}
-                            disabled={!procDone || isDownloadingNavigator}
-                        />
-
-                        {/* Chain of Custody */}
-                        <ActionCard
-                            icon={<FileText className="w-5 h-5" />}
-                            title="CHAIN OF CUSTODY"
-                            status={collectionDone ? "ready" : "unavailable"}
-                            description="Tamper-evident evidence handling log"
-                            onClick={() => navigate("/chain-of-custody")}
-                            disabled={!collectionDone}
-                        />
-
-                        {/* Attack Hypothesis Builder */}
-                        <ActionCard
-                            icon={<Target className="w-5 h-5" />}
-                            title="HYPOTHESES"
-                            status="ready"
-                            description="ATT&CK-framed investigation hypotheses"
-                            onClick={() => navigate(`/incidents/${incidentId}/hypotheses`)}
-                        />
-
-                        {/* Legal Holds */}
-                        <ActionCard
-                            icon={<Lock className="w-5 h-5" />}
-                            title="LEGAL HOLDS"
-                            status="ready"
-                            description="Retention policies and legal hold management"
-                            onClick={() => navigate(`/incidents/${incidentId}/legal-holds`)}
-                        />
-
-                        {/* Scheduled Collections */}
-                        <ActionCard
-                            icon={<Clock className="w-5 h-5" />}
-                            title="SCHEDULED"
-                            status="ready"
-                            description="Cron-based automated re-collection"
-                            onClick={() => navigate(`/incidents/${incidentId}/scheduled`)}
-                        />
-
-                        {/* SIEM Export */}
-                        <ActionCard
-                            icon={<Share2 className="w-5 h-5" />}
-                            title="SIEM EXPORT"
-                            status={procDone ? "ready" : "unavailable"}
-                            description={procDone ? "Push timeline to Splunk / Elastic / Timesketch" : "Available after processing"}
-                            onClick={() => navigate(`/incidents/${incidentId}/siem-export`)}
-                            disabled={!procDone}
-                        />
-
-                        {/* Collection Setup / Recollect */}
-                        <ActionCard
-                            icon={<Users className="w-5 h-5" />}
-                            title={
-                                incident.status === "COLLECTION_IN_PROGRESS"
-                                    ? "COLLECTION IN PROGRESS"
-                                    : "COLLECTION SETUP"
-                            }
-                            status={
-                                incident.status === "COLLECTION_IN_PROGRESS" ? "pending" :
-                                collectionDone ? "ready" : "ready"
-                            }
-                            description={
-                                incident.status === "COLLECTION_IN_PROGRESS"
-                                    ? "Agent collection is currently running"
-                                    : collectionDone
-                                    ? "Recollect or add new hosts to incident"
-                                    : "Configure and launch agent collection"
-                            }
-                            onClick={() =>
-                                incident.status === "COLLECTION_IN_PROGRESS"
-                                    ? navigate(`/incidents/${incidentId}/collect`)
-                                    : navigate(`/incidents/${incidentId}/setup`)
-                            }
-                        />
-
-                        {/* Push to Timesketch — admin only */}
-                        {userRole === "admin" && (
-                            <ActionCard
-                                icon={isPushingTs
-                                    ? <Loader2 className="w-5 h-5 animate-spin" />
-                                    : <Upload className="w-5 h-5" />
-                                }
-                                title="PUSH TO TIMESKETCH"
-                                status={procDone ? "ready" : "unavailable"}
-                                description={
-                                    isPushingTs
-                                        ? "Uploading timeline to Timesketch…"
-                                        : tsError
-                                        ? tsError
-                                        : procDone
-                                        ? "Export timeline.jsonl to connected Timesketch instance"
-                                        : "Available after processing pipeline completes"
-                                }
-                                onClick={() => void handlePushTimesketch()}
-                                disabled={!procDone || isPushingTs}
-                            />
-                        )}
-                    </div>
-                </TacticalPanel>
+                </div>
 
                 {/* ── Analysis Progress Timeline ───────────────────────────── */}
                 <TacticalPanel title="ANALYSIS PROGRESS">
@@ -1252,6 +597,12 @@ export default function IncidentHub() {
                     </div>
                 </TacticalPanel>
 
+                {/* ── Banners ────────────────────────────────────────────── */}
+                {stDone && lmCount > 0 && (
+                    <div className="flex items-center gap-3 p-3 border border-red-500/40 bg-red-500/5 rounded-sm cursor-pointer hover:bg-red-500/10 transition-colors" onClick={() => navigate(`/incidents/${incidentId}/super-timeline`)}>
+                        <AlertTriangle className="w-5 h-5 text-red-400 shrink-0" /><div className="flex-1 min-w-0"><div className="font-mono text-xs font-bold text-red-400">{lmCount} LATERAL MOVEMENT DETECTION{lmCount > 1 ? "S" : ""} — IMMEDIATE ATTENTION REQUIRED</div><div className="font-mono text-[10px] text-muted-foreground mt-0.5">{lmDetections?.map((d) => `${d.source_host} → ${d.target_host}`).join("   •   ")}</div></div><div className="font-mono text-xs text-red-400 flex items-center gap-1 shrink-0">VIEW <ArrowRight className="w-3 h-3" /></div>
+                    </div>
+                )}
             </div>
         </AppLayout>
     );
