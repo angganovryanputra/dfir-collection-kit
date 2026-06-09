@@ -7,6 +7,7 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { SearchInput } from "@/components/common/SearchInput";
 import { TableHeaderRow } from "@/components/common/TableHeaderRow";
+import { TablePagination } from "@/components/TablePagination";
 import {
   Folder,
   FileText,
@@ -58,6 +59,11 @@ interface EvidenceItemResponse {
   status: "COLLECTING" | "LOCKED" | "HASH_VERIFIED" | "EXPORTED";
   hash: string;
   collected_at: string;
+}
+
+interface EvidenceItemListOut {
+  items: EvidenceItemResponse[];
+  total: number;
 }
 
 interface DiagnosticsResponse {
@@ -155,6 +161,10 @@ export default function EvidenceVault() {
   const [isExporting, setIsExporting] = useState(false);
   const [selectedTimelineId, setSelectedTimelineId] = useState<string | null>(null);
 
+  // Pagination State
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+
   // Queries
   const { data: folders = [], isLoading: foldersLoading } = useQuery<EvidenceFolderResponse[], Error, EvidenceFolder[]>({
     queryKey: ["evidence-folders", incidentId ?? "all"],
@@ -175,11 +185,27 @@ export default function EvidenceVault() {
       return undefined;
   }, [folders, selectedFolderId, incidentId]);
 
-  const { data: evidenceItems = [], isLoading: itemsLoading } = useQuery<EvidenceItemResponse[], Error, Evidence[]>({
-    queryKey: ["evidence-items", selectedFolder?.incidentId],
-    queryFn: () => apiGet<EvidenceItemResponse[]>(`/evidence/items?incident_id=${selectedFolder?.incidentId}`),
+  // Reset pagination when folder or search changes
+  useEffect(() => {
+      setPage(1);
+  }, [selectedFolder?.id, searchQuery]);
+
+  const { data: evidenceData = { items: [], total: 0 }, isLoading: itemsLoading } = useQuery<EvidenceItemListOut, Error, { items: Evidence[], total: number }>({
+    queryKey: ["evidence-items", selectedFolder?.incidentId, page, pageSize, searchQuery],
+    queryFn: () => {
+        const params = new URLSearchParams({
+            incident_id: selectedFolder?.incidentId ?? "",
+            limit: String(pageSize),
+            offset: String((page - 1) * pageSize)
+        });
+        if (searchQuery.trim()) params.append("search", searchQuery.trim());
+        return apiGet<EvidenceItemListOut>(`/evidence/items?${params.toString()}`);
+    },
     enabled: !!selectedFolder,
-    select: (data) => data.map(mapEvidence),
+    select: (data) => ({
+        items: data.items.map(mapEvidence),
+        total: data.total
+    }),
     staleTime: 30_000,
   });
 
@@ -192,12 +218,6 @@ export default function EvidenceVault() {
         return (s === "RUNNING" || s === "PENDING") ? 5000 : 30000;
     },
   });
-
-  const filteredEvidence = useMemo(() => {
-      if (!searchQuery.trim()) return evidenceItems;
-      const q = searchQuery.toLowerCase();
-      return evidenceItems.filter((e) => e.name.toLowerCase().includes(q));
-  }, [evidenceItems, searchQuery]);
 
   const capacityPercent = diagnostics?.storage_used_percent ?? null;
   const formattedCapacity = capacityPercent !== null ? `${Math.round(capacityPercent)}%` : "--";
@@ -315,25 +335,41 @@ export default function EvidenceVault() {
                 </div>
 
                 <TacticalPanel title="ARTIFACT_MANIFEST" className="flex-1 flex flex-col min-h-0" status={itemsLoading ? "active" : "online"}>
-                    <div className="flex-1 overflow-auto pr-1 custom-scrollbar">
-                        <TableHeaderRow className="grid grid-cols-12 gap-4 py-2 px-4 border-b border-border/40 font-mono text-[10px] uppercase text-muted-foreground tracking-widest sticky top-0 bg-background/95 backdrop-blur z-10">
-                          <div className="col-span-4 text-left">Entity</div>
-                          <div className="col-span-2">Type</div>
-                          <div className="col-span-2">Size</div>
-                          <div className="col-span-2">Status</div>
-                          <div className="col-span-2 text-right">Ops</div>
-                        </TableHeaderRow>
-                        <div className="divide-y divide-border/10">
-                            {itemsLoading ? (
-                                <div className="flex items-center justify-center py-12 text-primary/40 font-mono text-xs animate-pulse">INDEXING FILESYSTEM...</div>
-                            ) : filteredEvidence.length === 0 ? (
-                                <div className="py-12 text-center font-mono text-xs text-muted-foreground uppercase opacity-40">No entries in manifest</div>
-                            ) : (
-                                filteredEvidence.map((e) => (
-                                    <EvidenceRow key={e.id} evidence={e} onExport={handleExportItem} onHunt={setSelectedTimelineId} isExporting={isExporting} />
-                                ))
-                            )}
+                    <div className="flex-1 flex flex-col min-h-0">
+                        <div className="flex-1 overflow-auto pr-1 custom-scrollbar">
+                            <TableHeaderRow className="grid grid-cols-12 gap-4 py-2 px-4 border-b border-border/40 font-mono text-[10px] uppercase text-muted-foreground tracking-widest sticky top-0 bg-background/95 backdrop-blur z-10">
+                              <div className="col-span-4 text-left">Entity</div>
+                              <div className="col-span-2">Type</div>
+                              <div className="col-span-2">Size</div>
+                              <div className="col-span-2">Status</div>
+                              <div className="col-span-2 text-right">Ops</div>
+                            </TableHeaderRow>
+                            <div className="divide-y divide-border/10">
+                                {itemsLoading && page === 1 ? (
+                                    <div className="flex items-center justify-center py-12 text-primary/40 font-mono text-xs animate-pulse">INDEXING FILESYSTEM...</div>
+                                ) : evidenceData.items.length === 0 ? (
+                                    <div className="py-12 text-center font-mono text-xs text-muted-foreground uppercase opacity-40">No entries in manifest</div>
+                                ) : (
+                                    evidenceData.items.map((e) => (
+                                        <EvidenceRow key={e.id} evidence={e} onExport={handleExportItem} onHunt={setSelectedTimelineId} isExporting={isExporting} />
+                                    ))
+                                )}
+                            </div>
                         </div>
+
+                        {/* Pagination */}
+                        {evidenceData.total > 0 && (
+                            <div className="border-t border-border/40 bg-secondary/10 px-2 py-1">
+                                <TablePagination
+                                    currentPage={page}
+                                    totalPages={Math.ceil(evidenceData.total / pageSize)}
+                                    totalItems={evidenceData.total}
+                                    itemsPerPage={pageSize}
+                                    onPageChange={setPage}
+                                    onItemsPerPageChange={setPageSize}
+                                />
+                            </div>
+                        )}
                     </div>
                 </TacticalPanel>
               </>

@@ -74,28 +74,37 @@ def _build_export_zip(incident_id: str, storage_path: str, max_bytes: int) -> Pa
 
     # Pre-check: sum uncompressed sizes before building so we fail fast
     # without wasting CPU and disk writing a ZIP that will be rejected.
-    files_to_zip = [
-        f for f in base_path.rglob("*")
-        if f.is_file() and export_dir not in f.parents
-    ]
-    total_uncompressed = sum(f.stat().st_size for f in files_to_zip)
-    if total_uncompressed > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Export too large ({total_uncompressed / (1024 ** 3):.1f} GiB uncompressed). "
-                   "Request a partial export or increase max_file_size_gb in settings.",
-        )
-
+    total_uncompressed = 0
     try:
         with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-            for file_path in files_to_zip:
+            # Using an iterator to avoid loading all paths into memory
+            for file_path in base_path.rglob("*"):
+                if not file_path.is_file():
+                    continue
+                if export_dir in file_path.parents:
+                    continue
+                
+                f_size = file_path.stat().st_size
+                if total_uncompressed + f_size > max_bytes:
+                     raise HTTPException(
+                        status_code=413,
+                        detail="Total export size too large. Request a partial export."
+                    )
+                
                 zip_file.write(file_path, file_path.relative_to(base_path))
+                total_uncompressed += f_size
+                
                 # Mid-build guard: abort if compressed output exceeds limit
                 if zip_path.stat().st_size > max_bytes:
                     raise HTTPException(status_code=413, detail="Export exceeds size limit")
     except HTTPException:
         zip_path.unlink(missing_ok=True)
         raise
+    except Exception as e:
+        zip_path.unlink(missing_ok=True)
+        logger.error(f"ZIP build failed: {e}")
+        raise HTTPException(status_code=500, detail="Internal export failure")
+
     _enforce_export_retention(export_dir, 5)
     return zip_path
 
