@@ -125,11 +125,11 @@ Three roles with decreasing permissions: `admin` > `operator` > `viewer`. `requi
 
 **Go registry** (`agent/internal/modules/registry.go`): `Init()` must be called once (in `main.go`) before creating the agent. It registers all module implementations. **The Go module IDs must be kept in sync with `MODULE_REGISTRY` in Python manually** — there is no automatic synchronization.
 
-**Active Go modules** live directly in `agent/internal/modules/*.go` (e.g., `windows_logs.go`, `windows_artifacts.go`, `linux_system.go`). The subdirectories `agent/internal/modules/windows/` and `agent/internal/modules/linux/` contain legacy files tagged `//go:build ignore` — do not edit them.
+**Active Go modules** live directly in `agent/internal/modules/*.go` (e.g., `windows_logs.go`, `windows_artifacts.go`, `linux_system.go`, `macos_modules.go`). The legacy subdirectories `agent/internal/modules/windows/` and `agent/internal/modules/linux/` (previously tagged `//go:build ignore`) have been removed — all module implementations now live at the package root.
 
 **Parallel executor** (`agent/internal/jobs/executor.go`): goroutine pool with configurable concurrency (default 4 workers from `ConcurrencyLimit` in `JobInstruction`). Best-effort: continues on module failure, only fails if ALL modules fail.
 
-**macOS**: `MODULE_REGISTRY` has 15 macOS module entries but **no Go implementation exists** for macOS modules. Do not add macOS to agent builds without implementing the Go modules.
+**macOS**: Fully implemented. `MODULE_REGISTRY` has 17 macOS module entries with matching Go implementations in `agent/internal/modules/macos_modules.go`. Each module guards with `requireMacOS()` (returns a `WarningError` on non-darwin) and downgrades artifact-copy failures (e.g. TCC / Full Disk Access denials) to warnings so a single protected artifact never fails the whole job. The Go registry and Python `MODULE_REGISTRY` are in sync at 131 module IDs total (windows + linux + macos).
 
 ### Frontend Patterns
 

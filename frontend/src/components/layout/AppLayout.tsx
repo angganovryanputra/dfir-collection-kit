@@ -113,7 +113,14 @@ const SystemHeartbeat = memo(() => (
     <HeartPulse className="w-3 h-3 text-primary animate-pulse" />
     <div className="flex gap-0.5 items-end h-3 w-12">
       {[40, 70, 45, 90, 30, 60, 50, 80].map((h, i) => (
-        <div key={i} className="w-1 bg-primary/40 rounded-t-[1px]" style={{ height: `${h}%` }} />
+        <div
+          key={i}
+          className={cn(
+            "w-1 bg-primary/40 rounded-t-[1px]",
+            `animate-bar-${i + 1}`
+          )}
+          style={{ height: `${h}%`, willChange: "transform" }}
+        />
       ))}
     </div>
     <span className="font-mono text-[9px] text-primary font-bold tracking-tighter">SYS.HEALTH</span>
@@ -148,19 +155,18 @@ export function AppLayout({
     return () => document.removeEventListener("keydown", down);
   }, []);
 
-  // Shared queries — React Query caches these. If Dashboard already fetched them
-  // with the same query key, no extra network request is made.
+  // Shared queries — React Query caches these.
   const { data: incidentsRaw = [] } = useQuery({
-    queryKey: ["incidents"],
-    queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>("/incidents?limit=1000"),
+    queryKey: ["incidents-minimal"],
+    queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>("/incidents?limit=10&status=ACTIVE"),
     select: (d) => d.items,
-    staleTime: 30_000,
+    staleTime: 60_000,
   });
 
   const { data: collectorsRaw = [] } = useQuery({
-    queryKey: ["collectors"],
+    queryKey: ["collectors-minimal"],
     queryFn: () => apiGet<CollectorResponse[]>("/collectors"),
-    staleTime: 15_000,
+    staleTime: 60_000,
   });
 
   const incidents = useMemo(() => incidentsRaw.map(mapIncident), [incidentsRaw]);
@@ -321,7 +327,12 @@ export function AppLayout({
                 OP.STATUS: ACTIVE
               </span>
               <div className="flex-1 overflow-hidden border-x border-border/40 px-4">
-                <span className="whitespace-nowrap inline-block text-primary/60">{tickerText}</span>
+                <div className="marquee-container">
+                  <div className="marquee-content">
+                    <span className="text-primary/60">{tickerText}</span>
+                    <span className="text-primary/60">{tickerText}</span>
+                  </div>
+                </div>
               </div>
             </div>
             <div className="flex items-center gap-4 border-l border-border pl-4">

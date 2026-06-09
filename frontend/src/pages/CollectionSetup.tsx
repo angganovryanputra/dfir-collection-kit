@@ -95,8 +95,7 @@ export default function CollectionSetup() {
         return;
       }
       try {
-        const { items: incidents } = await apiGet<{ total: number; items: IncidentSummary[] }>("/incidents?limit=1000");
-        const current = incidents.find((i) => i.id === incidentId) ?? null;
+        const current = await apiGet<IncidentSummary>(`/incidents/${incidentId}`);
         setIncident(current);
 
         // Detect OS from first target endpoint

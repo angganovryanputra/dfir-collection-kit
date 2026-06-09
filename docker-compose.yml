@@ -97,7 +97,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: dfir-celery-worker
-    command: celery -A app.worker.celery_app worker --loglevel=info --pool=solo
+    command: celery -A app.worker.celery_app worker --loglevel=info --pool=prefork --concurrency=4
     security_opt:
       - no-new-privileges:true
     cap_drop:

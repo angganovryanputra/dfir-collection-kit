@@ -39,6 +39,17 @@ func runMacOSCmd(ctx context.Context, outputPath string, name string, args ...st
 	return nil
 }
 
+// copyMacOSArtifact copies a source artifact best-effort: a copy failure
+// (commonly a TCC / Full Disk Access denial) is downgraded to a WarningError
+// so a single protected artifact never fails the whole collection job.
+func copyMacOSArtifact(ctx context.Context, src, out string) error {
+	if err := CopyFileNativeBackup(ctx, src, out); err != nil {
+		_ = WriteNotFound(out, fmt.Sprintf("copy failed for %s (may require Full Disk Access)", src))
+		return NewWarningError(fmt.Sprintf("copy failed for %s: %v", src, err))
+	}
+	return nil
+}
+
 // ── Volatile ──────────────────────────────────────────────────────────────────
 
 type MacOSProcessList struct{ Module }
@@ -98,7 +109,7 @@ func (m *MacOSInstallLog) Run(ctx context.Context, _ ModuleContext, _ map[string
 	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
 		return fmt.Errorf("mkdir failed: %w", err)
 	}
-	return CopyFileNativeBackup(ctx, src, out)
+	return copyMacOSArtifact(ctx, src, out)
 }
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -196,7 +207,7 @@ func (m *MacOSBashHistory) Run(ctx context.Context, _ ModuleContext, _ map[strin
 	if mkdirErr := os.MkdirAll(filepath.Dir(out), 0755); mkdirErr != nil {
 		return fmt.Errorf("mkdir failed: %w", mkdirErr)
 	}
-	return CopyFileNativeBackup(ctx, src, out)
+	return copyMacOSArtifact(ctx, src, out)
 }
 
 type MacOSZshHistory struct{ Module }
@@ -217,7 +228,7 @@ func (m *MacOSZshHistory) Run(ctx context.Context, _ ModuleContext, _ map[string
 	if mkdirErr := os.MkdirAll(filepath.Dir(out), 0755); mkdirErr != nil {
 		return fmt.Errorf("mkdir failed: %w", mkdirErr)
 	}
-	return CopyFileNativeBackup(ctx, src, out)
+	return copyMacOSArtifact(ctx, src, out)
 }
 
 type MacOSInstalledApps struct{ Module }
@@ -252,7 +263,11 @@ func (m *MacOSSafariHistory) Run(ctx context.Context, _ ModuleContext, _ map[str
 	if mkdirErr := os.MkdirAll(filepath.Dir(out), 0755); mkdirErr != nil {
 		return fmt.Errorf("mkdir failed: %w", mkdirErr)
 	}
-	return CopyFileNativeBackup(ctx, src, out)
+	if copyErr := CopyFileNativeBackup(ctx, src, out); copyErr != nil {
+		_ = WriteNotFound(out, "Safari History.db copy failed (requires Full Disk Access)")
+		return NewWarningError(fmt.Sprintf("macos_safari_history: %v", copyErr))
+	}
+	return nil
 }
 
 type MacOSChromeHistory struct{ Module }
@@ -296,7 +311,7 @@ func (m *MacOSQuarantineEvents) Run(ctx context.Context, _ ModuleContext, _ map[
 	if mkdirErr := os.MkdirAll(filepath.Dir(out), 0755); mkdirErr != nil {
 		return fmt.Errorf("mkdir failed: %w", mkdirErr)
 	}
-	return CopyFileNativeBackup(ctx, src, out)
+	return copyMacOSArtifact(ctx, src, out)
 }
 
 type MacOSSSHKnownHosts struct{ Module }
@@ -317,5 +332,5 @@ func (m *MacOSSSHKnownHosts) Run(ctx context.Context, _ ModuleContext, _ map[str
 	if mkdirErr := os.MkdirAll(filepath.Dir(out), 0755); mkdirErr != nil {
 		return fmt.Errorf("mkdir failed: %w", mkdirErr)
 	}
-	return CopyFileNativeBackup(ctx, src, out)
+	return copyMacOSArtifact(ctx, src, out)
 }

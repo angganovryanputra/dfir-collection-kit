@@ -25,6 +25,7 @@ from app.schemas.evidence import (
     EvidenceFolderCreate,
     EvidenceFolderOut,
     EvidenceItemCreate,
+    EvidenceItemListOut,
     EvidenceItemOut,
 )
 from app.schemas.evidence_export import EvidenceExportRequest, EvidenceExportResponse

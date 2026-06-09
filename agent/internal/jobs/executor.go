@@ -141,10 +141,13 @@ func (e *Executor) Run(
 		}
 	}()
 
-	// Validate all modules before starting
+	// Validate all modules before starting.
+	// Custom modules carry a shell Command and are not in the built-in
+	// registry — they are executed directly by executeModule, so they must
+	// not be rejected here.
 	missingModules := []string{}
 	for _, module := range moduleList {
-		if !modules.HasModule(module.ModuleID) {
+		if module.Command == "" && !modules.HasModule(module.ModuleID) {
 			missingModules = append(missingModules, module.ModuleID)
 		}
 	}

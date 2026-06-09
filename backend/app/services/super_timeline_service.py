@@ -32,25 +32,13 @@ def _detect_lateral_movement(
     incident_id: str,
     super_timeline_id: str,
 ) -> list[dict[str, Any]]:
-    """Lightweight lateral movement heuristics on merged events via DuckDB queries.
+    """High-performance lateral movement detection using pure SQL in DuckDB.
 
     Detection types:
-
-    - ``account_pivot``: same username seen on 2+ distinct hosts (from EVTX
-      logon events) within a 6-hour window.
-    - ``process_spread``: same process name seen on 2+ hosts within a 15-minute
-      window (from Prefetch/Amcache artefacts).
-
-    Args:
-        duckdb_path: Path to the generated DuckDB database.
-        incident_id: Parent incident identifier (stored on each detection).
-        super_timeline_id: Parent SuperTimeline identifier.
-
-    Returns:
-        Deduplicated list of detection dicts (capped at 100).
+    - `account_pivot`: same username seen on 2+ distinct hosts within a 6-hour window.
+    - `process_spread`: same process name seen on 2+ hosts within a 15-minute window.
     """
     import duckdb
-    from collections import defaultdict
 
     detections: list[dict[str, Any]] = []
 
@@ -61,180 +49,124 @@ def _detect_lateral_movement(
         if host_count < 2:
             return detections
 
-        # ── 1. Account pivot: same username on 2+ hosts (EVTX logon events) ──────
-        evtx_events = con.execute("""
-            SELECT host, event_dt, message 
-            FROM timeline_events 
-            WHERE source_short IN ('EVTX', 'WEVT', 'WINDOWS EVENT LOG')
-        """).fetchall()
-
-        actor_host_times: dict[str, dict[str, list[datetime]]] = defaultdict(
-            lambda: defaultdict(list)
-        )
-
-        for host, dt, msg in evtx_events:
-            msg_str = str(msg or "")
-            # Extract username patterns common in Windows event messages
-            for marker in (
-                "TargetUserName:",
-                "SubjectUserName:",
-                "AccountName:",
-                "UserName:",
-            ):
-                idx = msg_str.find(marker)
-                if idx == -1:
-                    continue
-                remainder = msg_str[idx + len(marker):].lstrip()
-                actor = remainder.split()[0].rstrip(",.;") if remainder.split() else ""
-                # Skip built-in accounts and empties
-                if not actor or actor in (
-                    "-",
-                    "SYSTEM",
-                    "ANONYMOUS LOGON",
-                    "LOCAL SERVICE",
-                    "NETWORK SERVICE",
-                ):
-                    continue
-                if actor.endswith("$"):  # skip machine accounts
-                    continue
-                actor_host_times[actor][host].append(dt or datetime.now(timezone.utc))
-
-        for actor, host_times in actor_host_times.items():
-            if len(host_times) < 2:
-                continue
-            all_host_dts: list[tuple[str, datetime]] = []
-            for host, dts in host_times.items():
-                for dt in dts:
-                    all_host_dts.append((host, dt))
-            all_host_dts.sort(key=lambda x: x[1])
-
-            # Find pivot: same actor on different hosts within 6 hours
-            for i, (src_host, src_dt) in enumerate(all_host_dts):
-                window_end = src_dt + timedelta(hours=6)
-                targets = {
-                    h
-                    for h, dt in all_host_dts[i + 1:]
-                    if h != src_host and dt <= window_end
-                }
-                if not targets:
-                    continue
-                for tgt_host in targets:
-                    tgt_dts = [
-                        dt
-                        for h, dt in all_host_dts
-                        if h == tgt_host and src_dt <= dt <= window_end
-                    ]
-                    detections.append({
-                        "id": str(uuid4()),
-                        "incident_id": incident_id,
-                        "super_timeline_id": super_timeline_id,
-                        "detection_type": "account_pivot",
-                        "source_host": src_host,
-                        "target_host": tgt_host,
-                        "actor": actor,
-                        "first_seen": src_dt,
-                        "last_seen": max(tgt_dts) if tgt_dts else src_dt,
-                        "event_count": len(tgt_dts) + 1,
-                        "confidence": 0.75,
-                        "details": {
-                            "marker": "EVTX logon event",
-                            "window_hours": 6,
-                            "target_host_events": len(tgt_dts),
-                        },
-                    })
-
-        # ── 2. Process spread: same process name on 2+ hosts in 15-min window ────
-        proc_events = con.execute("""
-            SELECT host, event_dt, message 
-            FROM timeline_events 
-            WHERE source_short IN ('PREFETCH', 'AMCACHE')
-        """).fetchall()
-
-        proc_host_times: dict[str, dict[str, list[datetime]]] = defaultdict(
-            lambda: defaultdict(list)
-        )
-
-        for host, dt, msg in proc_events:
-            msg_str = str(msg or "").lower()
-            # Extract executable name from message
-            for ext in (".exe", ".dll", ".bat", ".ps1", ".vbs"):
-                idx = msg_str.rfind(ext)
-                if idx != -1:
-                    start = max(0, msg_str.rfind(" ", 0, idx) + 1)
-                    proc = msg_str[start:idx + len(ext)].strip().lstrip("\\").lstrip("/")
-                    # Skip common Windows processes
-                    if proc in (
-                        "svchost.exe",
-                        "explorer.exe",
-                        "conhost.exe",
-                        "lsass.exe",
-                        "csrss.exe",
-                        "wininit.exe",
-                        "winlogon.exe",
-                        "services.exe",
-                    ):
-                        continue
-                    if dt:
-                        proc_host_times[proc][host].append(dt)
-                    break
-
-        WINDOW = timedelta(minutes=15)
-        for proc, host_times in proc_host_times.items():
-            if len(host_times) < 2:
-                continue
-            all_dts: list[tuple[str, datetime]] = sorted(
-                [(h, dt) for h, dts in host_times.items() for dt in dts],
-                key=lambda x: x[1],
+        # ── 1. Account pivot: SQL-based window analysis ───────────────────────
+        # This query finds instances where the same actor logs onto different hosts
+        # within a 6-hour sliding window.
+        pivot_query = """
+            WITH evtx_logons AS (
+                SELECT 
+                    host, 
+                    event_dt,
+                    COALESCE(
+                        regexp_extract(message, '(?:TargetUserName|SubjectUserName|AccountName|UserName):\\s*([^\\s,.;]+)', 1),
+                        ''
+                    ) as actor
+                FROM timeline_events 
+                WHERE source_short IN ('EVTX', 'WEVT', 'WINDOWS EVENT LOG')
+                  AND actor != ''
+                  AND actor NOT IN ('-', 'SYSTEM', 'ANONYMOUS LOGON', 'LOCAL SERVICE', 'NETWORK SERVICE')
+                  AND NOT actor ENDS WITH '$'
+            ),
+            pivots AS (
+                SELECT 
+                    a1.actor,
+                    a1.host as source_host,
+                    a2.host as target_host,
+                    a1.event_dt as first_seen,
+                    a2.event_dt as last_seen
+                FROM evtx_logons a1
+                JOIN evtx_logons a2 ON a1.actor = a2.actor 
+                                    AND a1.host != a2.host
+                                    AND a2.event_dt >= a1.event_dt 
+                                    AND a2.event_dt <= a1.event_dt + INTERVAL 6 HOUR
             )
-            for i, (src_host, src_dt) in enumerate(all_dts):
-                targets = {
-                    h
-                    for h, dt in all_dts[i + 1:]
-                    if h != src_host and dt - src_dt <= WINDOW
-                }
-                if not targets:
-                    continue
-                for tgt_host in targets:
-                    tgt_dts = [
-                        dt
-                        for h, dt in all_dts
-                        if h == tgt_host and src_dt <= dt <= src_dt + WINDOW
-                    ]
-                    detections.append({
-                        "id": str(uuid4()),
-                        "incident_id": incident_id,
-                        "super_timeline_id": super_timeline_id,
-                        "detection_type": "process_spread",
-                        "source_host": src_host,
-                        "target_host": tgt_host,
-                        "actor": proc,
-                        "first_seen": src_dt,
-                        "last_seen": max(tgt_dts) if tgt_dts else src_dt,
-                        "event_count": len(tgt_dts) + 1,
-                        "confidence": 0.65,
-                        "details": {
-                            "process": proc,
-                            "window_minutes": 15,
-                        },
-                    })
+            SELECT 
+                actor, source_host, target_host, MIN(first_seen), MAX(last_seen), COUNT(*)
+            FROM pivots
+            GROUP BY actor, source_host, target_host
+            LIMIT 100
+        """
+        
+        pivot_results = con.execute(pivot_query).fetchall()
+        for actor, src, tgt, first, last, count in pivot_results:
+            detections.append({
+                "id": str(uuid4()),
+                "incident_id": incident_id,
+                "super_timeline_id": super_timeline_id,
+                "detection_type": "account_pivot",
+                "source_host": src,
+                "target_host": tgt,
+                "actor": actor,
+                "first_seen": first,
+                "last_seen": last,
+                "event_count": count,
+                "confidence": 0.75,
+                "details": {
+                    "marker": "EVTX logon event",
+                    "window_hours": 6,
+                },
+            })
+
+        # ── 2. Process spread: SQL-based window analysis ──────────────────────
+        # Find same executable name appearing on multiple hosts in a 15-min window.
+        proc_query = """
+            WITH procs AS (
+                SELECT 
+                    host, 
+                    event_dt,
+                    lower(regexp_extract(message, '([^\\\\/\\s]+\\.(?:exe|dll|bat|ps1|vbs))', 1)) as proc
+                FROM timeline_events 
+                WHERE source_short IN ('PREFETCH', 'AMCACHE')
+                  AND proc != ''
+                  AND proc NOT IN (
+                    'svchost.exe', 'explorer.exe', 'conhost.exe', 'lsass.exe', 
+                    'csrss.exe', 'wininit.exe', 'winlogon.exe', 'services.exe'
+                  )
+            ),
+            spreads AS (
+                SELECT 
+                    p1.proc,
+                    p1.host as source_host,
+                    p2.host as target_host,
+                    p1.event_dt as first_seen,
+                    p2.event_dt as last_seen
+                FROM procs p1
+                JOIN procs p2 ON p1.proc = p2.proc 
+                               AND p1.host != p2.host
+                               AND p2.event_dt >= p1.event_dt 
+                               AND p2.event_dt <= p1.event_dt + INTERVAL 15 MINUTE
+            )
+            SELECT 
+                proc, source_host, target_host, MIN(first_seen), MAX(last_seen), COUNT(*)
+            FROM spreads
+            GROUP BY proc, source_host, target_host
+            LIMIT 100
+        """
+        
+        proc_results = con.execute(proc_query).fetchall()
+        for proc, src, tgt, first, last, count in proc_results:
+            detections.append({
+                "id": str(uuid4()),
+                "incident_id": incident_id,
+                "super_timeline_id": super_timeline_id,
+                "detection_type": "process_spread",
+                "source_host": src,
+                "target_host": tgt,
+                "actor": proc,
+                "first_seen": first,
+                "last_seen": last,
+                "event_count": count,
+                "confidence": 0.65,
+                "details": {
+                    "process": proc,
+                    "window_minutes": 15,
+                },
+            })
+
     finally:
         con.close()
 
-    # Deduplicate: keep highest-confidence detection per (src_host, tgt_host, actor, type)
-    seen: set[tuple[str, str, str | None, str]] = set()
-    deduped: list[dict[str, Any]] = []
-    for det in sorted(detections, key=lambda d: d["confidence"], reverse=True):
-        key = (
-            det["source_host"],
-            det["target_host"],
-            det.get("actor"),
-            det["detection_type"],
-        )
-        if key not in seen:
-            seen.add(key)
-            deduped.append(det)
-
-    return deduped[:100]  # cap at 100 detections
+    return detections[:100]
 
 
 # ── Beaconing Detection ────────────────────────────────────────────────────────
@@ -245,119 +177,86 @@ def _detect_beaconing(
     incident_id: str,
     super_timeline_id: str,
 ) -> list[dict[str, Any]]:
-    """Detect C2 beaconing: same external IP contacted at regular intervals from the same host.
-
-    Algorithm (DuckDB-based):
-    - Query EVTX/SYSMON events with extractable DestinationIp in the extra JSON
-    - Group by (host, dest_ip) — skip RFC-1918 / private addresses
-    - For groups with ≥ 5 connections, compute inter-connection intervals
-    - Accept groups where coefficient of variation (stdev/mean) < 0.3 (regular pattern)
-    - Confidence scales with regularity and connection count
-
-    Args:
-        duckdb_path: Path to the merged DuckDB database.
-        incident_id: Parent incident identifier.
-        super_timeline_id: Parent SuperTimeline identifier.
-
-    Returns:
-        Beaconing detection dicts sorted by confidence, capped at 50.
-    """
+    """Detect C2 beaconing using DuckDB for windowing and Python for statistics."""
     import duckdb
 
     detections: list[dict[str, Any]] = []
 
     con = duckdb.connect(str(duckdb_path), read_only=True)
     try:
-        # Pull network events with their timestamps
-        rows = con.execute("""
-            SELECT host, event_dt,
-                   json_extract_string(extra, '$.DestinationIp')  AS dest_ip1,
-                   json_extract_string(extra, '$.dest_ip')         AS dest_ip2,
-                   json_extract_string(extra, '$.destination_ip')  AS dest_ip3,
-                   json_extract_string(extra, '$.DestIp')          AS dest_ip4
-            FROM timeline_events
-            WHERE source_short IN ('EVTX', 'SYSMON', 'WEVT')
-              AND event_dt IS NOT NULL
-            ORDER BY host, event_dt
+        # Pre-filter and group network events in SQL to minimize data transfer
+        # We look for external IPs only.
+        beacon_candidates = con.execute("""
+            WITH net_events AS (
+                SELECT 
+                    host, 
+                    event_dt,
+                    COALESCE(
+                        json_extract_string(extra, '$.DestinationIp'),
+                        json_extract_string(extra, '$.dest_ip'),
+                        json_extract_string(extra, '$.destination_ip'),
+                        json_extract_string(extra, '$.DestIp')
+                    ) as dest_ip
+                FROM timeline_events
+                WHERE source_short IN ('EVTX', 'SYSMON', 'WEVT')
+                  AND event_dt IS NOT NULL
+            )
+            SELECT host, dest_ip, list(event_dt ORDER BY event_dt) as times
+            FROM net_events
+            WHERE dest_ip IS NOT NULL 
+              AND dest_ip != ''
+              -- Basic exclusion for private IPs (could be more robust with inet functions)
+              AND NOT (dest_ip LIKE '10.%' OR dest_ip LIKE '192.168.%' OR dest_ip LIKE '172.1[6-9].%' OR dest_ip LIKE '172.2[0-9].%' OR dest_ip LIKE '172.3[0-1].%' OR dest_ip = '127.0.0.1')
+            GROUP BY host, dest_ip
+            HAVING count(*) >= 5
         """).fetchall()
-    except Exception:
+    except Exception as exc:
+        logger.warning("Beaconing SQL failed: %s", exc)
         con.close()
         return detections
 
-    # Build (host, dest_ip) → sorted list of datetimes
-    from collections import defaultdict
-
-    host_ip_times: dict[tuple[str, str], list[datetime]] = defaultdict(list)
-
-    for row in rows:
-        host, dt, *ip_candidates = row
-        dest_ip: str | None = None
-        for candidate in ip_candidates:
-            if candidate and candidate.strip():
-                dest_ip = candidate.strip()
-                break
-        if not dest_ip:
+    for host, dest_ip, times in beacon_candidates:
+        if len(times) < 5:
             continue
-        # Skip private / link-local / loopback
-        try:
-            addr = ipaddress.ip_address(dest_ip)
-            if addr.is_private or addr.is_loopback or addr.is_link_local:
-                continue
-        except ValueError:
-            continue
-        if isinstance(dt, datetime):
-            event_dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-        else:
-            try:
-                event_dt = datetime.fromisoformat(str(dt)).replace(tzinfo=timezone.utc)
-            except Exception:
-                continue
-        host_ip_times[(str(host), dest_ip)].append(event_dt)
-
-    con.close()
-
-    _MIN_CONNS = 5
-    for (host, dest_ip), times in host_ip_times.items():
-        if len(times) < _MIN_CONNS:
-            continue
-        sorted_times = sorted(times)
+            
         intervals = [
-            (sorted_times[i + 1] - sorted_times[i]).total_seconds()
-            for i in range(len(sorted_times) - 1)
+            (times[i + 1] - times[i]).total_seconds()
+            for i in range(len(times) - 1)
         ]
         if not intervals:
             continue
+            
         mean_s = statistics.mean(intervals)
         if mean_s < 1.0:
             continue
+            
         stdev_s = statistics.stdev(intervals) if len(intervals) > 1 else 0.0
         cv = stdev_s / mean_s if mean_s > 0 else 1.0
-        if cv >= 0.3:
-            continue
-        confidence = round(
-            min(0.95, 0.65 + (0.3 - cv) / 0.3 * 0.20 + min(len(times), 30) / 300), 2
-        )
-        detections.append({
-            "id": str(uuid4()),
-            "incident_id": incident_id,
-            "super_timeline_id": super_timeline_id,
-            "detection_type": "beaconing",
-            "source_host": host,
-            "target_host": dest_ip,
-            "actor": dest_ip,
-            "first_seen": sorted_times[0],
-            "last_seen": sorted_times[-1],
-            "event_count": len(times),
-            "confidence": confidence,
-            "details": {
-                "dest_ip": dest_ip,
-                "mean_interval_seconds": round(mean_s, 1),
-                "interval_minutes": round(mean_s / 60, 2),
-                "coefficient_of_variation": round(cv, 3),
-                "connection_count": len(times),
-            },
-        })
+        
+        if cv < 0.3:
+            confidence = round(
+                min(0.95, 0.65 + (0.3 - cv) / 0.3 * 0.20 + min(len(times), 30) / 300), 2
+            )
+            detections.append({
+                "id": str(uuid4()),
+                "incident_id": incident_id,
+                "super_timeline_id": super_timeline_id,
+                "detection_type": "beaconing",
+                "source_host": host,
+                "target_host": dest_ip,
+                "actor": dest_ip,
+                "first_seen": times[0],
+                "last_seen": times[-1],
+                "event_count": len(times),
+                "confidence": confidence,
+                "details": {
+                    "dest_ip": dest_ip,
+                    "mean_interval_seconds": round(mean_s, 1),
+                    "coefficient_of_variation": round(cv, 3),
+                },
+            })
 
+    con.close()
     detections.sort(key=lambda d: d["confidence"], reverse=True)
     return detections[:50]
 
@@ -369,23 +268,7 @@ async def build_super_timeline_background(
     incident_id: str,
     evidence_base_path: Path,
 ) -> None:
-    """Background runner: merge all per-host timelines and run lateral movement detection.
-
-    Finds all ``DONE`` ProcessingJobs for the incident, loads each
-    ``timeline.jsonl``, stamps events with host/job_id, merges into a single
-    DuckDB store via high-performance JSONL bulk loading, runs lateral movement heuristics, 
-    and persists results to PostgreSQL.
-
-    Called by the Celery task via ``asyncio.run()``.
-
-    Args:
-        incident_id: The incident whose timelines should be merged.
-        evidence_base_path: Root directory where evidence folders live
-            (``EVIDENCE_STORAGE_PATH``).
-
-    Raises:
-        Exception: Re-raises any unexpected error after recording FAILED status.
-    """
+    """Background runner: merge all per-host timelines and run lateral movement detection."""
     import duckdb
     from sqlalchemy import select
 
@@ -436,20 +319,13 @@ async def build_super_timeline_background(
                 .where(ProcessingJob.status == "DONE")
             )
             proc_jobs = list(result.scalars().all())
-            logger.info(
-                "SuperTimeline: found %d completed jobs for incident %s",
-                len(proc_jobs),
-                incident_id,
-            )
-
+            
             for proc_job in proc_jobs:
-                # Get the evidence job to find the agent
                 job_result = await db.execute(select(Job).where(Job.id == proc_job.job_id))
                 job = job_result.scalar_one_or_none()
                 if not job:
                     continue
 
-                # Get hostname from device; fall back to agent_id then job_id
                 hostname = job.agent_id or proc_job.job_id
                 if job.agent_id:
                     dev_result = await db.execute(
@@ -459,7 +335,6 @@ async def build_super_timeline_background(
                     if device:
                         hostname = device.hostname
 
-                # Find timeline.jsonl produced by the processing pipeline
                 timeline_path = (
                     evidence_base_path
                     / incident_id
@@ -467,14 +342,9 @@ async def build_super_timeline_background(
                     / "timeline"
                     / "timeline.jsonl"
                 )
-                if not timeline_path.exists():
-                    logger.warning(
-                        "SuperTimeline: timeline not found at %s", timeline_path
-                    )
-                    continue
-                
-                timeline_sources.append((hostname, proc_job.job_id, timeline_path))
-                host_set.add(hostname)
+                if timeline_path.exists():
+                    timeline_sources.append((hostname, proc_job.job_id, timeline_path))
+                    host_set.add(hostname)
 
         if not timeline_sources:
             async with AsyncSessionLocal() as db:
@@ -483,46 +353,42 @@ async def build_super_timeline_background(
                     suptl_id,
                     status="FAILED",
                     completed_at=datetime.now(timezone.utc),
-                    error_message=(
-                        "No timeline events found — ensure processing pipeline has "
-                        "completed for all jobs"
-                    ),
+                    error_message="No timeline events found",
                 )
                 await db.commit()
             return
 
         # ── Build DuckDB store ─────────────────────────────────────────────────
         duckdb_path = evidence_base_path / incident_id / "super_timeline.duckdb"
-        logger.info("SuperTimeline: building DuckDB store at %s", duckdb_path)
-
+        
         def _bulk_ingest_duckdb() -> int:
             duckdb_path.parent.mkdir(parents=True, exist_ok=True)
             if duckdb_path.exists():
-                duckdb_path.unlink()  # start fresh on rebuild
+                duckdb_path.unlink()
 
             con = duckdb.connect(str(duckdb_path))
             try:
                 con.execute("CREATE SEQUENCE row_id_seq")
                 con.execute("""
-                    CREATE TABLE timeline_events (
-                        row_id         BIGINT,
-                        host           VARCHAR,
-                        job_id         VARCHAR,
-                        event_dt       TIMESTAMP,
-                        message        VARCHAR,
-                        timestamp_desc VARCHAR,
-                        source         VARCHAR,
-                        source_short   VARCHAR,
-                        incident_id    VARCHAR,
-                        extra          JSON
-                    )
-                """)
+                    CREATE TABLE timeline_events AS 
+                    SELECT 
+                        nextval('row_id_seq') as row_id,
+                        CAST('' AS VARCHAR) as host,
+                        CAST('' AS VARCHAR) as job_id,
+                        TRY_CAST(COALESCE(json->>'datetime', json->>'timestamp') AS TIMESTAMP) as event_dt,
+                        substring(CAST(json->>'message' AS VARCHAR), 1, 2000) as message,
+                        json->>'timestamp_desc' as timestamp_desc,
+                        json->>'source' as source,
+                        json->>'source_short' as source_short,
+                        json->>'incident_id' as incident_id,
+                        json as extra
+                    FROM read_json_objects(?) WHERE 1=0
+                """, [str(timeline_sources[0][2])])
 
-                # Ingest each file natively via DuckDB C++ backend
+                # High-performance bulk ingestion
                 for h_name, j_id, tl_path in timeline_sources:
-                    logger.info("SuperTimeline: ingesting %s (host=%s)", tl_path, h_name)
                     con.execute("""
-                        INSERT INTO timeline_events (row_id, host, job_id, event_dt, message, timestamp_desc, source, source_short, incident_id, extra)
+                        INSERT INTO timeline_events
                         SELECT 
                             nextval('row_id_seq'),
                             ?,
@@ -537,7 +403,6 @@ async def build_super_timeline_background(
                         FROM read_json_objects(?)
                     """, [h_name, j_id, str(tl_path)])
 
-                # Create indexes after ingestion for speed
                 con.execute("CREATE INDEX idx_st_dt   ON timeline_events(event_dt)")
                 con.execute("CREATE INDEX idx_st_host ON timeline_events(host)")
                 con.execute("CREATE INDEX idx_st_src  ON timeline_events(source_short)")

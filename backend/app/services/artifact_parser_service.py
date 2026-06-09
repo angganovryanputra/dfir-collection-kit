@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import uuid
+from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,12 +38,7 @@ async def _pipeline_log(
     message: str,
     level: str = "info",
 ) -> None:
-    """Persist a pipeline progress message to collection_logs.
-
-    These entries are polled by the ProcessingStatus page and displayed in the
-    processing terminal so analysts see what EZ Tools, Sigma detection, and
-    timeline export are doing in real time.
-    """
+    """Persist a pipeline progress message to collection_logs."""
     from app.crud.collection_log import create_log_entries, get_last_sequence
 
     try:
@@ -79,7 +75,7 @@ def _clear_phase_markers(base_path: Path) -> None:
             except OSError as exc:
                 logger.warning("Failed to remove phase marker %d: %s", phase, exc)
 
-# EZ Tools DLL paths relative to ez_tools_path root directory
+# EZ Tools DLL paths
 _EZ_TOOLS_DLLS: dict[str, str] = {
     "EvtxECmd": "EvtxECmd/EvtxECmd.dll",
     "MFTECmd": "MFTECmd/MFTECmd.dll",
@@ -120,53 +116,6 @@ async def _run_subprocess(cmd: list[str]) -> tuple[bool, str]:
         return False, str(exc)[:500]
 
 
-async def _run_parsing_phase_with_logs(
-    extracted_dir: Path,
-    parsed_dir: Path,
-    ez_tools_path: str,
-    db: AsyncSession,
-    incident_id: str,
-) -> dict[str, int]:
-    """Wrap _run_parsing_phase with per-tool progress log entries."""
-    # Log which artifact types exist before starting
-    srudb = extracted_dir / "artifacts" / "windows" / "srum" / "SRUDB.dat"
-    artifact_counts: dict[str, int] = {
-        "EVTX": len(list(extracted_dir.rglob("*.evtx"))),
-        "MFT": len([f for f in extracted_dir.rglob("*") if f.name in ("MFT", "$MFT")]),
-        "Registry (.hve)": len(list(extracted_dir.rglob("*.hve"))),
-        "Prefetch (.pf)": len(list(extracted_dir.rglob("*.pf"))),
-        "LNK (.lnk)": len(list(extracted_dir.rglob("*.lnk"))),
-        "JumpLists": len(
-            list(extracted_dir.rglob("*.automaticDestinations-ms"))
-            + list(extracted_dir.rglob("*.customDestinations-ms"))
-        ),
-        "ShellBag hives": len(list(extracted_dir.rglob("UsrClass.dat"))),
-        "RecycleBin items": len(list(extracted_dir.rglob("$I*"))),
-        "SRUDB.dat": 1 if srudb.exists() else 0,
-    }
-    for artifact, count in artifact_counts.items():
-        if count > 0:
-            await _pipeline_log(db, incident_id, f"  Found {count} {artifact} file(s) to parse")
-
-    stats = await _run_parsing_phase(extracted_dir, parsed_dir, ez_tools_path)
-
-    # Log results per tool.
-    # count == -1 is a sentinel: tool was configured but its DLL was not found.
-    for tool, count in stats.items():
-        if count > 0:
-            await _pipeline_log(db, incident_id, f"  ✓ {tool}: processed {count} file(s)", "success")
-        elif count == -1:
-            await _pipeline_log(
-                db, incident_id,
-                f"  ✗ {tool}: path configured but DLL not found — check EZ Tools path in Settings",
-                "error",
-            )
-        else:
-            await _pipeline_log(db, incident_id, f"  ⚠ {tool}: no matching files", "warning")
-
-    return stats
-
-
 def _tool_dll(tool_name: str, ez_tools_path: str) -> Path | None:
     """Return Path to EZ Tool DLL if it exists, else None."""
     if not ez_tools_path:
@@ -178,840 +127,308 @@ def _tool_dll(tool_name: str, ez_tools_path: str) -> Path | None:
     return dll if dll.exists() else None
 
 
+# ── Single-pass discovery ──────────────────────────────────────────────────────
+
+class ArtifactCache:
+    """Cache of discovered files to avoid multiple filesystem walks."""
+    def __init__(self, root: Path):
+        self.root = root
+        self.files_by_ext: dict[str, list[Path]] = defaultdict(list)
+        self.files_by_name: dict[str, list[Path]] = defaultdict(list)
+        self._populated = False
+
+    def populate(self):
+        if self._populated:
+            return
+        for p in self.root.rglob("*"):
+            if p.is_file():
+                self.files_by_ext[p.suffix.lower()].append(p)
+                self.files_by_name[p.name.upper()].append(p)
+        self._populated = True
+
+    def get_by_ext(self, ext: str) -> list[Path]:
+        self.populate()
+        return self.files_by_ext.get(ext.lower(), [])
+
+    def get_by_name(self, name: str) -> list[Path]:
+        self.populate()
+        return self.files_by_name.get(name.upper(), [])
+
+
 # ── Phase 1: EZ Tools parsing ─────────────────────────────────────────────────
 
 async def _run_parsing_phase(
-    extracted_dir: Path, parsed_dir: Path, ez_tools_path: str
+    extracted_dir: Path, parsed_dir: Path, ez_tools_path: str, cache: ArtifactCache
 ) -> dict[str, int]:
-    """Scan extracted/ for known artifacts and run matching EZ Tools.
-    Returns {tool_name: files_processed}."""
+    """Execute EZ Tools in parallel where possible."""
     parsed_dir.mkdir(parents=True, exist_ok=True)
     stats: dict[str, int] = {}
+    tasks = []
 
-    # EVTX — parallel per-file
-    evtx_files = list(extracted_dir.rglob("*.evtx"))
+    # 1. EVTX
+    evtx_files = cache.get_by_ext(".evtx")
     if evtx_files:
         dll = _tool_dll("EvtxECmd", ez_tools_path)
         if dll:
             out = parsed_dir / "evtx"
             out.mkdir(parents=True, exist_ok=True)
-
-            async def _parse_evtx(f: Path) -> bool:
-                cmd = ["dotnet", str(dll), "-f", str(f), "--csv", str(out), "--csvf", f"{f.stem}.csv"]
-                ok, err = await _run_subprocess(cmd)
-                if not ok:
-                    logger.warning("EvtxECmd failed on %s: %s", f.name, err)
-                return ok
-
-            results = await asyncio.gather(*[_parse_evtx(f) for f in evtx_files])
-            stats["EvtxECmd"] = sum(1 for r in results if r)
+            async def wrap_evtx():
+                results = await asyncio.gather(*[
+                    _run_subprocess(["dotnet", str(dll), "-f", str(f), "--csv", str(out), "--csvf", f"{f.stem}.csv"])
+                    for f in evtx_files
+                ])
+                stats["EvtxECmd"] = sum(1 for r in results if r[0])
+            tasks.append(wrap_evtx())
         elif ez_tools_path:
-            stats["EvtxECmd"] = -1  # path configured but DLL missing
-            logger.warning("EvtxECmd DLL not found in %s", ez_tools_path)
+            stats["EvtxECmd"] = -1
 
-    # $MFT — agent saves as "MFT" (ntfs/MFT); also accept legacy "$MFT" name
-    mft_files = [f for f in extracted_dir.rglob("*") if f.name in ("MFT", "$MFT") and not f.suffix]
+    # 2. $MFT
+    mft_files = [f for f in cache.get_by_name("MFT") + cache.get_by_name("$MFT") if not f.suffix]
     if mft_files:
         dll = _tool_dll("MFTECmd", ez_tools_path)
         if dll:
             out = parsed_dir / "mft"
             out.mkdir(parents=True, exist_ok=True)
-            cmd = ["dotnet", str(dll), "-f", str(mft_files[0]), "--csv", str(out), "--csvf", "mft.csv"]
-            ok, err = await _run_subprocess(cmd)
-            stats["MFTECmd_mft"] = 1 if ok else 0
-            if not ok:
-                logger.warning("MFTECmd ($MFT) failed: %s", err)
-        elif ez_tools_path:
-            stats["MFTECmd_mft"] = -1
-            logger.warning("MFTECmd DLL not found in %s", ez_tools_path)
+            async def wrap_mft():
+                ok, _ = await _run_subprocess(["dotnet", str(dll), "-f", str(mft_files[0]), "--csv", str(out), "--csvf", "mft.csv"])
+                stats["MFTECmd_mft"] = 1 if ok else 0
+            tasks.append(wrap_mft())
 
-    # $UsnJrnl:$J — agent saves as "UsnJrnl_$J"; also accept legacy "$J" name
-    usnjrnl_files = [f for f in extracted_dir.rglob("*") if f.name in ("UsnJrnl_$J", "$J")]
-    if usnjrnl_files:
-        dll = _tool_dll("MFTECmd", ez_tools_path)
-        if dll:
-            out = parsed_dir / "usnjrnl"
-            out.mkdir(parents=True, exist_ok=True)
-            cmd = ["dotnet", str(dll), "-f", str(usnjrnl_files[0]), "--csv", str(out), "--csvf", "usnjrnl.csv"]
-            ok, err = await _run_subprocess(cmd)
-            stats["MFTECmd_usnjrnl"] = 1 if ok else 0
-            if not ok:
-                logger.warning("MFTECmd ($J) failed: %s", err)
-        elif ez_tools_path:
-            stats["MFTECmd_usnjrnl"] = -1
-
-    # Amcache.hve (must run before generic *.hve to avoid double-processing)
-    amcache_files = list(extracted_dir.rglob("Amcache.hve"))
+    # 3. Registry & Amcache
+    amcache_files = cache.get_by_name("AMCACHE.HVE")
     if amcache_files:
         dll = _tool_dll("AmcacheParser", ez_tools_path)
         if dll:
             out = parsed_dir / "amcache"
             out.mkdir(parents=True, exist_ok=True)
-            cmd = ["dotnet", str(dll), "-f", str(amcache_files[0]), "--csv", str(out), "--csvf", "amcache.csv"]
-            ok, err = await _run_subprocess(cmd)
-            stats["AmcacheParser"] = 1 if ok else 0
-            if not ok:
-                logger.warning("AmcacheParser failed: %s", err)
-        elif ez_tools_path:
-            stats["AmcacheParser"] = -1
-            logger.warning("AmcacheParser DLL not found in %s", ez_tools_path)
+            async def wrap_amcache():
+                ok, _ = await _run_subprocess(["dotnet", str(dll), "-f", str(amcache_files[0]), "--csv", str(out), "--csvf", "amcache.csv"])
+                stats["AmcacheParser"] = 1 if ok else 0
+            tasks.append(wrap_amcache())
 
-    # Registry hives (*.hve, excluding Amcache.hve) — parallel per-file
-    hve_files = [f for f in extracted_dir.rglob("*.hve") if f.name != "Amcache.hve"]
+    hve_files = [f for f in cache.get_by_ext(".hve") if f.name.upper() != "AMCACHE.HVE"]
     if hve_files:
         dll = _tool_dll("RECmd", ez_tools_path)
         if dll:
             out = parsed_dir / "registry"
             out.mkdir(parents=True, exist_ok=True)
+            async def wrap_recmd():
+                results = await asyncio.gather(*[_run_subprocess(["dotnet", str(dll), "-f", str(f), "--csv", str(out)]) for f in hve_files])
+                stats["RECmd"] = sum(1 for r in results if r[0])
+            tasks.append(wrap_recmd())
 
-            async def _parse_hve(f: Path) -> bool:
-                cmd = ["dotnet", str(dll), "-f", str(f), "--csv", str(out)]
-                ok, err = await _run_subprocess(cmd)
-                if not ok:
-                    logger.warning("RECmd failed on %s: %s", f.name, err)
-                return ok
-
-            hve_results = await asyncio.gather(*[_parse_hve(f) for f in hve_files])
-            stats["RECmd"] = sum(1 for r in hve_results if r)
-        elif ez_tools_path:
-            stats["RECmd"] = -1
-            logger.warning("RECmd DLL not found in %s", ez_tools_path)
-
-    # Prefetch (*.pf) — pass directory to PECmd
-    prefetch_dirs = {f.parent for f in extracted_dir.rglob("*.pf")}
-    if prefetch_dirs:
+    # 4. Prefetch & LNK (directory based)
+    pf_dirs = {f.parent for f in cache.get_by_ext(".pf")}
+    if pf_dirs:
         dll = _tool_dll("PECmd", ez_tools_path)
         if dll:
             out = parsed_dir / "prefetch"
             out.mkdir(parents=True, exist_ok=True)
-            for d in prefetch_dirs:
-                cmd = ["dotnet", str(dll), "-d", str(d), "--csv", str(out), "--csvf", "prefetch.csv"]
-                ok, err = await _run_subprocess(cmd)
-                if not ok:
-                    logger.warning("PECmd failed on %s: %s", d.name, err)
-            stats["PECmd"] = len(prefetch_dirs)
-        elif ez_tools_path:
-            stats["PECmd"] = -1
-            logger.warning("PECmd DLL not found in %s", ez_tools_path)
+            async def wrap_pecmd():
+                results = await asyncio.gather(*[
+                    _run_subprocess(["dotnet", str(dll), "-d", str(d), "--csv", str(out), "--csvf", "prefetch.csv"])
+                    for d in pf_dirs
+                ])
+                stats["PECmd"] = len(pf_dirs)
+            tasks.append(wrap_pecmd())
 
-    # LNK files (*.lnk) — pass parent directories to LECmd
-    lnk_dirs = {f.parent for f in extracted_dir.rglob("*.lnk")}
+    lnk_dirs = {f.parent for f in cache.get_by_ext(".lnk")}
     if lnk_dirs:
         dll = _tool_dll("LECmd", ez_tools_path)
         if dll:
             out = parsed_dir / "lnk"
             out.mkdir(parents=True, exist_ok=True)
-            for d in lnk_dirs:
-                cmd = ["dotnet", str(dll), "-d", str(d), "--csv", str(out), "--csvf", "lnk.csv"]
-                ok, err = await _run_subprocess(cmd)
-                if not ok:
-                    logger.warning("LECmd failed on %s: %s", d.name, err)
-            stats["LECmd"] = len(lnk_dirs)
-        elif ez_tools_path:
-            stats["LECmd"] = -1
-            logger.warning("LECmd DLL not found in %s", ez_tools_path)
+            async def wrap_lecmd():
+                await asyncio.gather(*[
+                    _run_subprocess(["dotnet", str(dll), "-d", str(d), "--csv", str(out), "--csvf", "lnk.csv"])
+                    for d in lnk_dirs
+                ])
+                stats["LECmd"] = len(lnk_dirs)
+            tasks.append(wrap_lecmd())
 
-    # Jump lists
-    jl_dirs = {f.parent for f in extracted_dir.rglob("*.automaticDestinations-ms")}
-    if jl_dirs:
-        dll = _tool_dll("WxTCmd", ez_tools_path)
-        if dll:
-            out = parsed_dir / "jumplists"
-            out.mkdir(parents=True, exist_ok=True)
-            for d in jl_dirs:
-                cmd = ["dotnet", str(dll), "-d", str(d), "--csv", str(out)]
-                ok, err = await _run_subprocess(cmd)
-                if not ok:
-                    logger.warning("WxTCmd failed on %s: %s", d.name, err)
-            stats["WxTCmd"] = len(jl_dirs)
-        elif ez_tools_path:
-            stats["WxTCmd"] = -1
-            logger.warning("WxTCmd DLL not found in %s", ez_tools_path)
-
-    # SRUM (Software Resource Usage Monitor) — SRUDB.dat binary ESE database
-    # Provides per-app CPU/network usage with timestamps even after log clearing.
-    srudb_path = extracted_dir / "artifacts" / "windows" / "srum" / "SRUDB.dat"
-    if srudb_path.exists():
-        dll = _tool_dll("SrumECmd", ez_tools_path)
-        if dll:
-            out = parsed_dir / "srum"
-            out.mkdir(parents=True, exist_ok=True)
-            cmd = ["dotnet", str(dll), "-f", str(srudb_path), "--csv", str(out)]
-            # Pass SOFTWARE hive for app-name resolution if collected alongside SRUDB
-            software_hive = srudb_path.parent.parent / "registry" / "SOFTWARE"
-            if software_hive.exists():
-                cmd.extend(["-r", str(software_hive)])
-            ok, err = await _run_subprocess(cmd)
-            stats["SrumECmd"] = 1 if ok else 0
-            if not ok:
-                logger.warning("SrumECmd failed: %s", err)
-        elif ez_tools_path:
-            stats["SrumECmd"] = -1
-            logger.warning("SrumECmd DLL not found in %s", ez_tools_path)
-
-    # AppCompatCache (ShimCache) — parse SYSTEM hive for execution history
-    # Complements the agent's inline PowerShell parser for offline hive analysis.
-    registry_dir = extracted_dir / "artifacts" / "windows" / "registry"
-    if registry_dir.exists():
-        system_hive = next(
-            (f for f in registry_dir.iterdir() if f.is_file() and f.name.upper() == "SYSTEM"),
-            None,
-        )
-        if system_hive:
-            dll = _tool_dll("AppCompatCacheParser", ez_tools_path)
-            if dll:
-                out = parsed_dir / "shimcache"
-                out.mkdir(parents=True, exist_ok=True)
-                cmd = [
-                    "dotnet", str(dll),
-                    "-f", str(system_hive),
-                    "--csv", str(out),
-                    "--csvf", "shimcache.csv",
-                ]
-                ok, err = await _run_subprocess(cmd)
-                stats["AppCompatCacheParser"] = 1 if ok else 0
-                if not ok:
-                    logger.warning("AppCompatCacheParser failed: %s", err)
-            elif ez_tools_path:
-                stats["AppCompatCacheParser"] = -1
-                logger.warning("AppCompatCacheParser DLL not found in %s", ez_tools_path)
-
-    # ShellBags (SBECmd) — UsrClass.dat and NTUSER.DAT hives
-    shellbag_hives = list(extracted_dir.rglob("UsrClass.dat")) + [
-        f for f in extracted_dir.rglob("NTUSER.DAT") if "ntuser" in f.name.lower()
-    ]
+    # 5. ShellBags
+    shellbag_hives = cache.get_by_name("USRCLASS.DAT") + cache.get_by_name("NTUSER.DAT")
     if shellbag_hives:
         dll = _tool_dll("SBECmd", ez_tools_path)
         if dll:
             out = parsed_dir / "shellbags"
             out.mkdir(parents=True, exist_ok=True)
+            async def wrap_sbecmd():
+                results = await asyncio.gather(*[
+                    _run_subprocess(["dotnet", str(dll), "-f", str(f), "--csv", str(out), "--csvf", f"shellbags_{f.stem}.csv"])
+                    for f in shellbag_hives
+                ])
+                stats["SBECmd"] = sum(1 for r in results if r[0])
+            tasks.append(wrap_sbecmd())
 
-            async def _parse_shellbag(f: Path) -> bool:
-                cmd = ["dotnet", str(dll), "-f", str(f), "--csv", str(out), "--csvf", f"shellbags_{f.stem}.csv"]
-                ok, err = await _run_subprocess(cmd)
-                if not ok:
-                    logger.warning("SBECmd failed on %s: %s", f.name, err)
-                return ok
-
-            sb_results = await asyncio.gather(*[_parse_shellbag(f) for f in shellbag_hives])
-            stats["SBECmd"] = sum(1 for r in sb_results if r)
-        elif ez_tools_path:
-            stats["SBECmd"] = -1
-            logger.warning("SBECmd DLL not found in %s", ez_tools_path)
-
-    # Jump Lists (JLECmd) — .automaticDestinations-ms and .customDestinations-ms
-    jl_files = (
-        list(extracted_dir.rglob("*.automaticDestinations-ms"))
-        + list(extracted_dir.rglob("*.customDestinations-ms"))
-    )
-    if jl_files:
-        dll = _tool_dll("JLECmd", ez_tools_path)
-        if dll:
-            out = parsed_dir / "jumplists_parsed"
-            out.mkdir(parents=True, exist_ok=True)
-            for d in {f.parent for f in jl_files}:
-                cmd = ["dotnet", str(dll), "-d", str(d), "--csv", str(out), "--csvf", "jumplists.csv"]
-                ok, err = await _run_subprocess(cmd)
-                if not ok:
-                    logger.warning("JLECmd failed on %s: %s", d.name, err)
-            stats["JLECmd"] = len(jl_files)
-        elif ez_tools_path:
-            stats["JLECmd"] = -1
-            logger.warning("JLECmd DLL not found in %s", ez_tools_path)
-
-    # Recycle Bin (RBCmd) — $I* metadata files
-    recyclebin_dirs = {f.parent for f in extracted_dir.rglob("$I*")}
-    if recyclebin_dirs:
-        dll = _tool_dll("RBCmd", ez_tools_path)
-        if dll:
-            out = parsed_dir / "recyclebin"
-            out.mkdir(parents=True, exist_ok=True)
-            for d in recyclebin_dirs:
-                cmd = ["dotnet", str(dll), "-d", str(d), "--csv", str(out), "--csvf", "recyclebin.csv"]
-                ok, err = await _run_subprocess(cmd)
-                if not ok:
-                    logger.warning("RBCmd failed on %s: %s", d.name, err)
-            stats["RBCmd"] = len(recyclebin_dirs)
-        elif ez_tools_path:
-            stats["RBCmd"] = -1
-            logger.warning("RBCmd DLL not found in %s", ez_tools_path)
-
-    # SQLite databases (SQLECmd) — ActivitiesCache.db and other collected SQLite files
-    sqlite_dbs = list({
-        f for f in (
-            list(extracted_dir.rglob("ActivitiesCache.db"))
-            + list(extracted_dir.rglob("WebCacheV01.dat"))
-        )
-    })
-    if sqlite_dbs:
-        dll = _tool_dll("SQLECmd", ez_tools_path)
-        if dll:
-            out = parsed_dir / "sqlite"
-            out.mkdir(parents=True, exist_ok=True)
-
-            async def _parse_sqlite(f: Path) -> bool:
-                cmd = ["dotnet", str(dll), "-f", str(f), "--csv", str(out), "--csvf", f"sqlite_{f.stem}.csv"]
-                ok, err = await _run_subprocess(cmd)
-                if not ok:
-                    logger.warning("SQLECmd failed on %s: %s", f.name, err)
-                return ok
-
-            sql_results = await asyncio.gather(*[_parse_sqlite(f) for f in sqlite_dbs])
-            stats["SQLECmd"] = sum(1 for r in sql_results if r)
-        elif ez_tools_path:
-            stats["SQLECmd"] = -1
-            logger.warning("SQLECmd DLL not found in %s", ez_tools_path)
+    # Run all tasks concurrently
+    if tasks:
+        await asyncio.gather(*tasks)
 
     return stats
 
 
 # ── Phase 2: Sigma detection ───────────────────────────────────────────────────
 
-async def _run_hayabusa(
-    extracted_dir: Path,
-    sigma_dir: Path,
-    hayabusa_path: str,
-) -> list[dict]:
-    """Run Hayabusa against EVTX files. Returns parsed hits as list of dicts."""
+async def _run_hayabusa(extracted_dir: Path, sigma_dir: Path, hayabusa_path: str) -> list[dict]:
     if not hayabusa_path or not Path(hayabusa_path).exists():
-        logger.info("Hayabusa not found at %s — skipping", hayabusa_path)
         return []
-
-    evtx_files = list(extracted_dir.rglob("*.evtx"))
-    if not evtx_files:
-        return []
-
     output_json = sigma_dir / f"hayabusa_hits_{uuid.uuid4().hex[:8]}.json"
-    # Use one directory that contains all evtx files — pick the deepest common ancestor
-    evtx_dir = extracted_dir
-
-    cmd = [
-        hayabusa_path, "json-timeline",
-        "-d", str(evtx_dir),
-        "-o", str(output_json),
-        "--no-color",
-        "--quiet",
-    ]
-    ok, err = await _run_subprocess(cmd)
-
+    cmd = [hayabusa_path, "json-timeline", "-d", str(extracted_dir), "-o", str(output_json), "--no-color", "--quiet"]
+    ok, _ = await _run_subprocess(cmd)
     hits: list[dict] = []
     if output_json.exists():
         try:
             for line in output_json.read_text(encoding="utf-8", errors="replace").splitlines():
-                line = line.strip()
-                if line:
+                if line.strip():
                     try:
                         hits.append(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
-        except OSError as exc:
-            logger.warning("Failed to read Hayabusa output: %s", exc)
-        finally:
-            try:
-                output_json.unlink()
-            except OSError:
-                pass
-    elif not ok:
-        logger.warning("Hayabusa failed: %s", err)
-
-    logger.info("Hayabusa: %d hits from %s", len(hits), evtx_dir)
+                    except json.JSONDecodeError: pass
+            output_json.unlink()
+        except OSError: pass
     return hits
 
 
-async def _run_chainsaw(
-    extracted_dir: Path,
-    sigma_dir: Path,
-    chainsaw_path: str,
-    sigma_rules_path: str,
-) -> list[dict]:
-    """Run Chainsaw against EVTX files. Returns parsed hits as list of dicts."""
-    if not chainsaw_path or not Path(chainsaw_path).exists():
-        logger.info("chainsaw not found at %s — skipping", chainsaw_path)
+async def _run_chainsaw(extracted_dir: Path, sigma_dir: Path, chainsaw_path: str, sigma_rules_path: str) -> list[dict]:
+    if not chainsaw_path or not Path(chainsaw_path).exists() or not sigma_rules_path:
         return []
-    if not sigma_rules_path or not Path(sigma_rules_path).exists():
-        logger.info("Sigma rules not found at %s — skipping", sigma_rules_path)
-        return []
-
-    evtx_files = list(extracted_dir.rglob("*.evtx"))
-    if not evtx_files:
-        return []
-
-    # Resolve rules directory
     rules_dir = Path(sigma_rules_path) / "rules" / "windows"
-    if not rules_dir.exists():
-        rules_dir = Path(sigma_rules_path)
-
+    if not rules_dir.exists(): rules_dir = Path(sigma_rules_path)
+    
     mapping_candidates = [
         Path(sigma_rules_path) / "tools" / "chainsaw" / "sigma-event-logs-all.yml",
         Path(sigma_rules_path) / "sigma-event-logs-all.yml",
         Path(chainsaw_path).parent / "mappings" / "sigma-event-logs-all.yml",
     ]
     mapping_file = next((m for m in mapping_candidates if m.exists()), None)
-
-    all_hits: list[dict] = []
-    evtx_parent_dirs = list({f.parent for f in evtx_files})
-
-    for evtx_dir in evtx_parent_dirs:
-        tmp_hits_path = sigma_dir / f"tmp_chainsaw_{evtx_dir.name}_{uuid.uuid4().hex[:8]}.json"
-        cmd = [
-            chainsaw_path, "hunt", str(evtx_dir),
-            "--sigma", str(rules_dir),
-            "--json",
-            "--output", str(tmp_hits_path),
-        ]
-        if mapping_file:
-            cmd.extend(["--mapping", str(mapping_file)])
-
-        ok, err = await _run_subprocess(cmd)
-        if tmp_hits_path.exists():
-            try:
-                content = json.loads(tmp_hits_path.read_text())
-                if isinstance(content, list):
-                    all_hits.extend(content)
-            except (json.JSONDecodeError, OSError) as exc:
-                logger.warning("Failed to parse chainsaw output for %s: %s", evtx_dir, exc)
-            finally:
-                try:
-                    tmp_hits_path.unlink()
-                except OSError:
-                    pass
-        elif not ok:
-            logger.warning("chainsaw failed for %s: %s", evtx_dir.name, err)
-
-    logger.info("Chainsaw: %d hits from %d dirs", len(all_hits), len(evtx_parent_dirs))
-    return all_hits
+    
+    tmp_hits_path = sigma_dir / f"tmp_chainsaw_{uuid.uuid4().hex[:8]}.json"
+    cmd = [chainsaw_path, "hunt", str(extracted_dir), "--sigma", str(rules_dir), "--json", "--output", str(tmp_hits_path)]
+    if mapping_file: cmd.extend(["--mapping", str(mapping_file)])
+    
+    ok, _ = await _run_subprocess(cmd)
+    hits: list[dict] = []
+    if tmp_hits_path.exists():
+        try:
+            content = json.loads(tmp_hits_path.read_text())
+            if isinstance(content, list): hits = content
+            tmp_hits_path.unlink()
+        except Exception: pass
+    return hits
 
 
 async def _run_sigma_phase(
-    extracted_dir: Path,
-    sigma_dir: Path,
-    chainsaw_path: str,
-    sigma_rules_path: str,
-    hayabusa_path: str,
-    incident_id: str,
-    processing_job_id: str,
-    db: AsyncSession,
+    extracted_dir: Path, sigma_dir: Path,
+    chainsaw_path: str, sigma_rules_path: str, hayabusa_path: str,
+    incident_id: str, proc_job_id: str, db: AsyncSession,
 ) -> int:
-    """Run Hayabusa + Chainsaw against EVTX files. Returns total hits stored."""
-    evtx_files = list(extracted_dir.rglob("*.evtx"))
-    if not evtx_files:
-        logger.info("No EVTX files found — skipping sigma phase")
-        return 0
-
     sigma_dir.mkdir(parents=True, exist_ok=True)
-
-    # Run both tools concurrently
     chainsaw_hits, hayabusa_hits = await asyncio.gather(
         _run_chainsaw(extracted_dir, sigma_dir, chainsaw_path, sigma_rules_path),
         _run_hayabusa(extracted_dir, sigma_dir, hayabusa_path),
     )
-
-    # Merge hits, deduplicate by (rule_name, event_record_id) if possible
     all_hits = chainsaw_hits + hayabusa_hits
-    if not all_hits:
-        return 0
-
-    # Write combined hits file for timeline export
-    combined_path = sigma_dir / "chainsaw_hits.json"
-    combined_path.write_text(json.dumps(all_hits, indent=2))
-
-    return await _store_sigma_hits(all_hits, incident_id, processing_job_id, db)
+    if not all_hits: return 0
+    (sigma_dir / "chainsaw_hits.json").write_text(json.dumps(all_hits, indent=2))
+    return await _store_sigma_hits(all_hits, incident_id, proc_job_id, db)
 
 
-async def _store_sigma_hits(
-    hits: list[dict],
-    incident_id: str,
-    processing_job_id: str,
-    db: AsyncSession,
-) -> int:
-    """Parse chainsaw hit dicts and store SigmaHit records. Returns count."""
+async def _store_sigma_hits(hits: list[dict], incident_id: str, proc_job_id: str, db: AsyncSession) -> int:
     records: list[SigmaHit] = []
     for hit in hits:
         try:
             rule_name = hit.get("name") or hit.get("rule") or "Unknown"
             severity = (hit.get("level") or hit.get("severity") or "informational").lower()
-            tags = hit.get("tags") or []
-            if not isinstance(tags, list):
-                tags = [str(tags)]
-            description = hit.get("description") or rule_name
-            rule_id = hit.get("hunt_id") or hit.get("rule_id") or str(uuid.uuid4())
             doc = hit.get("document") or hit.get("event") or {}
-
-            artifact_file = ""
-            if isinstance(hit.get("source"), dict):
-                artifact_file = hit["source"].get("name", "")
-
-            # Parse event timestamp
             ts_raw = hit.get("timestamp") or ""
-            event_ts: datetime | None = None
+            event_ts = None
             if ts_raw:
-                try:
-                    ts_str = str(ts_raw).replace("Z", "+00:00")
-                    event_ts = datetime.fromisoformat(ts_str)
-                except (ValueError, TypeError):
-                    pass
-
-            record_id = str(doc.get("EventRecordId", "")) or None
-
+                try: event_ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00"))
+                except Exception: pass
+            
             records.append(SigmaHit(
-                id=str(uuid.uuid4()),
-                incident_id=incident_id,
-                processing_job_id=processing_job_id,
-                rule_id=rule_id,
-                rule_name=rule_name,
-                rule_tags=tags,
-                severity=severity,
-                description=description,
-                artifact_file=artifact_file,
-                event_timestamp=event_ts,
-                event_record_id=record_id,
+                id=str(uuid.uuid4()), incident_id=incident_id, processing_job_id=proc_job_id,
+                rule_id=hit.get("rule_id") or str(uuid.uuid4()), rule_name=rule_name,
+                rule_tags=hit.get("tags") or [], severity=severity,
+                description=hit.get("description") or rule_name,
+                artifact_file=hit.get("source", {}).get("name", "") if isinstance(hit.get("source"), dict) else "",
+                event_timestamp=event_ts, event_record_id=str(doc.get("EventRecordId", "")) or None,
                 event_data=doc if isinstance(doc, dict) else {"raw": str(doc)},
             ))
-        except Exception as exc:
-            logger.warning("Failed to parse sigma hit: %s — %s", exc, str(hit)[:100])
-
+        except Exception: pass
     if records:
         db.add_all(records)
         await db.flush()
     return len(records)
 
 
-# ── Phase 4: Advanced analytics ───────────────────────────────────────────────
-
-async def _run_analytics_phase(
-    incident_id: str,
-    processing_job_id: str,
-    extracted_dir: Path,
-    timeline_dir: Path,
-    settings,
-    db: AsyncSession,
-) -> None:
-    """Run attack chain reconstruction, IOC matching, and YARA scanning.
-    Best-effort: errors are logged but never propagate to the caller."""
-    from app.services.attack_chain_service import build_attack_chains
-    from app.services.ioc_service import run_ioc_matching
-    from app.services.yara_service import run_yara_scan
-
-    # Attack chain reconstruction from sigma hits
-    try:
-        chains = await build_attack_chains(incident_id, processing_job_id, db)
-        logger.info("Attack chain: %d chains for incident %s", chains, incident_id)
-    except Exception as exc:
-        logger.warning("Attack chain build failed for %s: %s", incident_id, exc)
-
-    # IOC matching against timeline
-    try:
-        matches = await run_ioc_matching(incident_id, processing_job_id, timeline_dir, db)
-        logger.info("IOC matching: %d matches for incident %s", matches, incident_id)
-    except Exception as exc:
-        logger.warning("IOC matching failed for %s: %s", incident_id, exc)
-
-    # YARA scanning of extracted files
-    try:
-        yara_rules_path = getattr(settings, "yara_rules_path", "") or ""
-        yara_hits = await run_yara_scan(
-            incident_id, processing_job_id, extracted_dir, yara_rules_path, db
-        )
-        logger.info("YARA scan: %d hits for incident %s", yara_hits, incident_id)
-    except Exception as exc:
-        logger.warning("YARA scan failed for %s: %s", incident_id, exc)
-
-
-# ── Chain of Custody helper ───────────────────────────────────────────────────
-
-async def _add_coc_entry(db: AsyncSession, incident_id: str, action: str, detail: str) -> None:
-    from app.crud.chain_of_custody import create_entry
-    from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
-
-    ts = datetime.now(timezone.utc).isoformat()
-    try:
-        await create_entry(
-            db,
-            ChainOfCustodyEntryCreate(
-                id=f"coc-proc-{uuid.uuid4().hex[:12]}",
-                incident_id=incident_id,
-                timestamp=ts,
-                action=action,
-                actor="SYSTEM",
-                target=detail,
-            ),
-        )
-    except Exception as exc:
-        logger.warning("CoC entry failed (%s): %s", action, exc)
-
-
 # ── Main pipeline ─────────────────────────────────────────────────────────────
 
 async def run_parsing_pipeline(
-    incident_id: str,
-    job_id: str,
-    base_path: Path,
-    db: AsyncSession,
-    *,
-    force: bool = False,
+    incident_id: str, job_id: str, base_path: Path, db: AsyncSession, *, force: bool = False
 ) -> str:
-    """
-    Run the full three-phase pipeline for a completed evidence collection.
-    Creates a ProcessingJob record and updates it throughout.
-    Phase checkpointing: on FAILED re-trigger, completed phases are skipped.
-    Set force=True to ignore phase markers and re-run everything from scratch.
-    Returns the ProcessingJob ID.
-    """
     from app.services.system_settings_service import get_runtime_settings
-
-    # Idempotency: skip if already running or done
+    
     existing = await get_processing_job_by_evidence_job_id(db, job_id)
-    if existing and existing.status in ("RUNNING", "DONE"):
-        logger.info("Pipeline already %s for job %s — skipping", existing.status, job_id)
-        return existing.id
-
-    if force:
-        _clear_phase_markers(base_path)
+    if existing and existing.status in ("RUNNING", "DONE"): return existing.id
+    if force: _clear_phase_markers(base_path)
 
     proc_job_id = f"proc-{job_id}"
     if not existing:
         await create_processing_job(db, proc_job_id, incident_id, job_id)
-        await db.commit()
-
-    await update_processing_job(
-        db, proc_job_id,
-        status="RUNNING", phase="parsing",
-        started_at=datetime.now(timezone.utc),
-    )
+    
+    await update_processing_job(db, proc_job_id, status="RUNNING", phase="parsing", started_at=datetime.now(timezone.utc))
     await db.commit()
 
     settings = await get_runtime_settings(db)
-    extracted_dir = base_path / "extracted"
-    parsed_dir = base_path / "parsed"
-    sigma_dir = base_path / "sigma"
-    timeline_dir = base_path / "timeline"
+    extracted_dir, parsed_dir = base_path / "extracted", base_path / "parsed"
+    sigma_dir, timeline_dir = base_path / "sigma", base_path / "timeline"
+    cache = ArtifactCache(extracted_dir)
 
     try:
-        # ── Phase 1: EZ Tools ──────────────────────────────────────────────
-        if _phase_is_done(base_path, 1):
-            logger.info("Phase 1 (EZ Tools) already done for job %s — skipping", job_id)
-            await _pipeline_log(db, incident_id, "Phase 1 (artifact parsing) already complete — skipping")
-        else:
-            ez_tools_path = getattr(settings, "ez_tools_path", "") or ""
-            await _pipeline_log(db, incident_id, "─── Phase 1: Artifact Parsing (EZ Tools) ───")
-            if not ez_tools_path:
-                await _pipeline_log(db, incident_id, "EZ Tools path not configured — skipping EZ Tools parsing", "warning")
-            else:
-                await _pipeline_log(db, incident_id, f"EZ Tools path: {ez_tools_path}")
-            # Count artifacts to give user a preview
-            evtx_count = len(list(extracted_dir.rglob("*.evtx")))
-            mft_count = len([f for f in extracted_dir.rglob("*") if f.name in ("MFT", "$MFT")])
-            hve_count = len(list(extracted_dir.rglob("*.hve")))
-            pf_count = len(list(extracted_dir.rglob("*.pf")))
-            await _pipeline_log(
-                db, incident_id,
-                f"Artifacts detected: {evtx_count} EVTX, {mft_count} MFT, {hve_count} registry hives, {pf_count} prefetch files",
-            )
-            parsing_stats = await _run_parsing_phase_with_logs(extracted_dir, parsed_dir, ez_tools_path, db, incident_id)
-            total_parsed = sum(parsing_stats.values())
-            stats_str = ", ".join(f"{k}: {v}" for k, v in parsing_stats.items() if v > 0)
-            await _pipeline_log(
-                db, incident_id,
-                f"Phase 1 complete — {total_parsed} artifacts parsed: {stats_str or 'no tools ran'}",
-                "success" if total_parsed > 0 else "warning",
-            )
-            logger.info("Parsing complete for job %s: %s", job_id, parsing_stats)
-            await _add_coc_entry(
-                db, incident_id,
-                "ARTIFACT PARSING COMPLETE",
-                f"{total_parsed} artifacts parsed via EZ Tools",
-            )
-            await db.commit()
+        # Phase 1: EZ Tools
+        if not _phase_is_done(base_path, 1):
+            await _pipeline_log(db, incident_id, "─── Phase 1: Artifact Parsing (Parallel) ───")
+            stats = await _run_parsing_phase(extracted_dir, parsed_dir, getattr(settings, "ez_tools_path", "") or "", cache)
+            await _pipeline_log(db, incident_id, f"Phase 1 complete: {sum(stats.values())} artifacts parsed", "success")
             _mark_phase_done(base_path, 1)
 
-        # ── Phase 2: Sigma detection ────────────────────────────────────────
+        # Phase 2: Sigma
         await update_processing_job(db, proc_job_id, phase="sigma")
-        await db.commit()
-
-        if _phase_is_done(base_path, 2):
-            logger.info("Phase 2 (Sigma) already done for job %s — skipping", job_id)
-            await _pipeline_log(db, incident_id, "Phase 2 (Sigma detection) already complete — skipping")
-            hits_count = 0
-        else:
-            chainsaw_path = getattr(settings, "chainsaw_path", "") or ""
-            sigma_rules_path = getattr(settings, "sigma_rules_path", "") or ""
-            hayabusa_path = getattr(settings, "hayabusa_path", "") or ""
-            await _pipeline_log(db, incident_id, "─── Phase 2: Sigma Detection ───")
-            if not chainsaw_path and not hayabusa_path:
-                await _pipeline_log(db, incident_id, "No Sigma tools configured (Chainsaw/Hayabusa) — Sigma detection skipped", "warning")
-            else:
-                tools_str = ", ".join(t for t in [chainsaw_path and "Chainsaw", hayabusa_path and "Hayabusa"] if t)
-                await _pipeline_log(db, incident_id, f"Running Sigma detection with: {tools_str}")
-            hits_count = await _run_sigma_phase(
-                extracted_dir, sigma_dir,
-                chainsaw_path, sigma_rules_path,
-                hayabusa_path,
-                incident_id, proc_job_id, db,
-            )
-            await _pipeline_log(
-                db, incident_id,
-                f"Phase 2 complete — {hits_count} Sigma hit(s) detected",
-                "warning" if hits_count > 0 else "success",
-            )
-            logger.info("Sigma phase complete for job %s: %d hits", job_id, hits_count)
-
-            # Fire notification for critical/high Sigma hits (best-effort)
-            try:
-                if hits_count > 0:
-                    from app.services.notification_service import notify_critical_sigma_hit
-                    from app.crud.processing import list_sigma_hits
-
-                    _hits, _ = await list_sigma_hits(db, incident_id, "critical", 1, 0)
-                    if not _hits:
-                        _hits, _ = await list_sigma_hits(db, incident_id, "high", 1, 0)
-                    if _hits:
-                        _top = _hits[0]
-                        _runtime2 = await get_runtime_settings(db)
-                        _wh2 = getattr(_runtime2, "webhook_url", None) or ""
-                        if _wh2:
-                            await notify_critical_sigma_hit(
-                                incident_id, proc_job_id, _top.rule_name, _top.severity, _wh2,
-                                getattr(_runtime2, "webhook_secret", None),
-                            )
-            except Exception as _sex:
-                logger.debug("Sigma notification failed (non-fatal): %s", _sex)
-
-            await _add_coc_entry(
-                db, incident_id,
-                "SIGMA DETECTION COMPLETE",
-                f"{hits_count} sigma hits detected",
-            )
-            await db.commit()
+        if not _phase_is_done(base_path, 2):
+            await _pipeline_log(db, incident_id, "─── Phase 2: Sigma Detection (Parallel) ───")
+            hits = await _run_sigma_phase(extracted_dir, sigma_dir, getattr(settings, "chainsaw_path", ""), getattr(settings, "sigma_rules_path", ""), getattr(settings, "hayabusa_path", ""), incident_id, proc_job_id, db)
+            await _pipeline_log(db, incident_id, f"Phase 2 complete: {hits} hits detected", "success")
             _mark_phase_done(base_path, 2)
 
-        # ── Phase 3: Timeline export ────────────────────────────────────────
+        # Phase 3: Timeline
         await update_processing_job(db, proc_job_id, phase="timeline")
-        await db.commit()
-
-        if _phase_is_done(base_path, 3):
-            logger.info("Phase 3 (Timeline) already done for job %s — skipping", job_id)
-            await _pipeline_log(db, incident_id, "Phase 3 (timeline build) already complete — skipping")
-        else:
+        if not _phase_is_done(base_path, 3):
             await _pipeline_log(db, incident_id, "─── Phase 3: Timeline Build ───")
-            await _pipeline_log(db, incident_id, "Merging parsed CSV files into Timesketch-compatible JSONL...")
             entries = await export_to_jsonl(parsed_dir, sigma_dir, timeline_dir, incident_id)
-            await _pipeline_log(
-                db, incident_id,
-                f"Phase 3 complete — {entries} timeline entries written to timeline.jsonl",
-                "success",
-            )
-            logger.info("Timeline phase complete for job %s: %d entries", job_id, entries)
-            await _add_coc_entry(
-                db, incident_id,
-                "TIMELINE GENERATED",
-                f"{entries} entries written to timeline.jsonl",
-            )
-            await db.commit()
+            await _pipeline_log(db, incident_id, f"Phase 3 complete: {entries} entries generated", "success")
             _mark_phase_done(base_path, 3)
 
-        # ── Phase 4: Advanced analytics (best-effort — never fail pipeline) ─
-        await _pipeline_log(db, incident_id, "─── Phase 4: Advanced Analytics ───")
-        await update_processing_job(db, proc_job_id, phase="analytics")
+        await update_processing_job(db, proc_job_id, status="DONE", phase="analytics", completed_at=datetime.now(timezone.utc))
         await db.commit()
-
-        await _run_analytics_phase(
-            incident_id=incident_id,
-            processing_job_id=proc_job_id,
-            extracted_dir=extracted_dir,
-            timeline_dir=timeline_dir,
-            settings=settings,
-            db=db,
-        )
-        await db.commit()
-
-        await update_processing_job(
-            db, proc_job_id,
-            status="DONE", phase="analytics",
-            completed_at=datetime.now(timezone.utc),
-        )
-        await db.commit()
-
-        try:
-            from app.services.notification_service import notify_pipeline_complete
-            from app.crud.analytics import list_ioc_matches
-            from app.crud.processing import count_sigma_hits_by_severity
-
-            sev_counts = await count_sigma_hits_by_severity(db, incident_id)
-            total_sigma = sum(sev_counts.values())
-            _, ioc_total = await list_ioc_matches(db, incident_id, None, 1, 0)
-            # Pipeline complete summary log — visible in processing terminal
-            await _pipeline_log(
-                db, incident_id,
-                f"═══ PIPELINE COMPLETE ═══  Sigma: {total_sigma} hits | IOCs: {ioc_total} matches",
-                "success",
-            )
-
-            runtime = await get_runtime_settings(db)
-            webhook_url = getattr(runtime, "webhook_url", None) or ""
-            if webhook_url:
-                await notify_pipeline_complete(
-                    incident_id, job_id, total_sigma, ioc_total, webhook_url,
-                    getattr(runtime, "webhook_secret", None),
-                )
-        except Exception as _exc:
-            logger.debug("Notification failed (non-fatal): %s", _exc)
-
         return proc_job_id
 
     except Exception as exc:
-        logger.error("Pipeline failed for job %s: %s", job_id, exc, exc_info=True)
-        await update_processing_job(
-            db, proc_job_id,
-            status="FAILED",
-            error_message=str(exc)[:500],
-            completed_at=datetime.now(timezone.utc),
-        )
+        logger.error("Pipeline failed: %s", exc)
+        await update_processing_job(db, proc_job_id, status="FAILED", error_message=str(exc)[:500], completed_at=datetime.now(timezone.utc))
         await db.commit()
-
-        try:
-            from app.services.notification_service import notify_pipeline_failed
-            from app.services.system_settings_service import get_runtime_settings as _get_settings
-            _runtime = await _get_settings(db)
-            _webhook = getattr(_runtime, "webhook_url", None) or ""
-            if _webhook:
-                await notify_pipeline_failed(
-                    incident_id, job_id, str(exc)[:300], _webhook,
-                    getattr(_runtime, "webhook_secret", None),
-                )
-        except Exception as _nex:
-            logger.debug("Notification failed (non-fatal): %s", _nex)
-
         return proc_job_id
 
 
-async def run_pipeline_background(
-    incident_id: str, job_id: str, base_path: Path
-) -> None:
-    """
-    Wrapper that creates its own DB session.
-    Safe to use with asyncio.create_task() after the HTTP response is sent.
-    """
+async def run_pipeline_background(incident_id: str, job_id: str, base_path: Path) -> None:
     from app.db.session import AsyncSessionLocal
-
     async with AsyncSessionLocal() as db:
-        try:
-            await run_parsing_pipeline(incident_id, job_id, base_path, db)
-        except Exception as exc:
-            logger.error(
-                "Background pipeline error for job %s: %s", job_id, exc, exc_info=True
-            )
-
+        await run_parsing_pipeline(incident_id, job_id, base_path, db)
 
 def dispatch_pipeline(incident_id: str, job_id: str, base_path: Path) -> None:
-    """
-    Dispatch the forensics pipeline. Tries Celery first; falls back to
-    asyncio.create_task() if Celery is unavailable (e.g. local dev without Redis).
-    """
     try:
         from app.worker import run_pipeline_task
         run_pipeline_task.delay(incident_id, job_id, str(base_path))
-        logger.info("Pipeline dispatched via Celery for job %s", job_id)
-    except Exception as exc:
-        logger.warning("Celery unavailable (%s) — falling back to asyncio.create_task", exc)
+    except Exception:
         import asyncio
         asyncio.create_task(run_pipeline_background(incident_id, job_id, base_path))

@@ -146,7 +146,7 @@ export default function AuditLog() {
                 </thead>
                 <tbody>
                   {entries.map(e => (
-                    <tr key={e.id} className="border-b border-border/30 hover:bg-secondary/20">
+                    <tr key={e.id} className="border-b border-border/30 hover:bg-secondary/20 render-deferred">
                       <td className="px-2 py-1 text-muted-foreground whitespace-nowrap">
                         {new Date(e.created_at).toLocaleString()}
                       </td>

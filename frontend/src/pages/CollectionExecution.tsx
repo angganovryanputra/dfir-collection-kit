@@ -194,32 +194,31 @@ export default function CollectionExecution() {
   const startedAtRef = useRef<number | null>(null);
 
   useEffect(() => {
-    const loadContext = async () => {
-      if (!incidentId) {
-        setErrorMessage("Missing incident identifier.");
-        return;
-      }
-      try {
-        const { items: incidents } = await apiGet<{ total: number; items: IncidentSummary[] }>("/incidents?limit=1000");
-        const current = incidents.find((entry) => entry.id === incidentId) ?? null;
-        setIncident(current);
+  const loadContext = async () => {
+    if (!incidentId) {
+      setErrorMessage("Missing incident identifier.");
+      return;
+    }
+    try {
+      const current = await apiGet<IncidentSummary>(`/incidents/${incidentId}`);
+      setIncident(current);
 
-        const devices = await apiGet<DeviceSummary[]>("/devices");
-        const target = current?.target_endpoints[0]?.toLowerCase() ?? "";
-        const matchedDevice = target
-          ? devices.find((entry) => entry.hostname.toLowerCase() === target) ?? null
-          : null;
-        setDevice(matchedDevice);
+      const devices = await apiGet<DeviceSummary[]>("/devices");
+      const target = current?.target_endpoints[0]?.toLowerCase() ?? "";
+      const matchedDevice = target
+        ? devices.find((entry) => entry.hostname.toLowerCase() === target) ?? null
+        : null;
+      setDevice(matchedDevice);
 
-        const collectors = await apiGet<CollectorSummary[]>("/collectors");
-        setCollector(collectors[0] ?? null);
-      } catch {
-        setErrorMessage("Unable to load collection context.");
-      }
-    };
-
-    loadContext();
+      const collectors = await apiGet<CollectorSummary[]>("/collectors");
+      setCollector(collectors[0] ?? null);
+    } catch {
+      setErrorMessage("Unable to load collection context.");
+    }
+  };
+  loadContext();
   }, [incidentId]);
+
 
   useEffect(() => {
     const startCollection = async () => {

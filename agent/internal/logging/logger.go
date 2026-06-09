@@ -9,12 +9,15 @@ import (
 )
 
 var (
-	logger   *log.Logger
-	once     sync.Once
-	mu       sync.Mutex
-	debug    bool
-	quiet    bool
-	logFile  *os.File
+	// logger is initialised to a safe stdout default so logging never
+	// panics with a nil dereference when a caller (e.g. module registration
+	// during tests) emits a log line before Init/InitWithOptions runs.
+	logger  = log.New(os.Stdout, "DFIR-AGENT: ", log.Ldate|log.Ltime)
+	once    sync.Once
+	mu      sync.Mutex
+	debug   bool
+	quiet   bool
+	logFile *os.File
 )
 
 // Init initialises the logger using stdout only.

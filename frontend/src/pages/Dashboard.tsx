@@ -7,7 +7,6 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { TablePagination } from "@/components/TablePagination";
 import { StatCard } from "@/components/common/StatCard";
-import { usePagination } from "@/hooks/usePagination";
 import { useAdaptivePolling } from "@/lib/useAdaptivePolling";
 import { useDebounce } from "@/hooks/useDebounce";
 import {
@@ -107,9 +106,12 @@ const IncidentRow = memo(({ incident, onClick }: { incident: Incident; onClick: 
 
     return (
         <div
-            className="border border-border bg-secondary/30 p-4 hover:border-primary/50 hover:bg-secondary/50 transition-all cursor-pointer group"
+            className="border border-border bg-secondary/30 p-4 hover:border-primary/40 hover:bg-secondary/50 hover:scale-[1.01] hover:shadow-[0_0_12px_rgba(21,245,116,0.05)] transition-all duration-300 transition-spring cursor-pointer group relative overflow-hidden"
+            style={{ contentVisibility: "auto", containIntrinsicSize: "auto 86px" }}
             onClick={() => onClick(incident)}
         >
+            {/* Slide-in vertical accent line on hover */}
+            <div className="absolute top-0 left-0 bottom-0 w-[1.5px] bg-primary scale-y-0 group-hover:scale-y-100 transition-transform duration-300 transition-spring origin-top" />
             <div className="flex items-start justify-between gap-4">
                 <div className="space-y-2 flex-1 min-w-0">
                     <div className="flex items-center gap-3 flex-wrap">
@@ -153,21 +155,29 @@ export default function Dashboard() {
   const navigate = useNavigate();
   const [incidentSearch, setIncidentSearch] = useState("");
   const [incidentStatusFilter, setIncidentStatusFilter] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
   const debouncedSearch = useDebounce(incidentSearch, 350);
 
   const incidentParams = useMemo(() => {
-      const p = new URLSearchParams({ limit: "1000" });
+      const p = new URLSearchParams({ 
+        limit: itemsPerPage.toString(),
+        offset: ((currentPage - 1) * itemsPerPage).toString()
+      });
       if (debouncedSearch) p.set("search", debouncedSearch);
       if (incidentStatusFilter) p.set("status", incidentStatusFilter);
       return p.toString();
-  }, [debouncedSearch, incidentStatusFilter]);
+  }, [debouncedSearch, incidentStatusFilter, currentPage, itemsPerPage]);
 
-  const { data: incidents = [], error: incError } = useQuery({
-    queryKey: ["incidents", debouncedSearch, incidentStatusFilter],
+  const { data: incidentData, error: incError } = useQuery({
+    queryKey: ["incidents", debouncedSearch, incidentStatusFilter, currentPage, itemsPerPage],
     queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>(`/incidents?${incidentParams}`),
-    select: (data) => data.items.map(mapIncident),
     staleTime: 20_000,
   });
+
+  const incidents = useMemo(() => incidentData?.items.map(mapIncident) ?? [], [incidentData]);
+  const totalItems = incidentData?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
 
   const { data: collectors = [], refetch: refetchCollectors } = useQuery<CollectorResponse[], Error, Collector[]>({
     queryKey: ["collectors"],
@@ -220,28 +230,10 @@ export default function Dashboard() {
     return "Unable to load dashboard data. The server returned an error.";
   }, [incError]);
 
-
-  const {
-    paginatedItems: paginatedIncidents,
-    currentPage,
-    totalPages,
-    totalItems,
-    itemsPerPage,
-    goToPage,
-    setPerPage,
-  } = usePagination(incidents);
-
   const activeIncidents = incidents.filter((i) => i.status !== "CLOSED").length;
   const onlineCollectors = collectors.filter((c) => c.status !== "OFFLINE").length;
   
-  const statusBreakdown = useMemo(() => ({
-    active: incidents.filter((i) => i.status === "ACTIVE" || i.status === "PENDING").length,
-    collecting: incidents.filter((i) => i.status === "COLLECTION_IN_PROGRESS").length,
-    complete: incidents.filter((i) => i.status === "COLLECTION_COMPLETE").length,
-    closed: incidents.filter((i) => i.status === "CLOSED").length,
-  }), [incidents]);
-
-  const hasActiveCollection = statusBreakdown.collecting > 0;
+  const hasActiveCollection = useMemo(() => incidents.some((i) => i.status === "COLLECTION_IN_PROGRESS"), [incidents]);
   const totalEvidenceFiles = useMemo(() => evidenceFolders.reduce((total, folder) => total + folder.files_count, 0), [evidenceFolders]);
   const offlineCollectors = collectors.filter((c) => c.status === "OFFLINE").length;
   const storageUsedPercent = diagnostics?.storage_used_percent ?? null;
@@ -305,7 +297,7 @@ export default function Dashboard() {
             icon={<Activity className="w-5 h-5 text-primary" />}
             value={activeIncidents}
             valueClassName="text-primary"
-            label="Active Incidents"
+            label="Active Incidents (Page)"
           />
           <StatCard
             icon={<HardDrive className="w-5 h-5 text-primary" />}
@@ -335,7 +327,7 @@ export default function Dashboard() {
               status="active"
               headerActions={
                 <span className="font-mono text-xs text-primary">
-                  {activeIncidents} ACTIVE · {totalItems} TOTAL
+                  {totalItems} TOTAL INCIDENTS
                 </span>
               }
             >
@@ -344,12 +336,18 @@ export default function Dashboard() {
                   className="flex-1 h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary"
                   placeholder="Search incident ID or operator..."
                   value={incidentSearch}
-                  onChange={e => setIncidentSearch(e.target.value)}
+                  onChange={e => {
+                    setIncidentSearch(e.target.value);
+                    setCurrentPage(1);
+                  }}
                 />
                 <select
                   className="h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none"
                   value={incidentStatusFilter}
-                  onChange={e => setIncidentStatusFilter(e.target.value)}
+                  onChange={e => {
+                    setIncidentStatusFilter(e.target.value);
+                    setCurrentPage(1);
+                  }}
                 >
                   <option value="">ALL STATUS</option>
                   <option value="PENDING">PENDING</option>
@@ -361,12 +359,12 @@ export default function Dashboard() {
                 </select>
               </div>
               <div className="space-y-3">
-                {paginatedIncidents.length === 0 ? (
+                {incidents.length === 0 ? (
                   <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">
                     No incidents available.
                   </div>
                 ) : (
-                  paginatedIncidents.map((incident) => (
+                  incidents.map((incident) => (
                       <IncidentRow 
                         key={incident.id} 
                         incident={incident} 
@@ -380,8 +378,11 @@ export default function Dashboard() {
                 totalPages={totalPages}
                 totalItems={totalItems}
                 itemsPerPage={itemsPerPage}
-                onPageChange={goToPage}
-                onItemsPerPageChange={setPerPage}
+                onPageChange={setCurrentPage}
+                onItemsPerPageChange={(val) => {
+                  setItemsPerPage(val);
+                  setCurrentPage(1);
+                }}
               />
             </TacticalPanel>
           </div>
