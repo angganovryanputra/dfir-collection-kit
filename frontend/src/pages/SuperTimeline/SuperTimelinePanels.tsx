@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { 
-    X, Server, Clock, User, Shield, ExternalLink, Bookmark as BookmarkIcon, Check, Copy, Tag, MessageSquare, Target, GitMerge
+import {
+    X, Server, Clock, User, Shield, ExternalLink, Bookmark as BookmarkIcon, Check, Copy, Tag, MessageSquare, Target, GitMerge, LayoutGrid
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { 

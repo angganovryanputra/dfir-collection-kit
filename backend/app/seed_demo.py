@@ -20,12 +20,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.db.session import AsyncSessionLocal
-from app.models.analytics import AttackChain
+from app.models.analytics import AttackChain, IOCIndicator
 from app.models.collector import Collector
 from app.models.device import Device
 from app.models.evidence import EvidenceFolder
 from app.models.incident import Incident
 from app.models.job import Job
+from app.models.platform_features import (
+    CustomModule, LegalHold, ScheduledCollection, ThreatHuntQuery,
+)
 from app.models.processing import ProcessingJob
 from app.services.super_timeline_service import build_super_timeline_background
 
@@ -331,6 +334,154 @@ _HOST_EVENTS = {
 
 
 # ---------------------------------------------------------------------------
+# Platform feature demo data
+# ---------------------------------------------------------------------------
+
+_THREAT_HUNT_QUERIES = [
+    {
+        "id": "thq-demo-001",
+        "name": "Lateral Movement via PsExec",
+        "description": "Detect PsExec-based lateral movement by correlating network connections and process creation events.",
+        "category": "lateral_movement",
+        "query": "SELECT datetime, host, user, message FROM events WHERE message ILIKE '%psexec%' OR message ILIKE '%admin$%' ORDER BY datetime",
+        "tags": ["lateral-movement", "T1570", "psexec"],
+        "mitre_technique": "T1570",
+        "is_public": True,
+        "created_by": "seed-admin",
+    },
+    {
+        "id": "thq-demo-002",
+        "name": "Credential Dumping (LSASS)",
+        "description": "Find evidence of LSASS memory access for credential harvesting.",
+        "category": "credential_access",
+        "query": "SELECT datetime, host, user, message FROM events WHERE message ILIKE '%lsass%' AND (message ILIKE '%mimikatz%' OR message ILIKE '%sekurlsa%' OR message ILIKE '%procdump%') ORDER BY datetime",
+        "tags": ["credential-access", "T1003.001", "lsass"],
+        "mitre_technique": "T1003.001",
+        "is_public": True,
+        "created_by": "seed-admin",
+    },
+    {
+        "id": "thq-demo-003",
+        "name": "Ransomware File Extension Rename",
+        "description": "Detect bulk file rename events consistent with ransomware encryption activity.",
+        "category": "impact",
+        "query": "SELECT datetime, host, user, message FROM events WHERE source_short = 'MFT' AND (message ILIKE '%.encrypted%' OR message ILIKE '%.coral%' OR message ILIKE '%.locked%') ORDER BY datetime",
+        "tags": ["ransomware", "T1486", "file-encryption"],
+        "mitre_technique": "T1486",
+        "is_public": True,
+        "created_by": "seed-admin",
+    },
+    {
+        "id": "thq-demo-004",
+        "name": "Scheduled Task Persistence",
+        "description": "Identify scheduled tasks created by non-system accounts for persistence.",
+        "category": "persistence",
+        "query": "SELECT datetime, host, user, message FROM events WHERE source_short = 'EVTX' AND message ILIKE '%schtask%' AND NOT user ILIKE '%system%' ORDER BY datetime",
+        "tags": ["persistence", "T1053.005", "scheduled-task"],
+        "mitre_technique": "T1053.005",
+        "is_public": True,
+        "created_by": "seed-admin",
+    },
+]
+
+_LEGAL_HOLDS = [
+    {
+        "id": "hold-demo-001",
+        "incident_id": DEMO_INCIDENT_ID,
+        "reason": "Evidence preservation required pending law enforcement referral for ransomware investigation.",
+        "custodian": "Legal Department — Compliance Team",
+        "retention_days": 365,
+        "status": "ACTIVE",
+        "created_by": "seed-admin",
+    },
+]
+
+_SCHEDULED_COLLECTIONS = [
+    {
+        "id": "sc-demo-001",
+        "incident_id": DEMO_INCIDENT_ID,
+        "cron_expr": "0 */6 * * *",
+        "profile": "triage",
+        "enabled": True,
+        "created_by": "seed-admin",
+    },
+]
+
+_CUSTOM_MODULES = [
+    {
+        "id": "cm-demo-001",
+        "name": "Coral Reef Ransom IOC Sweep",
+        "description": "Custom sweep for coral_reef_ransom.exe artifacts and registry keys.",
+        "os": "windows",
+        "category": "artifacts",
+        "command": r'reg query HKLM\SOFTWARE\coral_reef 2>&1; dir /s /b C:\Users\*coral_reef* 2>&1',
+        "output_relpath": "custom/coral_reef_sweep.txt",
+        "enabled": True,
+        "created_by": "seed-admin",
+    },
+    {
+        "id": "cm-demo-002",
+        "name": "Active SSH Sessions Snapshot",
+        "description": "Dump current SSH sessions and authorized_keys for all users.",
+        "os": "linux",
+        "category": "volatile",
+        "command": "who; last | head -50; find /home /root -name authorized_keys 2>/dev/null | xargs cat",
+        "output_relpath": "custom/ssh_sessions.txt",
+        "enabled": True,
+        "created_by": "seed-admin",
+    },
+]
+
+_IOC_INDICATORS = [
+    {
+        "id": "ioc-demo-001",
+        "ioc_type": "sha256",
+        "value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "description": "coral_reef_ransom.exe — ransomware payload",
+        "source": "manual",
+        "severity": "critical",
+        "created_by": "seed-admin",
+    },
+    {
+        "id": "ioc-demo-002",
+        "ioc_type": "ip",
+        "value": "185.220.101.47",
+        "description": "C2 server used for ransom beacon and key exchange",
+        "source": "ThreatFox",
+        "severity": "critical",
+        "created_by": "seed-admin",
+    },
+    {
+        "id": "ioc-demo-003",
+        "ioc_type": "domain",
+        "value": "coral-reef-payment.onion.ws",
+        "description": "Ransomware payment portal domain",
+        "source": "ThreatFox",
+        "severity": "high",
+        "created_by": "seed-admin",
+    },
+    {
+        "id": "ioc-demo-004",
+        "ioc_type": "sha256",
+        "value": "aec070645fe53ee3b3763059376134f058cc337247c978add178b6ccdfb0019f",
+        "description": "stage_loader.exe — dropper that fetches coral_reef_ransom",
+        "source": "manual",
+        "severity": "high",
+        "created_by": "seed-admin",
+    },
+    {
+        "id": "ioc-demo-005",
+        "ioc_type": "url",
+        "value": "http://185.220.101.47:8080/beacon",
+        "description": "C2 beacon URL polled every 30 s by coral_reef_ransom",
+        "source": "manual",
+        "severity": "critical",
+        "created_by": "seed-admin",
+    },
+]
+
+
+# ---------------------------------------------------------------------------
 # Core async helpers
 # ---------------------------------------------------------------------------
 
@@ -355,8 +506,11 @@ async def seed_all(base_path: str | Path | None = None) -> None:
     _write_jsonl_files(evidence_root)
 
     print("[demo] Building Super Timeline …")
-    await build_super_timeline_background(DEMO_INCIDENT_ID, evidence_root)
-    print("[demo] Super Timeline ready.\n")
+    try:
+        await build_super_timeline_background(DEMO_INCIDENT_ID, evidence_root)
+        print("[demo] Super Timeline ready.\n")
+    except Exception as _exc:
+        print(f"[demo] Super Timeline skipped (non-fatal): {_exc}\n")
 
 
 async def clean_all() -> None:
@@ -512,6 +666,41 @@ async def _seed_db(db, evidence_root: Path) -> None:
             await db.flush()
             print(f"[demo] Created AttackChain {spec['id']} ({spec['severity']})")
 
+    # Threat Hunt Queries
+    for spec in _THREAT_HUNT_QUERIES:
+        if not await db.get(ThreatHuntQuery, spec["id"]):
+            db.add(ThreatHuntQuery(**spec))
+            await db.flush()
+            print(f"[demo] Created ThreatHuntQuery {spec['id']} ({spec['name']})")
+
+    # Legal Holds
+    for spec in _LEGAL_HOLDS:
+        if not await db.get(LegalHold, spec["id"]):
+            db.add(LegalHold(**spec))
+            await db.flush()
+            print(f"[demo] Created LegalHold {spec['id']}")
+
+    # Scheduled Collections
+    for spec in _SCHEDULED_COLLECTIONS:
+        if not await db.get(ScheduledCollection, spec["id"]):
+            db.add(ScheduledCollection(**spec))
+            await db.flush()
+            print(f"[demo] Created ScheduledCollection {spec['id']}")
+
+    # Custom Modules
+    for spec in _CUSTOM_MODULES:
+        if not await db.get(CustomModule, spec["id"]):
+            db.add(CustomModule(**spec))
+            await db.flush()
+            print(f"[demo] Created CustomModule {spec['id']} ({spec['name']})")
+
+    # IOC Indicators
+    for spec in _IOC_INDICATORS:
+        if not await db.get(IOCIndicator, spec["id"]):
+            db.add(IOCIndicator(**spec))
+            await db.flush()
+            print(f"[demo] Created IOCIndicator {spec['id']} ({spec['ioc_type']}:{spec['value'][:30]})")
+
     await db.commit()
     print("[demo] All DB records committed.\n")
 
@@ -555,6 +744,36 @@ async def _clean_db(db) -> None:
         if obj:
             await db.delete(obj)
             print(f"  deleted AttackChain {spec['id']}")
+
+    for spec in _IOC_INDICATORS:
+        obj = await db.get(IOCIndicator, spec["id"])
+        if obj:
+            await db.delete(obj)
+            print(f"  deleted IOCIndicator {spec['id']}")
+
+    for spec in _THREAT_HUNT_QUERIES:
+        obj = await db.get(ThreatHuntQuery, spec["id"])
+        if obj:
+            await db.delete(obj)
+            print(f"  deleted ThreatHuntQuery {spec['id']}")
+
+    for spec in _LEGAL_HOLDS:
+        obj = await db.get(LegalHold, spec["id"])
+        if obj:
+            await db.delete(obj)
+            print(f"  deleted LegalHold {spec['id']}")
+
+    for spec in _SCHEDULED_COLLECTIONS:
+        obj = await db.get(ScheduledCollection, spec["id"])
+        if obj:
+            await db.delete(obj)
+            print(f"  deleted ScheduledCollection {spec['id']}")
+
+    for spec in _CUSTOM_MODULES:
+        obj = await db.get(CustomModule, spec["id"])
+        if obj:
+            await db.delete(obj)
+            print(f"  deleted CustomModule {spec['id']}")
 
     await db.commit()
     print("[demo] Clean complete.\n")

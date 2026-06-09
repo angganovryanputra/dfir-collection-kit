@@ -35,6 +35,8 @@ import {
     Lock,
     Clock,
     Share2,
+    Brain,
+    Printer,
 } from "lucide-react";
 import { apiGet, apiPatch, apiPost } from "@/lib/api";
 import { getStoredAuth, getStoredRole } from "@/lib/auth";
@@ -485,6 +487,10 @@ export default function IncidentHub() {
                                     icon={<Share2 className="w-5 h-5" />} title="SIEM EXPORT" status={procDone ? "ready" : "unavailable"}
                                     description="Push to Splunk / Elastic / Timesketch" onClick={() => navigate(`/incidents/${incidentId}/siem-export`)} disabled={!procDone}
                                 />
+                                <ActionCard
+                                    icon={<Brain className="w-5 h-5" />} title="AI ANALYSIS" status={procDone ? "ready" : "unavailable"}
+                                    description="LLM annotation, summary & NL query" onClick={() => navigate(`/incidents/${incidentId}/ai-analysis`)} disabled={!procDone}
+                                />
                             </div>
                         </section>
                     </div>
@@ -504,6 +510,10 @@ export default function IncidentHub() {
                                 <ActionCard
                                     icon={<FileText className="w-5 h-5" />} title="CHAIN OF CUSTODY" status={collectionDone ? "ready" : "unavailable"}
                                     description="Evidence handling audit log" onClick={() => navigate("/chain-of-custody")} disabled={!collectionDone}
+                                />
+                                <ActionCard
+                                    icon={<Printer className="w-5 h-5" />} title="INCIDENT REPORT" status={procDone ? "ready" : "unavailable"}
+                                    description="Generate PDF executive report" onClick={() => navigate(`/incidents/${incidentId}/report`)} disabled={!procDone}
                                 />
                             </div>
                         </section>

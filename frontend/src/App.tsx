@@ -6,6 +6,7 @@ import { ThemeProvider } from "next-themes";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import React, { Component, Suspense } from "react";
 import { getStoredAuth } from "@/lib/auth";
+import { EvidenceProvider } from "@/context/EvidenceContext";
 
 // Eagerly load only the entry points users hit immediately
 import Index from "./pages/Index";
@@ -43,6 +44,7 @@ const ScheduledCollections = React.lazy(() => import("./pages/ScheduledCollectio
 const AgentConsole         = React.lazy(() => import("./pages/AgentConsole"));
 const ThreatIntel          = React.lazy(() => import("./pages/ThreatIntel"));
 const SIEMExport           = React.lazy(() => import("./pages/SIEMExport"));
+const AIAnalysis           = React.lazy(() => import("./pages/AIAnalysis"));
 
 /** Tactical loading skeleton — shown while a lazy page chunk is fetching. */
 function PageSkeleton() {
@@ -189,6 +191,7 @@ const App = () => {
           <TooltipProvider>
             <Toaster />
             <Sonner />
+            <EvidenceProvider>
             <BrowserRouter>
               <Suspense fallback={<PageSkeleton />}>
               <Routes>
@@ -229,11 +232,13 @@ const App = () => {
                 <Route path="/agents/:agentId/console" element={<ProtectedRoute><RouteBoundary><AgentConsole /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/threat-intel" element={<ProtectedRoute><RouteBoundary><ThreatIntel /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/siem-export" element={<ProtectedRoute><RouteBoundary><SIEMExport /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/incidents/:id/ai-analysis" element={<ProtectedRoute><RouteBoundary><AIAnalysis /></RouteBoundary></ProtectedRoute>} />
 
                 <Route path="*" element={<NotFound />} />
               </Routes>
               </Suspense>
             </BrowserRouter>
+            </EvidenceProvider>
           </TooltipProvider>
         </ThemeProvider>
       </QueryClientProvider>

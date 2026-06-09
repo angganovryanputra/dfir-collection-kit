@@ -16,41 +16,23 @@ export default defineConfig(({ mode }) => ({
     },
   },
   build: {
-    chunkSizeWarningLimit: 600,
+    chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {
         manualChunks: (id) => {
-          // React core — cached separately, changes rarely
-          if (id.includes("node_modules/react/") || id.includes("node_modules/react-dom/")) {
-            return "vendor-react";
-          }
-          // React Router
-          if (id.includes("node_modules/react-router") || id.includes("node_modules/@remix-run/")) {
-            return "vendor-router";
-          }
-          // TanStack Query
-          if (id.includes("node_modules/@tanstack/")) {
-            return "vendor-query";
-          }
-          // Charts — large, isolated for independent caching
-          if (
-            id.includes("node_modules/recharts/") ||
-            id.includes("node_modules/d3-") ||
-            id.includes("node_modules/victory-")
-          ) {
-            return "vendor-charts";
-          }
-          // Icons
-          if (id.includes("node_modules/lucide-react/")) {
-            return "vendor-icons";
-          }
-          // Radix UI primitives — grouped so shadcn components share one chunk
-          if (id.includes("node_modules/@radix-ui/")) {
-            return "vendor-radix";
-          }
-          // Everything else in node_modules
+          // All third-party packages must live in a single chunk.
+          //
+          // Many React-ecosystem packages (Radix UI, react-hook-form, cmdk,
+          // vaul, next-themes, react-router, @tanstack/react-query, etc.) call
+          // React.createContext() / React.forwardRef() at module top-level.
+          // Splitting them across Rollup chunks causes a TDZ initialisation
+          // error in the browser ("can't access property 'createContext' of
+          // undefined") because cross-chunk bindings for the CJS default export
+          // of React may be unresolved when those modules are first evaluated.
+          // A single vendor chunk guarantees React is fully initialised before
+          // any dependent package runs.
           if (id.includes("node_modules/")) {
-            return "vendor-misc";
+            return "vendor";
           }
         },
       },

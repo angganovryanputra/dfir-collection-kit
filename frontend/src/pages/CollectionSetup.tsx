@@ -376,9 +376,10 @@ export default function CollectionSetup() {
 
       {activeOS === "macos" && (
         <WarningBanner variant="warning">
-          macOS collection uses standard system tools (ps, launchctl, log, system_profiler). Some
-          artifacts require Full Disk Access for the agent process. Unified Log collection may be
-          large — consider using the Triage profile.
+          macOS collection uses 17 native modules (Unified Logs, LaunchAgents, browser history,
+          network state, keychain metadata, and more). Some artifacts require Full Disk Access for
+          the agent process — grant it in System Settings → Privacy &amp; Security before running.
+          Unified Log collection can be large; consider the Triage profile to limit scope.
         </WarningBanner>
       )}
 

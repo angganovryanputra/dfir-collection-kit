@@ -65,7 +65,7 @@ def _detect_lateral_movement(
                 WHERE source_short IN ('EVTX', 'WEVT', 'WINDOWS EVENT LOG')
                   AND actor != ''
                   AND actor NOT IN ('-', 'SYSTEM', 'ANONYMOUS LOGON', 'LOCAL SERVICE', 'NETWORK SERVICE')
-                  AND NOT actor ENDS WITH '$'
+                  AND NOT ends_with(actor, '$')
             ),
             pivots AS (
                 SELECT 

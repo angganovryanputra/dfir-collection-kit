@@ -19,6 +19,7 @@ import { SuperTimelineToolbar } from "./SuperTimeline/SuperTimelineToolbar";
 import { SuperTimelineChart } from "./SuperTimeline/SuperTimelineChart";
 import { NarrativeStoryline } from "./SuperTimeline/NarrativeStoryline";
 import { EventDetailPanel, ComparePanel } from "./SuperTimeline/SuperTimelinePanels";
+import { LateralMovementMap } from "./SuperTimeline/LateralMovementMap";
 
 // Types & Utils
 import { 
@@ -93,25 +94,25 @@ export default function SuperTimeline() {
             page: String(page),
             limit: String(pageSize),
             sort_by: sortBy,
-            sort_order: sortOrder,
+            sort_dir: sortOrder,
         });
         if (debouncedSearch) params.append("q", debouncedSearch);
         if (dateFilterActive) {
-            if (dateFrom) params.append("start_date", dateFrom);
-            if (dateTo) params.append("end_date", dateTo);
+            if (dateFrom) params.append("date_from", dateFrom);
+            if (dateTo) params.append("date_to", dateTo);
         }
         if (!allHostsActive && activeHosts.size > 0) {
-            activeHosts.forEach(h => params.append("hosts", h));
+            params.append("hosts", [...activeHosts].join(","));
         }
         if (!allSourcesActive && activeSources.size > 0) {
-            activeSources.forEach(s => params.append("sources", s));
+            params.append("source", [...activeSources].join(","));
         }
         return params.toString();
     }, [page, pageSize, sortBy, sortOrder, debouncedSearch, dateFilterActive, dateFrom, dateTo, activeHosts, allHostsActive, activeSources, allSourcesActive]);
 
     const { data: timelineData, isLoading: tlLoading, error: tlError } = useQuery<SuperTimelineResponse>({
         queryKey: ["super-timeline-data", incidentId, timelineParams],
-        queryFn: () => apiGet<SuperTimelineResponse>(`/processing/incident/${incidentId}/super-timeline?${timelineParams}`),
+        queryFn: () => apiGet<SuperTimelineResponse>(`/evidence/super-timeline/${incidentId}?${timelineParams}`),
         enabled: isDone,
         staleTime: 60_000,
     });
@@ -146,7 +147,7 @@ export default function SuperTimeline() {
         setIsBuilding(true);
         setBuildError(null);
         try {
-            await apiPost(`/processing/incident/${incidentId}/super-timeline/build`, {});
+            await apiPost(`/processing/incident/${incidentId}/super-timeline/trigger`, {});
             queryClient.invalidateQueries({ queryKey: ["super-timeline-status", incidentId] });
         } catch (err) {
             setBuildError(err instanceof Error ? err.message : "Build trigger failed");
@@ -227,7 +228,7 @@ export default function SuperTimeline() {
         try {
             const params = new URLSearchParams({ format: "csv" });
             if (debouncedSearch) params.append("q", debouncedSearch);
-            window.location.href = `${import.meta.env.VITE_API_BASE_URL || "/api/v1"}/processing/incident/${incidentId}/super-timeline/export?${params.toString()}`;
+            window.location.href = `${import.meta.env.VITE_API_BASE_URL || "/api/v1"}/evidence/super-timeline/${incidentId}/export?${params.toString()}`;
         } finally {
             setTimeout(() => setIsExporting(false), 2000);
         }
@@ -430,6 +431,22 @@ export default function SuperTimeline() {
                                 />
                             </div>
                         </div>
+
+                        {/* ─── Lateral Movement Map (auto-shown when detections exist) ─── */}
+                        {lmDetections.length > 0 && (
+                            <div className="shrink-0 px-6 py-4 border-b border-border/40 bg-background/20">
+                                <LateralMovementMap
+                                    detections={lmDetections}
+                                    onFilterHost={(host) => {
+                                        setAllHostsActive(false);
+                                        setActiveHosts(new Set([host]));
+                                        setPage(1);
+                                    }}
+                                    onTriggerRebuild={triggerBuild}
+                                    isBuilding={isBuilding}
+                                />
+                            </div>
+                        )}
 
                         {/* ─── Main Content Area ─── */}
                         <div className="flex-1 flex min-h-0 relative">
