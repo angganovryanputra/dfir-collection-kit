@@ -22,11 +22,13 @@ export default function CorrelationView() {
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<CorrelationResult | null>(null);
 
-  const { data: incidents = [] } = useQuery<{ id: string; type: string; status: string }[]>({
+  type IncidentItem = { id: string; type: string; status: string };
+  const { data: incidentPage } = useQuery<{ total: number; items: IncidentItem[] }>({
     queryKey: ["incidents-dropdown-corr"],
-    queryFn: () => apiGet<{ id: string; type: string; status: string }[]>("/incidents?limit=50"),
+    queryFn: () => apiGet<{ total: number; items: IncidentItem[] }>("/incidents?limit=100"),
     staleTime: 60_000,
   });
+  const incidents = incidentPage?.items ?? [];
 
   const addId = () => setIncidentIds(ids => [...ids, ""]);
   const removeId = (i: number) => setIncidentIds(ids => ids.filter((_, j) => j !== i));
@@ -79,7 +81,7 @@ export default function CorrelationView() {
                     >
                       <option value="">— Incident {i + 1} —</option>
                       {incidents.map(inc => (
-                        <option key={inc.id} value={inc.id}>{inc.id}</option>
+                        <option key={inc.id} value={inc.id}>{inc.id} — {inc.type}</option>
                       ))}
                     </select>
                     {incidentIds.length > 2 && (
@@ -146,7 +148,7 @@ export default function CorrelationView() {
           >
             <div className="font-mono text-xs space-y-2">
               <div className="text-muted-foreground">
-                Incidents: {result.incident_ids.join(", ")} | Showing up to 200 events sorted by datetime
+                Incidents: {result.incident_ids.join(", ")} | Showing up to 500 events sorted by datetime
               </div>
               {result.rows.length === 0 ? (
                 <div className="text-muted-foreground py-4">No correlated events found with the given filters.</div>
@@ -166,7 +168,7 @@ export default function CorrelationView() {
                       </tr>
                     </thead>
                     <tbody>
-                      {result.rows.slice(0, 200).map((row, i) => (
+                      {result.rows.slice(0, 500).map((row, i) => (
                         <tr key={i} className="border-b border-border/30 hover:bg-secondary/30">
                           {DISPLAY_COLS.map(col => (
                             <td
@@ -181,9 +183,9 @@ export default function CorrelationView() {
                       ))}
                     </tbody>
                   </table>
-                  {result.rows.length > 200 && (
+                  {result.rows.length > 500 && (
                     <div className="text-muted-foreground mt-2 text-xs">
-                      Showing 200 of {result.rows.length} results. Use date/keyword filters to narrow.
+                      Showing 500 of {result.rows.length} results. Use date/keyword filters to narrow.
                     </div>
                   )}
                 </div>

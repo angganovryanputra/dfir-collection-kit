@@ -49,11 +49,13 @@ export default function ThreatHuntLibrary() {
   const [runResults, setRunResults] = useState<RunResult | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
 
-  const { data: incidents = [] } = useQuery<{ id: string; type: string; status: string }[]>({
+  type IncidentItem = { id: string; type: string; status: string };
+  const { data: incidentPage } = useQuery<{ total: number; items: IncidentItem[] }>({
     queryKey: ["incidents-dropdown-hunt"],
-    queryFn: () => apiGet<{ id: string; type: string; status: string }[]>("/incidents?limit=50"),
+    queryFn: () => apiGet<{ total: number; items: IncidentItem[] }>("/incidents?limit=100"),
     staleTime: 60_000,
   });
+  const incidents = incidentPage?.items ?? [];
 
   const [form, setForm] = useState({
     name: "",
@@ -173,7 +175,7 @@ export default function ThreatHuntLibrary() {
             >
               <option value="">— Select incident —</option>
               {incidents.map(inc => (
-                <option key={inc.id} value={inc.id}>{inc.id}</option>
+                <option key={inc.id} value={inc.id}>{inc.id} — {inc.type}</option>
               ))}
             </select>
           </div>
@@ -217,6 +219,16 @@ export default function ThreatHuntLibrary() {
                   value={form.query}
                   onChange={e => setForm(f => ({ ...f, query: e.target.value }))}
                   placeholder="SELECT * FROM events WHERE message ILIKE '%mimikatz%' ORDER BY datetime LIMIT 100"
+                />
+              </div>
+              <div>
+                <label className="text-xs text-muted-foreground uppercase">Sigma Rule (optional YAML)</label>
+                <textarea
+                  className="mt-1 w-full px-2 py-1 bg-background border border-input rounded-sm text-xs font-mono resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+                  rows={3}
+                  value={form.sigma_rule}
+                  onChange={e => setForm(f => ({ ...f, sigma_rule: e.target.value }))}
+                  placeholder="title: Mimikatz Usage&#10;detection:&#10;  keywords: ['mimikatz']"
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">

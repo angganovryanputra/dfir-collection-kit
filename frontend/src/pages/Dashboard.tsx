@@ -1,6 +1,6 @@
-import React, { useState, useMemo, memo, useCallback } from "react";
+import React, { useState, useMemo, memo, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -18,12 +18,50 @@ import {
   ArrowUpRight,
   CheckCircle2,
   ShieldAlert,
-  Database
+  Database,
+  Archive,
+  Trash2,
+  X,
+  Volume2,
+  VolumeX,
+  Search as SearchIcon
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPatch } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
 import { cn } from "@/lib/utils";
+
+// ─── Sound System (Synthesized) ───────────────────────────────────────────
+
+const playTacticalPing = () => {
+    try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioContextClass) return;
+        
+        const ctx = new AudioContextClass();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(440, ctx.currentTime + 0.1);
+
+        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.1);
+
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+
+        osc.start();
+        osc.stop(ctx.currentTime + 0.1);
+        
+        setTimeout(() => void ctx.close(), 200);
+    } catch (e) {
+        console.warn("Audio synthesis failed:", e);
+    }
+};
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 interface SystemSettingsPartial {
   ez_tools_path: string | null;
@@ -89,7 +127,14 @@ const mapCollector = (collector: CollectorResponse): Collector => ({
 
 // ─── Memoized Components ──────────────────────────────────────────────────
 
-const IncidentRow = memo(({ incident, onClick }: { incident: Incident; onClick: (i: Incident) => void }) => {
+interface IncidentRowProps {
+    incident: Incident;
+    isSelected: boolean;
+    onToggleSelect: (id: string) => void;
+    onClick: (i: Incident) => void;
+}
+
+const IncidentRow = memo(({ incident, isSelected, onToggleSelect, onClick }: IncidentRowProps) => {
     const isCollectionDone = incident.status === "COLLECTION_COMPLETE" || incident.status === "CLOSED";
     const isCollecting = incident.status === "COLLECTION_IN_PROGRESS";
 
@@ -107,12 +152,28 @@ const IncidentRow = memo(({ incident, onClick }: { incident: Incident; onClick: 
 
     return (
         <div
-            className="border border-border bg-secondary/30 p-4 hover:border-primary/40 hover:bg-secondary/50 hover:scale-[1.01] hover:shadow-[0_0_12px_rgba(21,245,116,0.05)] transition-all duration-300 transition-spring cursor-pointer group relative overflow-hidden"
+            className={cn(
+                "border border-border bg-secondary/30 p-4 hover:border-primary/40 hover:bg-secondary/50 hover:scale-[1.01] hover:shadow-[0_0_12px_rgba(21,245,116,0.05)] transition-all duration-300 transition-spring cursor-pointer group relative overflow-hidden flex items-center gap-4",
+                isSelected && "border-primary/60 bg-primary/5 ring-1 ring-primary/20"
+            )}
             style={{ contentVisibility: "auto", containIntrinsicSize: "auto 86px" }}
             onClick={() => onClick(incident)}
         >
+            <div 
+                className="shrink-0 relative z-30" 
+                onClick={(e) => { e.stopPropagation(); onToggleSelect(incident.id); }}
+            >
+                <div className={cn(
+                    "w-4 h-4 border border-primary/40 rounded-sm transition-colors flex items-center justify-center",
+                    isSelected ? "bg-primary text-primary-foreground" : "bg-background/50 hover:border-primary"
+                )}>
+                    {isSelected && <CheckCircle2 className="w-3 h-3" />}
+                </div>
+            </div>
+
             <div className="absolute top-0 left-0 bottom-0 w-[1.5px] bg-primary scale-y-0 group-hover:scale-y-100 transition-transform duration-300 transition-spring origin-top" />
-            <div className="flex items-start justify-between gap-4">
+            
+            <div className="flex-1 flex items-start justify-between gap-4 min-w-0">
                 <div className="space-y-2 flex-1 min-w-0">
                     <div className="flex items-center gap-3 flex-wrap">
                         <span className="font-mono text-sm font-bold text-foreground">{incident.id}</span>
@@ -170,11 +231,28 @@ const DashboardSkeleton = () => (
 
 export default function Dashboard() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [incidentSearch, setIncidentSearch] = useState("");
   const [incidentStatusFilter, setIncidentStatusFilter] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  
+  const searchRef = useRef<HTMLInputElement>(null);
   const debouncedSearch = useDebounce(incidentSearch, 350);
+
+  // Keyboard Shortcut: Shift + S
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.shiftKey && e.key === "S") {
+            e.preventDefault();
+            searchRef.current?.focus();
+        }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   const incidentParams = useMemo(() => {
       const p = new URLSearchParams({ 
@@ -195,6 +273,13 @@ export default function Dashboard() {
   const incidents = useMemo(() => incidentData?.items.map(mapIncident) ?? [], [incidentData]);
   const totalItems = incidentData?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
+
+  // Sound cue for new critical items
+  useEffect(() => {
+    if (soundEnabled && incidents.some(i => i.status === "COLLECTION_FAILED")) {
+        playTacticalPing();
+    }
+  }, [incidents.length, soundEnabled]);
 
   const { data: collectors = [], refetch: refetchCollectors, isLoading: isCollLoading } = useQuery<CollectorResponse[], Error, Collector[]>({
     queryKey: ["collectors"],
@@ -265,6 +350,28 @@ export default function Dashboard() {
     navigate(`/incidents/${incident.id}`);
   }, [navigate]);
 
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds(prev => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+    });
+  }, []);
+
+  const handleBulkClose = async () => {
+    if (selectedIds.size === 0) return;
+    try {
+        await Promise.all(
+            Array.from(selectedIds).map(id => apiPatch(`/incidents/${id}`, { status: "CLOSED" }))
+        );
+        setSelectedIds(new Set());
+        void queryClient.invalidateQueries({ queryKey: ["incidents"] });
+    } catch (e) {
+        console.error("Bulk action failed:", e);
+    }
+  };
+
   const isInitialLoading = (isIncLoading || isCollLoading) && !incidentData;
 
   return (
@@ -273,13 +380,59 @@ export default function Dashboard() {
       subtitle="DFIR RAPID COLLECTION KIT"
       showWarning={hasActiveCollection}
       headerActions={
-        <Button variant="tactical" onClick={() => navigate("/incidents/create")}>
-          <Plus className="w-4 h-4 mr-2" />
-          CREATE INCIDENT
-        </Button>
+        <div className="flex items-center gap-3">
+            <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0"
+                onClick={() => setSoundEnabled(!soundEnabled)}
+                title={soundEnabled ? "Disable Tactical Audio" : "Enable Tactical Audio"}
+            >
+                {soundEnabled ? <Volume2 className="w-4 h-4 text-primary" /> : <VolumeX className="w-4 h-4 text-muted-foreground" />}
+            </Button>
+            <Button variant="tactical" onClick={() => navigate("/incidents/create")}>
+                <Plus className="w-4 h-4 mr-2" />
+                CREATE INCIDENT
+            </Button>
+        </div>
       }
     >
-      <div className="p-6 space-y-6">
+      <div className="p-6 space-y-6 relative">
+        {/* Bulk Actions Floating Bar */}
+        {selectedIds.size > 0 && (
+            <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-[100] bg-background/95 border border-primary/40 shadow-[0_0_30px_rgba(21,245,116,0.15)] rounded-sm px-6 py-3 flex items-center gap-6 animate-in slide-in-from-bottom-4 duration-300 backdrop-blur-md ring-1 ring-primary/10">
+                <div className="flex items-center gap-3 pr-6 border-r border-border/60">
+                    <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center font-mono text-sm font-bold text-primary">
+                        {selectedIds.size}
+                    </div>
+                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em]">Incidents Selected</span>
+                </div>
+                <div className="flex items-center gap-2">
+                    <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        onClick={handleBulkClose}
+                        className="h-9 px-4 gap-2 text-primary hover:bg-primary/5 font-bold text-[10px] tracking-widest"
+                    >
+                        <Archive className="w-3.5 h-3.5" /> CLOSE_ALL
+                    </Button>
+                    <Button 
+                        variant="ghost" 
+                        size="sm" 
+                        className="h-9 px-4 gap-2 text-destructive hover:bg-destructive/5 font-bold text-[10px] tracking-widest"
+                    >
+                        <Trash2 className="w-3.5 h-3.5" /> PURGE_SECTOR
+                    </Button>
+                </div>
+                <button 
+                    onClick={() => setSelectedIds(new Set())}
+                    className="p-1 hover:bg-secondary rounded-full transition-colors ml-4"
+                >
+                    <X className="w-4 h-4 text-muted-foreground" />
+                </button>
+            </div>
+        )}
+
         {isInitialLoading ? (
             <DashboardSkeleton />
         ) : (
@@ -369,18 +522,25 @@ export default function Dashboard() {
                     </div>
                   }
                 >
-                  <div className="flex items-center gap-2 mb-3">
+                  <div className="flex items-center gap-2 mb-3 relative">
+                    <div className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/50">
+                        <SearchIcon className="w-3.5 h-3.5" />
+                    </div>
                     <input
-                      className="flex-1 h-8 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary transition-all"
-                      placeholder="Search incident ID or operator..."
+                      ref={searchRef}
+                      className="flex-1 h-9 pl-8 pr-12 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary transition-all group"
+                      placeholder="Search incident ID or operator... (Shift + S)"
                       value={incidentSearch}
                       onChange={e => {
                         setIncidentSearch(e.target.value);
                         setCurrentPage(1);
                       }}
                     />
+                    <div className="absolute right-2 top-1/2 -translate-y-1/2 hidden md:block">
+                        <kbd className="px-1.5 py-0.5 bg-secondary border border-border rounded text-[9px] text-muted-foreground font-mono">⇧S</kbd>
+                    </div>
                     <select
-                      className="h-8 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none cursor-pointer"
+                      className="h-9 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none cursor-pointer"
                       value={incidentStatusFilter}
                       onChange={e => {
                         setIncidentStatusFilter(e.target.value);
@@ -406,6 +566,8 @@ export default function Dashboard() {
                           <IncidentRow 
                             key={incident.id} 
                             incident={incident} 
+                            isSelected={selectedIds.has(incident.id)}
+                            onToggleSelect={toggleSelect}
                             onClick={handleIncidentClick} 
                           />
                       ))

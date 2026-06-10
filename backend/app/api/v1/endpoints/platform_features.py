@@ -248,6 +248,7 @@ class ThreatHuntQueryOut(BaseModel):
     is_public: bool
     created_by: str
     created_at: datetime
+    updated_at: datetime
 
     class Config:
         from_attributes = True
@@ -768,38 +769,44 @@ async def correlate_timelines(
     ) -> list[dict]:
         import duckdb
         con = duckdb.connect()
-        selects: list[str] = []
-        for idx, p in enumerate(paths):
-            alias = f"db{idx}"
-            # ATTACH only supports literal strings — escape any embedded single quotes
-            escaped_path = str(p).replace("'", "''")
-            con.execute(f"ATTACH '{escaped_path}' AS {alias} (READ_ONLY)")
-            # avail[idx] already validated by _SAFE_ID_RE (no quotes possible)
-            selects.append(f"SELECT *, '{avail[idx]}' AS corr_incident_id FROM {alias}.events")
-        union_sql = " UNION ALL ".join(selects)
+        try:
+            selects: list[str] = []
+            for idx, p in enumerate(paths):
+                alias = f"db{idx}"
+                # ATTACH only supports literal strings — escape any embedded single quotes
+                escaped_path = str(p).replace("'", "''")
+                con.execute(f"ATTACH '{escaped_path}' AS {alias} (READ_ONLY)")
+                # avail[idx] already validated by _SAFE_ID_RE (no quotes possible)
+                selects.append(f"SELECT *, '{avail[idx]}' AS corr_incident_id FROM {alias}.events")
+            union_sql = " UNION ALL ".join(selects)
 
-        # Build WHERE clause using DuckDB positional parameters — no string interpolation
-        where: list[str] = []
-        params: list[Any] = []
-        if search:
-            where.append("(CAST(message AS VARCHAR) ILIKE ? OR CAST(source AS VARCHAR) ILIKE ?)")
-            params.extend([f"%{search}%", f"%{search}%"])
-        if d_from:
-            where.append("CAST(datetime AS VARCHAR) >= ?")
-            params.append(d_from)
-        if d_to:
-            where.append("CAST(datetime AS VARCHAR) <= ?")
-            params.append(d_to)
+            # Build WHERE clause using DuckDB positional parameters — no string interpolation.
+            # Use TRY_CAST(? AS TIMESTAMPTZ) for date bounds so ISO-8601 strings from the
+            # frontend ("2026-06-10T14:30:00.000Z") are compared as actual timestamps, not
+            # as strings (CAST(datetime AS VARCHAR) produces "2026-06-10 14:30:00+00" with a
+            # space separator, making string comparison wrong).
+            where: list[str] = []
+            params: list[Any] = []
+            if search:
+                where.append("(CAST(message AS VARCHAR) ILIKE ? OR CAST(source AS VARCHAR) ILIKE ?)")
+                params.extend([f"%{search}%", f"%{search}%"])
+            if d_from:
+                where.append("datetime >= TRY_CAST(? AS TIMESTAMPTZ)")
+                params.append(d_from)
+            if d_to:
+                where.append("datetime <= TRY_CAST(? AS TIMESTAMPTZ)")
+                params.append(d_to)
 
-        sql = f"SELECT * FROM ({union_sql}) t"
-        if where:
-            sql += " WHERE " + " AND ".join(where)
-        sql += " ORDER BY datetime NULLS LAST LIMIT 500"
+            sql = f"SELECT * FROM ({union_sql}) t"
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            sql += " ORDER BY datetime NULLS LAST LIMIT 500"
 
-        rows = con.execute(sql, params).fetchall()
-        cols = [d[0] for d in con.description or []]
-        con.close()
-        return [dict(zip(cols, row)) for row in rows]
+            rows = con.execute(sql, params).fetchall()
+            cols = [d[0] for d in con.description or []]
+            return [dict(zip(cols, row)) for row in rows]
+        finally:
+            con.close()
 
     try:
         rows = await asyncio.to_thread(_correlate, db_paths, available, q, date_from, date_to)
