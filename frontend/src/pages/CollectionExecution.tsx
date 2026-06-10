@@ -6,7 +6,6 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { WarningBanner } from "@/components/WarningBanner";
 import { TerminalLog, LogEntry } from "@/components/TerminalLog";
 import { ProgressPhase } from "@/components/ProgressPhase";
-import { StatusIndicator } from "@/components/StatusIndicator";
 import { KeyValueRow } from "@/components/common/KeyValueRow";
 import {
   Shield,
@@ -14,11 +13,16 @@ import {
   Download,
   AlertTriangle,
   Search,
+  Activity,
+  Terminal as TerminalIcon,
+  Server,
+  Box,
 } from "lucide-react";
 import type { CollectionPhase } from "@/types/dfir";
 import { apiGet, apiPost } from "@/lib/api";
 import { getStoredRole, isViewerRole } from "@/lib/auth";
-
+import { StatusBadge } from "@/components/common/StatusBadge";
+import { SafeText } from "@/components/common/SafeText";
 
 type IncidentSummary = {
   id: string;
@@ -98,11 +102,10 @@ type EvidenceItemResponse = {
   collected_at: string;
 };
 
-// Agent phases: collecting → parsing → uploading (matches executor.go status strings)
 const PHASES: { id: string; name: string }[] = [
-  { id: "collecting", name: "ARTIFACT COLLECTION" },
-  { id: "parsing", name: "LOCAL PARSING" },
-  { id: "uploading", name: "EVIDENCE UPLOAD" },
+  { id: "collecting", name: "Acquisition" },
+  { id: "parsing", name: "Local Analysis" },
+  { id: "uploading", name: "Data Transfer" },
 ];
 
 const resolveActivePhaseId = (backendPhase: string | null): string => {
@@ -115,58 +118,9 @@ export default function CollectionExecution() {
   const navigate = useNavigate();
   const { id: incidentId } = useParams<{ id: string }>();
   const location = useLocation();
-  // Extract all collection parameters passed from CollectionSetup via navigation state.
-  // Fallback to sessionStorage so a page refresh doesn't lose the selection.
-  const locationState = location.state as {
-    selectedModuleIds?: unknown;
-    profile?: unknown;
-    osOverride?: unknown;
-    agentIds?: unknown;
-  } | null;
+  const locationState = location.state as any;
 
-  const _rawModuleIds = locationState?.selectedModuleIds;
-  const selectedModuleIds: string[] | null =
-    Array.isArray(_rawModuleIds) && _rawModuleIds.every((x) => typeof x === "string")
-      ? (_rawModuleIds as string[])
-      : (() => {
-          // Fallback: try sessionStorage (survives page refresh)
-          try {
-            const stored = sessionStorage.getItem(`dfir_collect_modules_${incidentId}`);
-            if (stored) {
-              const parsed = JSON.parse(stored);
-              if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
-                return parsed as string[];
-              }
-            }
-          } catch { /* ignore */ }
-          return null;
-        })();
-
-  const _rawProfile = locationState?.profile;
-  const collectionProfile: string | null =
-    typeof _rawProfile === "string" ? _rawProfile : null;
-
-  const _rawOsOverride = locationState?.osOverride;
-  const osOverride: string | null =
-    typeof _rawOsOverride === "string" ? _rawOsOverride : null;
-
-  const _rawAgentIds = locationState?.agentIds;
-  const agentIds: string[] | null =
-    Array.isArray(_rawAgentIds) && _rawAgentIds.every((x) => typeof x === "string")
-      ? (_rawAgentIds as string[])
-      : null;
-
-  // Persist selection to sessionStorage so refresh doesn't lose it
-  useEffect(() => {
-    if (incidentId && selectedModuleIds && selectedModuleIds.length > 0) {
-      try {
-        sessionStorage.setItem(
-          `dfir_collect_modules_${incidentId}`,
-          JSON.stringify(selectedModuleIds),
-        );
-      } catch { /* ignore quota errors */ }
-    }
-  }, [incidentId, selectedModuleIds]);
+  const selectedModuleIds = locationState?.selectedModuleIds || [];
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [phases, setPhases] = useState<CollectionPhase[]>(
     PHASES.map(({ id, name }) => ({ id, name, status: "pending" }))
@@ -176,13 +130,6 @@ export default function CollectionExecution() {
   const [incident, setIncident] = useState<IncidentSummary | null>(null);
   const [device, setDevice] = useState<DeviceSummary | null>(null);
   const [collector, setCollector] = useState<CollectorSummary | null>(null);
-  const [summary, setSummary] = useState({
-    artifacts: 0,
-    totalSize: "--",
-    hashAlg: "UNKNOWN",
-    status: "LOCKED" as "LOCKED" | "HASH_VERIFIED",
-  });
-  const [completionMessage, setCompletionMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [perHostJobs, setPerHostJobs] = useState<PerHostJobStatus[]>([]);
   const [currentModule, setCurrentModule] = useState<string | null>(null);
@@ -194,502 +141,262 @@ export default function CollectionExecution() {
   const startedAtRef = useRef<number | null>(null);
 
   useEffect(() => {
-  const loadContext = async () => {
-    if (!incidentId) {
-      setErrorMessage("Missing incident identifier.");
-      return;
-    }
-    try {
-      const current = await apiGet<IncidentSummary>(`/incidents/${incidentId}`);
-      setIncident(current);
+    const loadContext = async () => {
+      if (!incidentId) return;
+      try {
+        const current = await apiGet<IncidentSummary>(`/incidents/${incidentId}`);
+        setIncident(current);
 
-      const devices = await apiGet<DeviceSummary[]>("/devices");
-      const target = current?.target_endpoints[0]?.toLowerCase() ?? "";
-      const matchedDevice = target
-        ? devices.find((entry) => entry.hostname.toLowerCase() === target) ?? null
-        : null;
-      setDevice(matchedDevice);
+        const devices = await apiGet<DeviceSummary[]>("/devices");
+        const target = current?.target_endpoints[0]?.toLowerCase() ?? "";
+        const matchedDevice = devices.find((entry) => entry.hostname.toLowerCase() === target) ?? null;
+        setDevice(matchedDevice);
 
-      const collectors = await apiGet<CollectorSummary[]>("/collectors");
-      setCollector(collectors[0] ?? null);
-    } catch {
-      setErrorMessage("Unable to load collection context.");
-    }
-  };
-  loadContext();
+        const collectors = await apiGet<CollectorSummary[]>("/collectors");
+        setCollector(collectors[0] ?? null);
+      } catch {
+        setErrorMessage("Acquisition context unavailable.");
+      }
+    };
+    loadContext();
   }, [incidentId]);
-
 
   useEffect(() => {
     const startCollection = async () => {
-      if (!incidentId || startedRef.current) return;
-      if (isViewer) {
-        setErrorMessage("Viewer accounts cannot start collections.");
-        return;
-      }
-
-      // RACE CONDITION FIX:
-      // Don't rely on `incident` state here — it loads asynchronously from a
-      // DIFFERENT useEffect.  If `incident` is null when this fires, the
-      // alreadyRunning check is skipped and we'd double-POST to /collect.
-      // Instead, fetch the current incident status directly before deciding.
-      try {
-        const currentIncident = await apiGet<IncidentSummary>(`/incidents/${incidentId}`).catch(() => null);
-        if (currentIncident) {
-          const status = currentIncident.status;
-          if (
-            status === "COLLECTION_IN_PROGRESS" ||
-            status === "COLLECTION_COMPLETE" ||
-            status === "COLLECTION_FAILED"
-          ) {
-            startedRef.current = true;
-            startedAtRef.current = Date.now();
-            if (status === "COLLECTION_IN_PROGRESS") {
-              setPollingEnabled(true);
-            } else if (status === "COLLECTION_COMPLETE") {
-              setIsComplete(true);
-              setCompletionMessage("Collection already complete.");
-              setPhases((prev) => prev.map((p) => ({ ...p, status: "complete", progress: 100 })));
-            } else {
-              setErrorMessage("Previous collection failed. Check logs and retry.");
-            }
-            return;
-          }
-        }
-      } catch {
-        // If we can't fetch status, proceed with start attempt
-      }
+      if (!incidentId || startedRef.current || isViewer) return;
 
       setIsStarting(true);
       try {
-        // Build the collection request body, passing all UI-selected parameters
-        // to the backend so module validation uses the correct OS.
-        const collectBody: Record<string, unknown> = {};
-        if (selectedModuleIds && selectedModuleIds.length > 0) {
-          collectBody.module_ids = selectedModuleIds;
-        } else if (collectionProfile) {
-          collectBody.profile = collectionProfile;
+        const currentIncident = await apiGet<IncidentSummary>(`/incidents/${incidentId}`).catch(() => null);
+        if (currentIncident && ["COLLECTION_IN_PROGRESS", "COLLECTION_COMPLETE"].includes(currentIncident.status)) {
+           startedRef.current = true;
+           startedAtRef.current = Date.now();
+           setPollingEnabled(currentIncident.status === "COLLECTION_IN_PROGRESS");
+           if (currentIncident.status === "COLLECTION_COMPLETE") {
+             setIsComplete(true);
+             setPhases(prev => prev.map(p => ({ ...p, status: "complete", progress: 100 })));
+           }
+           return;
         }
-        // CRITICAL: always send os_override when the user has changed the OS
-        // selector in CollectionSetup — without this the backend validates
-        // module IDs against the device's registered OS and returns HTTP 400.
-        if (osOverride) {
-          collectBody.os_override = osOverride;
-        }
-        // agent_ids: restrict collection to specific devices in multi-host incidents
-        if (agentIds && agentIds.length > 0) {
-          collectBody.agent_ids = agentIds;
-        }
+
+        const collectBody: any = { 
+          module_ids: selectedModuleIds,
+          os_override: locationState?.osOverride
+        };
         await apiPost(`/incidents/${incidentId}/collect`, collectBody);
         startedRef.current = true;
         startedAtRef.current = Date.now();
         setPollingEnabled(true);
-        setErrorMessage(null);
-      } catch (err) {
-        // Show the actual error from the backend (e.g. validation messages)
-        // rather than a generic "Unable to start" message.
-        let msg = "Unable to start collection.";
-        if (err instanceof Error) {
-          try {
-            const parsed = JSON.parse(err.message);
-            msg = parsed.detail ?? parsed.message ?? err.message;
-          } catch {
-            msg = err.message.slice(0, 300);
-          }
-        }
-        setErrorMessage(msg);
+      } catch (err: any) {
+        setErrorMessage(err.message || "Activation failure.");
       } finally {
         setIsStarting(false);
       }
     };
-
     startCollection();
-    // Intentionally NOT including `incident` in the dependency array.
-    // The race condition was: `incident` loads async, so this effect would
-    // re-fire when it loaded and potentially double-POST to /collect.
-    // The race is fixed by fetching status directly inside startCollection.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [incidentId, isViewer]);
+  }, [incidentId, isViewer, selectedModuleIds, locationState?.osOverride]);
 
   const handlePoll = useCallback(async (): Promise<string | null> => {
     if (!incidentId || !startedRef.current) return null;
     try {
-      const status = await apiPost<CollectionStatusResponse>(
-        `/incidents/${incidentId}/collect/poll`,
-        {}
-      );
+      const status = await apiPost<CollectionStatusResponse>(`/incidents/${incidentId}/collect/poll`, {});
+      
       if (status.logs.length > 0) {
-        const newEntries = status.logs.map((entry) => ({
-          timestamp: new Date(entry.timestamp).toLocaleTimeString("en-US", { hour12: false }),
-          level: entry.level,
-          message: entry.message,
-        }));
-        setLogs((prev) => [...prev, ...newEntries]);
-        // Extract "currently executing" module from the latest log message
-        const latestMsg = status.logs[status.logs.length - 1]?.message ?? "";
-        const execMatch = latestMsg.match(/Executing module\s+(\S+)/i)
-          ?? latestMsg.match(/Starting module:\s+(\S+)/i);
-        if (execMatch) {
-          setCurrentModule(execMatch[1]);
-        }
-        // Clear current module when it completes
-        const completedMatch = latestMsg.match(/Completed module\s+(\S+)/i);
-        if (completedMatch) {
-          setCurrentModule(null);
-        }
+        setLogs(prev => [
+          ...prev, 
+          ...status.logs.map(l => ({
+            timestamp: new Date(l.timestamp).toLocaleTimeString("en-US", { hour12: false }),
+            level: l.level,
+            message: l.message
+          }))
+        ]);
+        const latestMsg = status.logs[status.logs.length - 1].message;
+        const m = latestMsg.match(/(?:Executing|Starting) module\s+(\S+)/i);
+        if (m) setCurrentModule(m[1]);
       }
-      if (status.jobs && status.jobs.length > 0) {
-        setPerHostJobs(status.jobs);
-      }
-      setElapsedTime(() => {
-        if (startedAtRef.current) {
-          return Math.floor((Date.now() - startedAtRef.current) / 1000);
-        }
-        return 0;
-      });
+
+      setPerHostJobs(status.jobs || []);
+      setElapsedTime(startedAtRef.current ? Math.floor((Date.now() - startedAtRef.current) / 1000) : 0);
+
       if (status.status === "COLLECTION_COMPLETE") {
         setIsComplete(true);
-        setCompletionMessage("Collection complete. Evidence locked and chain-of-custody updated.");
-        setPhases((prev) =>
-          prev.map((phase) => ({ ...phase, status: "complete", progress: 100 }))
-        );
+        setPhases(prev => prev.map(p => ({ ...p, status: "complete", progress: 100 })));
         setPollingEnabled(false);
         return null;
       }
+
       if (status.status === "COLLECTION_FAILED") {
-        setIsComplete(false);
-        setErrorMessage("Collection failed. Review logs for details.");
-        setCompletionMessage(null);
-        setPhases((prev) =>
-          prev.map((phase) =>
-            phase.status === "active" ? { ...phase, status: "error" } : phase
-          )
-        );
+        setErrorMessage("Acquisition sequence failed.");
+        setPhases(prev => prev.map(p => p.status === "active" ? { ...p, status: "error" } : p));
         setPollingEnabled(false);
         return null;
       }
-      const activePhaseId = resolveActivePhaseId(status.phase);
-      setPhases((prev) =>
-        prev.map((phase) => {
-          const phaseIdx = PHASES.findIndex((p) => p.id === phase.id);
-          const activeIdx = PHASES.findIndex((p) => p.id === activePhaseId);
-          if (phaseIdx < activeIdx) return { ...phase, status: "complete", progress: 100 };
-          if (phase.id === activePhaseId) {
-            const prog = phase.id === "collecting" ? status.progress : undefined;
-            return { ...phase, status: "active", progress: prog };
-          }
-          return { ...phase, status: "pending", progress: undefined };
-        })
-      );
-      return `${status.status}:${status.phase ?? ""}`;
+
+      const activeId = resolveActivePhaseId(status.phase);
+      setPhases(prev => prev.map(p => {
+        const pIdx = PHASES.findIndex(x => x.id === p.id);
+        const aIdx = PHASES.findIndex(x => x.id === activeId);
+        if (pIdx < aIdx) return { ...p, status: "complete", progress: 100 };
+        if (p.id === activeId) return { ...p, status: "active", progress: p.id === "collecting" ? status.progress : undefined };
+        return { ...p, status: "pending" };
+      }));
+
+      return status.status;
     } catch {
-      setErrorMessage("Unable to poll collection status.");
       return null;
     }
   }, [incidentId]);
 
-  useAdaptivePolling({
-    enabled: pollingEnabled,
-    onPoll: handlePoll,
-    initialInterval: 2000,
-    maxInterval: 30_000,
-    backoffFactor: 1.5,
-  });
-
-  useEffect(() => {
-    const fetchExistingEvidence = async () => {
-      if (!incidentId || !isComplete) return;
-      try {
-        const folders = await apiGet<EvidenceFolderResponse[]>("/evidence/folders");
-        const folder = folders.find((entry) => entry.incident_id === incidentId) ?? null;
-        if (!folder) return;
-        const items = await apiGet<EvidenceItemResponse[]>(
-          `/evidence/items?incident_id=${folder.incident_id}`
-        );
-        const hasHash = items.some((item) => item.hash && item.hash.trim().length > 0);
-        setSummary({
-          artifacts: items.length || folder.files_count,
-          totalSize: folder.total_size || "--",
-          hashAlg: hasHash ? "SHA-256" : "UNKNOWN",
-          status: folder.status,
-        });
-      } catch {
-        // summary fetch is best-effort; silently skip on error
-      }
-    };
-
-    fetchExistingEvidence();
-  }, [incidentId, isComplete]);
+  useAdaptivePolling({ enabled: pollingEnabled, onPoll: handlePoll, initialInterval: 2000 });
 
   const handleAbort = async () => {
     if (!incidentId || isViewer) return;
     setIsAborting(true);
     try {
-      type JobSummary = { id: string; status: string };
-      const jobs = await apiGet<JobSummary[]>(`/jobs/incident/${incidentId}`);
-      // Cancel ALL active jobs, not just the first one — multi-host incidents
-      // create one job per target device.
-      const activeJobs = jobs.filter((j) =>
-        ["pending", "collecting", "in_progress", "running"].includes(j.status.toLowerCase())
-      );
-      if (activeJobs.length === 0) {
-        setErrorMessage("No active jobs found to abort.");
-        return;
-      }
-      // Cancel all in parallel
-      await Promise.allSettled(activeJobs.map((j) => apiPost(`/jobs/${j.id}/cancel`, {})));
-      setErrorMessage(`Collection aborted by operator. (${activeJobs.length} job(s) cancelled)`);
+      const activeJobs = await apiGet<any[]>(`/jobs/incident/${incidentId}`);
+      await Promise.allSettled(activeJobs.map(j => apiPost(`/jobs/${j.id}/cancel`, {})));
       setPollingEnabled(false);
+      setErrorMessage("Sequence aborted by analyst.");
     } catch {
-      setErrorMessage("Failed to abort collection. Try again.");
+      setErrorMessage("Abort command failed.");
     } finally {
       setIsAborting(false);
     }
   };
 
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  const formatTime = (s: number) => {
+    const m = Math.floor(s / 60);
+    return `${String(m).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
   };
 
   return (
-    <div className="min-h-screen bg-background tactical-grid flex flex-col">
+    <div className="min-h-screen bg-background tactical-grid flex flex-col overflow-hidden font-mono">
       {/* Header */}
-      <header className="border-b border-border bg-card">
-        <div className="flex items-center justify-between px-6 py-3">
+      <header className="border-b border-border bg-card/80 backdrop-blur-md z-30 shrink-0">
+        <div className="flex items-center justify-between px-6 py-4">
           <div className="flex items-center gap-4">
-            <Shield className="w-6 h-6 text-primary animate-pulse-glow" />
+            <div className="p-2 bg-primary/10 rounded-sm border border-primary/20">
+              <Shield className={cn("w-6 h-6 text-primary", !isComplete && "animate-pulse")} />
+            </div>
             <div>
-              <h1 className="font-mono text-lg font-bold tracking-wider text-foreground">
-                {isComplete
-                  ? "COLLECTION COMPLETE"
-                  : phases.find((p) => p.status === "active")?.id === "parsing"
-                    ? "PARSING ARTIFACTS"
-                    : phases.find((p) => p.status === "active")?.id === "uploading"
-                      ? "UPLOADING EVIDENCE"
-                      : "COLLECTION IN PROGRESS"}
+              <h1 className="text-lg font-bold tracking-[0.2em] text-foreground uppercase">
+                {isComplete ? "Sector Secured" : "Acquisition Active"}
               </h1>
-              <p className="font-mono text-xs text-muted-foreground">
-                INCIDENT: {incident?.id ?? incidentId ?? "PENDING"}
+              <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
+                STREAM_ID: <span className="text-foreground font-bold">{incidentId}</span>
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-6">
-            {selectedModuleIds && (
-              <div className="font-mono text-sm">
-                <span className="text-muted-foreground">MODULES: </span>
-                <span className="text-primary font-bold">{selectedModuleIds.length}</span>
-              </div>
-            )}
-            <div className="font-mono text-sm">
-              <span className="text-muted-foreground">ELAPSED: </span>
-              <span className="text-primary font-bold">{formatTime(elapsedTime)}</span>
+          <div className="flex items-center gap-8">
+            <div className="hidden lg:flex flex-col items-end gap-1">
+              <div className="text-[9px] text-muted-foreground uppercase tracking-tighter opacity-60">Elapsed</div>
+              <div className="text-sm font-bold text-primary tabular-nums">{formatTime(elapsedTime)}</div>
             </div>
-            <StatusIndicator
-              status={isComplete ? "verified" : "active"}
-              label={
-                isStarting ? "INITIALIZING"
-                  : isComplete ? "COMPLETE"
-                    : (phases.find((p) => p.status === "active")?.id ?? "collecting").toUpperCase()
-              }
-              pulse={!isComplete}
+            <StatusBadge 
+              status={isComplete ? "verified" : "running"} 
+              label={isStarting ? "INITIALIZING" : isComplete ? "COMPLETE" : resolveActivePhaseId(phases.find(p => p.status === "active")?.id ?? "collecting").toUpperCase()} 
             />
           </div>
         </div>
       </header>
 
       {errorMessage && (
-        <WarningBanner variant="critical" className="animate-pulse">
-          <AlertTriangle className="inline w-4 h-4 mr-2" />
-          {errorMessage}
+        <WarningBanner variant="critical" className="shrink-0">
+          <AlertTriangle className="w-4 h-4 mr-2" /> {errorMessage}
         </WarningBanner>
       )}
 
-      {completionMessage && !errorMessage && (
-        <WarningBanner variant="warning">
-          {completionMessage}
-        </WarningBanner>
-      )}
-
-      {/* Critical Warning Banner */}
-      {!isComplete && !errorMessage && (
-        <WarningBanner variant="critical" className="animate-pulse">
-          <AlertTriangle className="inline w-4 h-4 mr-2" />
-          {isStarting
-            ? "INITIALIZING COLLECTION ENGINE — STAND BY"
-            : phases.find((p) => p.status === "active")?.id === "parsing"
-              ? "AGENT PARSING ARTIFACTS LOCALLY — DO NOT TERMINATE AGENT PROCESS"
-              : phases.find((p) => p.status === "active")?.id === "uploading"
-                ? "UPLOADING EVIDENCE TO SERVER — DO NOT DISCONNECT NETWORK"
-                : "DO NOT SHUT DOWN OR RESTART TARGET SYSTEM — COLLECTION IN PROGRESS"}
-        </WarningBanner>
-      )}
-
-      {/* Main Content */}
-      <main className="flex-1 p-6 overflow-hidden">
+      {/* Main Grid */}
+      <main className="flex-1 p-6 overflow-hidden min-h-0">
         <div className="grid grid-cols-12 gap-6 h-full">
-          {/* Left - Terminal Log */}
-          <div className="col-span-8 flex flex-col" style={{ minHeight: 0 }}>
-            <TacticalPanel
-              title="COLLECTION LOG"
-              status="active"
+          {/* Telemetry Stream */}
+          <div className="col-span-8 flex flex-col min-h-0">
+            <TacticalPanel 
+              title="TELEMETRY_LOG" 
+              status="active" 
               className="flex-1 flex flex-col"
-              headerActions={
-                <span className="font-mono text-xs text-muted-foreground">
-                  {logs.length} ENTRIES
-                </span>
-              }
+              headerActions={<span className="text-[9px] text-muted-foreground">{logs.length} EVENTS RECORDED</span>}
             >
-              <TerminalLog
-                entries={logs}
-                className="flex-1"
-                searchable
-                autoScroll
-              />
+              <TerminalLog entries={logs} className="flex-1" autoScroll searchable />
             </TacticalPanel>
           </div>
 
-          {/* Right - Status */}
-          <div className="col-span-4 space-y-6">
-            {/* Target Info */}
-            <TacticalPanel title="TARGET INFORMATION">
-              <div className="space-y-3 font-mono text-sm">
-                <KeyValueRow label="HOSTNAME:" value={device?.hostname ?? "PENDING"} />
-                <KeyValueRow label="IP ADDRESS:" value={device?.ip_address ?? "PENDING"} />
-                <KeyValueRow label="OS:" value={device?.os ?? "PENDING"} />
-                <KeyValueRow
-                  label="COLLECTOR:"
-                  value={collector?.name ?? "PENDING"}
-                  valueClassName={collector ? "text-primary" : undefined}
-                />
+          {/* Controls & Metrics */}
+          <div className="col-span-4 flex flex-col gap-6 overflow-y-auto pr-1 custom-scrollbar">
+            <TacticalPanel title="TARGET_IDENTITY">
+              <div className="space-y-2.5 text-[10px]">
+                <KeyValueRow label="HOSTNAME" value={device?.hostname ?? "ACQUIRING..."} />
+                <KeyValueRow label="INTERFACE" value={device?.ip_address ?? "---"} />
+                <KeyValueRow label="PLATFORM" value={device?.os ?? "---"} />
+                <KeyValueRow label="COLLECTOR" value={collector?.name ?? "---"} valueClassName="text-primary font-bold" />
               </div>
             </TacticalPanel>
 
-            {/* Collection Phases */}
-            <TacticalPanel title="COLLECTION PHASES" status={isComplete ? "online" : "active"}>
+            <TacticalPanel title="SEQUENCE_PHASES" status={isComplete ? "verified" : "active"}>
               <ProgressPhase phases={phases} />
-              {/* Current module being executed — prominently displayed */}
               {currentModule && !isComplete && (
-                <div className="mt-3 pt-3 border-t border-border/30 font-mono text-xs">
-                  <div className="text-muted-foreground uppercase tracking-wider mb-1">Current Module</div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-primary animate-pulse shrink-0" />
-                    <span className="text-primary font-bold truncate">{currentModule}</span>
-                  </div>
+                <div className="mt-4 pt-4 border-t border-border/20">
+                   <div className="text-[9px] text-muted-foreground uppercase tracking-widest mb-2 flex items-center gap-2">
+                     <Activity className="w-3 h-3 animate-pulse text-primary" /> Active Module
+                   </div>
+                   <div className="flex items-center gap-2 bg-secondary/20 p-2 rounded-sm border border-border/40">
+                      <Box className="w-3.5 h-3.5 text-primary" />
+                      <SafeText text={currentModule} className="text-[10px] font-bold text-foreground" truncate={30} />
+                   </div>
                 </div>
               )}
             </TacticalPanel>
 
-            {/* Per-host progress */}
             {perHostJobs.length > 1 && (
-              <TacticalPanel title="PER-HOST STATUS">
-                <div className="space-y-1.5 font-mono text-xs">
-                  {perHostJobs.map((job) => {
-                    const st = job.status.toLowerCase();
-                    const isOk = st === "done" || st === "complete";
-                    const isErr = st === "failed" || st === "cancelled";
-                    return (
-                      <div key={job.job_id} className="flex items-center gap-2 py-1 border-b border-border/30 last:border-0">
-                        <div className={`w-2 h-2 rounded-full shrink-0 ${isOk ? "bg-primary" : isErr ? "bg-destructive" : "bg-yellow-500 animate-pulse"}`} />
-                        <span className="truncate flex-1 text-foreground">
-                          {job.hostname ?? job.job_id.split("-").pop() ?? job.job_id}
-                        </span>
-                        <span className={`shrink-0 uppercase tracking-wider ${isOk ? "text-primary" : isErr ? "text-destructive" : "text-muted-foreground"}`}>
-                          {job.status}
-                        </span>
-                        <span className="shrink-0 text-muted-foreground">
-                          {job.module_count}m
-                        </span>
+              <TacticalPanel title="GRID_CONCURRENCY">
+                <div className="space-y-1.5">
+                  {perHostJobs.map(job => (
+                    <div key={job.job_id} className="flex items-center justify-between py-1.5 border-b border-border/10 last:border-0">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Server className="w-3 h-3 text-muted-foreground shrink-0" />
+                        <span className="text-[10px] truncate">{job.hostname || job.job_id}</span>
                       </div>
-                    );
-                  })}
+                      <StatusBadge status={job.status} iconOnly className="h-4 px-1" />
+                    </div>
+                  ))}
                 </div>
               </TacticalPanel>
             )}
 
-            {/* Actions */}
-            <div className="space-y-3">
+            <div className="space-y-3 mt-auto pt-4">
               {isComplete ? (
                 <>
-                  <Button
-                    variant="tactical"
-                    size="lg"
-                    className="w-full"
-                    onClick={() => navigate(`/incidents/${incident?.id ?? incidentId ?? ""}/processing`)}
-                  >
-                    <Search className="w-4 h-4" />
-                    ANALYZE FORENSICS
+                  <Button variant="tactical" size="lg" className="w-full h-11 text-[11px] font-bold tracking-[0.2em]" onClick={() => navigate(`/incidents/${incidentId}`)}>
+                    <Search className="w-4 h-4" /> ACTIVATE ANALYSIS
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    className="w-full"
-                    onClick={() => navigate(`/evidence/${incident?.id ?? incidentId ?? ""}`)}
-                  >
-                    <Download className="w-4 h-4" />
-                    VIEW EVIDENCE
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    size="lg"
-                    className="w-full"
-                    onClick={() => navigate("/dashboard")}
-                  >
-                    RETURN TO DASHBOARD
+                  <Button variant="secondary" size="lg" className="w-full h-11 text-[11px] font-bold tracking-[0.2em]" onClick={() => navigate("/dashboard")}>
+                    RETURN TO BASE
                   </Button>
                 </>
               ) : (
-                <Button
-                  variant="destructive"
-                  size="lg"
-                  className="w-full"
-                  disabled={isViewer || isAborting}
-                  onClick={handleAbort}
-                >
-                  <StopCircle className="w-4 h-4" />
-                  {isAborting ? "ABORTING..." : "EMERGENCY ABORT"}
+                <Button variant="destructive" size="lg" className="w-full h-11 text-[11px] font-bold tracking-[0.2em] animate-pulse" onClick={handleAbort} disabled={isAborting || isViewer}>
+                  <StopCircle className="w-4 h-4" /> {isAborting ? "SENDING ABORT..." : "EMERGENCY SHUTDOWN"}
                 </Button>
               )}
             </div>
-
-            {/* Collection Stats */}
-            {isComplete && (
-              <TacticalPanel title="COLLECTION SUMMARY">
-                <div className="space-y-2 font-mono text-xs">
-                  <KeyValueRow
-                    label="ARTIFACTS:"
-                    value={`${summary.artifacts || 0} files`}
-                    valueClassName="text-primary"
-                  />
-                  <KeyValueRow
-                    label="TOTAL SIZE:"
-                    value={summary.totalSize}
-                    valueClassName="text-primary"
-                  />
-                  <KeyValueRow
-                    label="HASH ALG:"
-                    value={summary.hashAlg}
-                    valueClassName="text-primary"
-                  />
-                  <KeyValueRow
-                    label="STATUS:"
-                    value={summary.status === "HASH_VERIFIED" ? "HASH VERIFIED" : "LOCKED"}
-                    valueClassName="text-primary"
-                  />
-                </div>
-              </TacticalPanel>
-            )}
-
           </div>
         </div>
       </main>
 
-      {/* Footer */}
-      <footer className="border-t border-border bg-secondary px-6 py-2 flex items-center justify-between font-mono text-xs text-muted-foreground">
-        <span>OPERATOR: {incident?.operator ?? "PENDING"}</span>
-        <span>COLLECTOR: {collector?.name ?? "PENDING"}</span>
-        <span>{new Date().toISOString()}</span>
+      {/* Ticker Footer */}
+      <footer className="border-t border-border bg-card px-6 py-1.5 flex items-center justify-between text-[9px] text-muted-foreground uppercase tracking-tighter">
+        <div className="flex items-center gap-4">
+          <span className="flex items-center gap-1.5 text-primary font-bold">
+            <TerminalIcon className="w-3 h-3" /> ANALYST_OPS: ACTIVE
+          </span>
+          <span className="opacity-40">|</span>
+          <span>OPERATOR: {incident?.operator ?? "SYSTEM"}</span>
+        </div>
+        <div className="flex items-center gap-4">
+           <span>{new Date().toISOString()}</span>
+           <span className="opacity-40">|</span>
+           <span className="text-green-500/60 font-bold">Encrypted: AES-GCM</span>
+        </div>
       </footer>
     </div>
   );

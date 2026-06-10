@@ -1,17 +1,17 @@
+import { logout } from "./auth";
+
 type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
 
 const DEFAULT_BASE_URL = "/api/v1";
 
-// Per-method request timeouts in milliseconds.
 const METHOD_TIMEOUT_MS: Record<HttpMethod, number> = {
   GET: 30_000,
-  POST: 120_000,  // collection trigger, pipeline dispatch, exports
+  POST: 120_000,
   PATCH: 30_000,
   PUT: 60_000,
   DELETE: 30_000,
 };
 
-// Paths that should never time out (large file uploads / streaming downloads).
 const NO_TIMEOUT_PATHS = ["/agents/upload", "/evidence/exports", "/siem-export"];
 
 const getBaseUrl = () => {
@@ -30,22 +30,6 @@ const getAuthToken = () => {
   }
 };
 
-const handleAuthFailure = (path: string) => {
-  if (typeof window === "undefined") return;
-  if (path.startsWith("/auth/")) return;
-  localStorage.removeItem("dfir_auth");
-  localStorage.removeItem("dfir_logout_reason");
-  localStorage.setItem(
-    "dfir_logout_reason",
-    JSON.stringify({ reason: "expired", timestamp: new Date().toISOString() })
-  );
-  const currentPath = window.location.pathname + window.location.search;
-  if (currentPath !== "/" && currentPath !== "/login") {
-    localStorage.setItem("dfir_redirect_after_login", currentPath);
-  }
-  window.location.href = "/login";
-};
-
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const request = async <T>(
@@ -54,7 +38,8 @@ const request = async <T>(
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<T> => {
-  const url = `${getBaseUrl()}${path}`;
+  const baseUrl = getBaseUrl();
+  const url = `${baseUrl}${path}`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
   const token = getAuthToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -62,7 +47,6 @@ const request = async <T>(
   const skipTimeout = NO_TIMEOUT_PATHS.some((p) => path.includes(p));
   const timeoutMs = skipTimeout ? 0 : METHOD_TIMEOUT_MS[method];
 
-  // Build a combined AbortSignal merging the caller's signal with our timeout.
   let controller: AbortController | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let combinedSignal: AbortSignal | undefined = signal;
@@ -94,8 +78,12 @@ const request = async <T>(
       if (timer) { clearTimeout(timer); timer = null; }
 
       if (response.status === 401) {
-        handleAuthFailure(path);
-        throw new Error(JSON.stringify({ detail: "Unauthorized" }));
+        logout("expired");
+        throw new Error(JSON.stringify({ detail: "Session expired", status: 401 }));
+      }
+
+      if (response.status === 403) {
+        throw new Error(JSON.stringify({ detail: "Access denied", status: 403 }));
       }
 
       if (RETRYABLE.has(response.status) && attempt < MAX_RETRIES - 1) {
@@ -106,8 +94,14 @@ const request = async <T>(
       }
 
       if (!response.ok) {
-        const message = await response.text();
-        throw new Error(message || `Request failed: ${response.status}`);
+        const errorText = await response.text();
+        let errorBody;
+        try {
+          errorBody = JSON.parse(errorText);
+        } catch {
+          errorBody = { detail: errorText || `Request failed: ${response.status}` };
+        }
+        throw new Error(JSON.stringify({ ...errorBody, status: response.status }));
       }
 
       if (response.status === 204) return undefined as T;
@@ -116,9 +110,13 @@ const request = async <T>(
     } catch (err) {
       if (timer) { clearTimeout(timer); timer = null; }
       if (err instanceof DOMException && err.name === "TimeoutError") {
-        throw new Error(`Request timed out after ${timeoutMs / 1000}s: ${method} ${path}`);
+        throw new Error(JSON.stringify({ 
+          detail: `Request timed out after ${timeoutMs / 1000}s`, 
+          status: 408 
+        }));
       }
       if (err instanceof DOMException && err.name === "AbortError") throw err;
+      
       if (attempt < MAX_RETRIES - 1) {
         await sleep((attempt + 1) * 1_000);
         continue;
@@ -126,8 +124,7 @@ const request = async <T>(
       throw err;
     }
   }
-  // Unreachable but TypeScript requires a return
-  throw new Error("Request failed after retries");
+  throw new Error(JSON.stringify({ detail: "Request failed after retries", status: 500 }));
 };
 
 export const apiGet = <T>(path: string, signal?: AbortSignal) =>
