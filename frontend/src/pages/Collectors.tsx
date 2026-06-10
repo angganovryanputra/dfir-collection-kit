@@ -1,4 +1,5 @@
 import React, { useState, useMemo, memo, useCallback } from "react";
+import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -12,6 +13,7 @@ import {
   Loader2,
   Wifi,
   WifiOff,
+  Terminal,
 } from "lucide-react";
 import { apiGet, apiPost, apiDelete } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
@@ -28,14 +30,16 @@ interface CollectorOut {
 
 // ─── Memoized Components ──────────────────────────────────────────────────
 
-const CollectorRow = memo(({ 
-    collector, 
-    isAdmin, 
-    onDelete 
-}: { 
-    collector: CollectorOut; 
-    isAdmin: boolean; 
-    onDelete: (id: string) => Promise<void>; 
+const CollectorRow = memo(({
+    collector,
+    isAdmin,
+    onDelete,
+    onConsole,
+}: {
+    collector: CollectorOut;
+    isAdmin: boolean;
+    onDelete: (id: string) => Promise<void>;
+    onConsole: (id: string) => void;
 }) => {
   const fmtHeartbeat = (ts: string | null) => {
     if (!ts) return "—";
@@ -44,6 +48,7 @@ const CollectorRow = memo(({
 
   const upperStatus = collector.status.toUpperCase();
   const statusType = upperStatus === "ONLINE" ? "online" : upperStatus === "BUSY" ? "pending" : "offline";
+  const isActive = upperStatus === "ONLINE" || upperStatus === "BUSY";
 
   return (
     <div
@@ -60,7 +65,17 @@ const CollectorRow = memo(({
       <div className="col-span-2 font-mono text-xs text-muted-foreground">
         {fmtHeartbeat(collector.last_heartbeat)}
       </div>
-      <div className="col-span-1 flex justify-end">
+      <div className="col-span-1 flex justify-end gap-1">
+        {isActive && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => onConsole(collector.id)}
+            title="Open agent console"
+          >
+            <Terminal className="w-3 h-3 text-primary" />
+          </Button>
+        )}
         {isAdmin && (
           <Button
             variant="ghost"
@@ -80,9 +95,14 @@ CollectorRow.displayName = "CollectorRow";
 // ─── Main Page ─────────────────────────────────────────────────────────────
 
 export default function Collectors() {
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const userRole = getStoredRole();
   const isAdmin = userRole === "admin";
+
+  const handleConsole = useCallback((id: string) => {
+    navigate(`/agents/${id}/console`);
+  }, [navigate]);
 
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
@@ -265,11 +285,12 @@ export default function Collectors() {
                 <div className="col-span-1" />
               </div>
               {collectors.map((c) => (
-                <CollectorRow 
-                    key={c.id} 
-                    collector={c} 
-                    isAdmin={isAdmin} 
-                    onDelete={handleDelete} 
+                <CollectorRow
+                    key={c.id}
+                    collector={c}
+                    isAdmin={isAdmin}
+                    onDelete={handleDelete}
+                    onConsole={handleConsole}
                 />
               ))}
             </div>

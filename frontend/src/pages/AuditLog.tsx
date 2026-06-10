@@ -37,6 +37,8 @@ export default function AuditLog() {
   const [eventType, setEventType] = useState("");
   const [actorId, setActorId] = useState("");
   const [targetId, setTargetId] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
   const limit = 50;
 
@@ -47,9 +49,11 @@ export default function AuditLog() {
   if (eventType) params.set("event_type", eventType);
   if (actorId) params.set("actor_id", actorId);
   if (targetId) params.set("target_id", targetId);
+  if (dateFrom) params.set("date_from", new Date(dateFrom).toISOString());
+  if (dateTo) params.set("date_to", new Date(`${dateTo}T23:59:59`).toISOString());
 
   const { data, isLoading, refetch } = useQuery<AuditLogResponse>({
-    queryKey: ["audit-log", eventType, actorId, targetId, page],
+    queryKey: ["audit-log", eventType, actorId, targetId, dateFrom, dateTo, page],
     queryFn: () => apiGet<AuditLogResponse>(`/audit-logs?${params.toString()}`),
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
@@ -107,6 +111,23 @@ export default function AuditLog() {
               value={actorId}
               onChange={e => { setActorId(e.target.value); setPage(1); }}
             />
+            <div className="flex items-center gap-1.5">
+              <input
+                type="date"
+                title="From date"
+                className="h-7 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                value={dateFrom}
+                onChange={e => { setDateFrom(e.target.value); setPage(1); }}
+              />
+              <span className="text-muted-foreground text-xs">→</span>
+              <input
+                type="date"
+                title="To date"
+                className="h-7 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                value={dateTo}
+                onChange={e => { setDateTo(e.target.value); setPage(1); }}
+              />
+            </div>
             <Button variant="ghost" size="sm" className="h-7" onClick={() => refetch()}>
               <RefreshCw className="w-3 h-3 mr-1" />
               REFRESH

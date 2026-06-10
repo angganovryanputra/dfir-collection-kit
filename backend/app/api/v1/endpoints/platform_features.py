@@ -98,6 +98,15 @@ class CustomModuleCreate(BaseModel):
     enabled: bool = True
 
 
+class CustomModuleUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    category: str | None = None
+    command: str | None = None
+    output_relpath: str | None = None
+    enabled: bool | None = None
+
+
 class CustomModuleOut(BaseModel):
     id: str
     name: str
@@ -298,6 +307,28 @@ async def create_custom_module(
         **payload.model_dump(),
     )
     db.add(module)
+    await db.commit()
+    await db.refresh(module)
+    return CustomModuleOut.model_validate(module)
+
+
+@router.patch(
+    "/custom-modules/{module_id}",
+    response_model=CustomModuleOut,
+    dependencies=[Depends(require_roles("admin", "operator"))],
+)
+async def update_custom_module(
+    module_id: str,
+    payload: CustomModuleUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> CustomModuleOut:
+    result = await db.execute(select(CustomModule).where(CustomModule.id == module_id))
+    module = result.scalar_one_or_none()
+    if not module:
+        raise HTTPException(status_code=404, detail="Custom module not found")
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(module, field, value)
     await db.commit()
     await db.refresh(module)
     return CustomModuleOut.model_validate(module)

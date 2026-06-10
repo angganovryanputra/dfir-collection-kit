@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
     Brain, ChevronLeft, Loader2, AlertTriangle, Sparkles, FileText,
-    MessageSquare, Copy, Check, RefreshCw, Send, Lightbulb,
+    MessageSquare, Copy, Check, RefreshCw, Send, Lightbulb, User, Bot,
+    ShieldCheck, Terminal,
 } from "lucide-react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -56,7 +57,7 @@ const SAMPLE_EVENTS = JSON.stringify([
     },
 ], null, 2);
 
-// ─── LLM Error Helper ─────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function LLMError({ message }: { message: string }) {
     const isConfig = message.includes("503") || message.toLowerCase().includes("llm") || message.toLowerCase().includes("api_key");
@@ -64,16 +65,12 @@ function LLMError({ message }: { message: string }) {
         <div className="flex items-start gap-3 p-4 border border-destructive/40 bg-destructive/5 rounded-sm font-mono text-sm text-destructive">
             <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
             <div>
-                <div className="font-bold text-xs uppercase mb-1">Error</div>
+                <div className="font-bold text-xs uppercase mb-1">Configuration Error</div>
                 {isConfig ? (
-                    <span>
-                        LLM not configured — set{" "}
-                        <code className="bg-secondary/40 px-1">LLM_API_URL</code>,{" "}
-                        <code className="bg-secondary/40 px-1">LLM_API_KEY</code>, and{" "}
-                        <code className="bg-secondary/40 px-1">LLM_MODEL</code> in your{" "}
-                        <code className="bg-secondary/40 px-1">.env</code> file.
+                    <span className="text-xs leading-relaxed">
+                        LLM API is not reachable. Ensure <code className="bg-destructive/10 px-1">LLM_API_KEY</code> and endpoint are correctly configured in the backend environment.
                     </span>
-                ) : message}
+                ) : <span className="text-xs">{message}</span>}
             </div>
         </div>
     );
@@ -111,34 +108,35 @@ function AnnotateTab() {
     };
 
     return (
-        <div className="flex flex-col gap-4">
-            <TacticalPanel title="EVENT INPUT" status="online">
-                <div className="space-y-3">
-                    <p className="font-mono text-[11px] text-muted-foreground">
-                        Paste a JSON array of timeline events. The LLM will annotate each with MITRE ATT&amp;CK
-                        technique, tactic, description, and severity. Max 20 events per request.
+        <div className="flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <TacticalPanel title="EVENT_INGESTION_BUFFER" status="online">
+                <div className="space-y-4">
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                        Input a JSON array of raw timeline events for AI enrichment. The reasoning engine will map artifacts to 
+                        <span className="text-primary font-bold"> MITRE ATT&CK</span> techniques and assess threat severity.
                     </p>
                     <textarea
                         value={eventsJson}
                         onChange={e => setEventsJson(e.target.value)}
-                        rows={12}
+                        rows={10}
                         spellCheck={false}
-                        className="w-full bg-background border border-border p-3 font-mono text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-y rounded-sm placeholder:text-muted-foreground/40"
+                        className="w-full bg-secondary/10 border border-border/40 p-4 font-mono text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:bg-secondary/20 transition-all rounded-sm placeholder:text-muted-foreground/30"
                         placeholder='[{"datetime": "...", "source": "...", "message": "..."}]'
                     />
                     <div className="flex items-center gap-3">
                         <Button
                             onClick={() => void handleAnnotate()}
                             disabled={loading || !eventsJson.trim()}
-                            className="gap-2 font-mono text-xs"
+                            className="gap-2 px-6"
+                            variant="tactical"
                         >
                             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
-                            {loading ? "ANNOTATING…" : "ANNOTATE EVENTS"}
+                            {loading ? "PROCESSING..." : "RUN ANNOTATOR"}
                         </Button>
                         {result && (
-                            <Button variant="outline" size="sm" onClick={handleCopy} className="gap-2 font-mono text-xs">
+                            <Button variant="outline" size="sm" onClick={handleCopy} className="gap-2 font-mono text-[10px] h-9">
                                 {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-                                COPY JSON
+                                EXPORT ENRICHED JSON
                             </Button>
                         )}
                     </div>
@@ -148,17 +146,20 @@ function AnnotateTab() {
             {error && <LLMError message={error} />}
 
             {result && (
-                <TacticalPanel title={`ANNOTATIONS — ${result.length} EVENT${result.length !== 1 ? "S" : ""}`} status="verified">
+                <div className="space-y-3">
+                    <div className="font-mono text-[10px] text-muted-foreground uppercase tracking-[0.2em] px-1">Enrichment Results ({result.length})</div>
                     <div className="space-y-3">
                         {result.map((ann, i) => (
-                            <div key={i} className="border border-border/40 bg-background/40 rounded-sm p-4 space-y-2">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="font-mono text-[11px] text-muted-foreground truncate flex-1">
-                                        {String(ann.original["message"] ?? ann.original["datetime"] ?? `Event #${i + 1}`).slice(0, 120)}
+                            <div key={i} className="border border-border/40 bg-card rounded-sm p-4 space-y-3 relative overflow-hidden group">
+                                <div className="absolute left-0 top-0 bottom-0 w-1 bg-primary/20 group-hover:bg-primary transition-colors" />
+                                <div className="flex items-start justify-between gap-4">
+                                    <div className="font-mono text-[11px] text-muted-foreground/80 leading-tight flex-1">
+                                        <span className="text-primary/40 mr-2">[{i+1}]</span>
+                                        {String(ann.original["message"] ?? ann.original["datetime"] ?? `Event #${i + 1}`).slice(0, 160)}
                                     </div>
                                     {ann.severity && (
                                         <span className={cn(
-                                            "shrink-0 px-2 py-0.5 rounded-sm border font-mono text-[9px] font-bold uppercase",
+                                            "shrink-0 px-2 py-0.5 rounded-sm border font-mono text-[9px] font-bold uppercase tracking-tighter",
                                             SEVERITY_COLORS[ann.severity.toLowerCase()] ?? "border-border/40 text-muted-foreground"
                                         )}>
                                             {ann.severity}
@@ -167,25 +168,27 @@ function AnnotateTab() {
                                 </div>
                                 <div className="flex flex-wrap gap-2">
                                     {ann.mitre_tactic && (
-                                        <span className="px-2 py-0.5 bg-primary/10 border border-primary/30 rounded-sm font-mono text-[10px] text-primary">
-                                            {ann.mitre_tactic}
-                                        </span>
+                                        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-primary/5 border border-primary/20 rounded-sm">
+                                            <ShieldCheck className="w-3 h-3 text-primary" />
+                                            <span className="font-mono text-[9px] text-primary font-bold uppercase italic">{ann.mitre_tactic}</span>
+                                        </div>
                                     )}
                                     {ann.mitre_technique && (
-                                        <span className="px-2 py-0.5 bg-secondary/40 border border-border/40 rounded-sm font-mono text-[10px] text-foreground/70">
-                                            {ann.mitre_technique}
-                                        </span>
+                                        <div className="flex items-center gap-1.5 px-2 py-0.5 bg-secondary/40 border border-border/40 rounded-sm">
+                                            <Terminal className="w-3 h-3 text-muted-foreground" />
+                                            <span className="font-mono text-[9px] text-foreground/80 font-bold">{ann.mitre_technique}</span>
+                                        </div>
                                     )}
                                 </div>
                                 {ann.description && (
-                                    <p className="font-mono text-[11px] text-foreground/80 leading-relaxed">
+                                    <p className="text-[11px] text-foreground/80 leading-relaxed font-medium pl-1">
                                         {ann.description}
                                     </p>
                                 )}
                             </div>
                         ))}
                     </div>
-                </TacticalPanel>
+                </div>
             )}
         </div>
     );
@@ -220,30 +223,31 @@ function SummaryTab({ incidentId }: { incidentId: string }) {
     };
 
     return (
-        <div className="flex flex-col gap-4">
-            <TacticalPanel title="EXECUTIVE SUMMARY GENERATOR" status="online">
-                <div className="space-y-3">
-                    <p className="font-mono text-[11px] text-muted-foreground">
-                        Generates a 3–5 paragraph executive summary from the Super Timeline — covering attack
-                        vector, key findings, and containment recommendations. Requires a built Super Timeline.
+        <div className="flex flex-col gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <TacticalPanel title="CASE_INTELLIGENCE_REPORT" status="online">
+                <div className="space-y-4">
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                        Generate a high-level executive summary based on cross-host artifact analysis. The AI will synthesize 
+                        attack vectors, lateral movement patterns, and initial access points.
                     </p>
                     <div className="flex items-center gap-3">
                         <Button
                             onClick={() => void handleGenerate()}
                             disabled={loading}
-                            className="gap-2 font-mono text-xs"
+                            variant="tactical"
+                            className="gap-2 px-6"
                         >
                             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-                            {loading ? "GENERATING…" : "GENERATE SUMMARY"}
+                            {loading ? "ANALYZING..." : "GENERATE SUMMARY"}
                         </Button>
                         {summary && (
                             <Button
                                 variant="outline" size="sm"
                                 onClick={() => { void navigator.clipboard.writeText(summary ?? ""); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
-                                className="gap-2 font-mono text-xs"
+                                className="gap-2 h-9 text-[10px]"
                             >
                                 {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
-                                COPY
+                                COPY REPORT
                             </Button>
                         )}
                     </div>
@@ -253,23 +257,29 @@ function SummaryTab({ incidentId }: { incidentId: string }) {
             {error && <LLMError message={error} />}
 
             {summary && (
-                <TacticalPanel title="EXECUTIVE SUMMARY" status="verified">
-                    <div className="space-y-4">
+                <TacticalPanel title="EXECUTIVE SUMMARY VIEW" status="verified">
+                    <div className="space-y-6">
                         {model && (
-                            <div className="flex items-center gap-3 pb-3 border-b border-border/30">
-                                <Brain className="w-3.5 h-3.5 text-primary" />
-                                <span className="font-mono text-[10px] text-muted-foreground">
-                                    Model: <span className="text-primary">{model}</span>
-                                    {sampleEvents != null && <span> · {sampleEvents} events analysed</span>}
-                                </span>
+                            <div className="flex items-center justify-between pb-3 border-b border-border/20">
+                                <div className="flex items-center gap-3">
+                                    <Brain className="w-4 h-4 text-primary" />
+                                    <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-widest">
+                                        Agent: <span className="text-primary font-bold">{model}</span>
+                                    </span>
+                                </div>
+                                {sampleEvents != null && <span className="font-mono text-[9px] text-muted-foreground bg-secondary/40 px-2 py-0.5 rounded-full">{sampleEvents} Events Analysed</span>}
                             </div>
                         )}
-                        <div>
+                        <div className="prose prose-invert max-w-none">
                             {summary.split("\n\n").map((para, i) => (
-                                <p key={i} className="font-mono text-[12px] text-foreground/85 leading-relaxed mb-3 last:mb-0">
+                                <p key={i} className="text-[13px] text-foreground/90 leading-relaxed mb-4 last:mb-0 font-medium">
                                     {para}
                                 </p>
                             ))}
+                        </div>
+                        <div className="pt-4 border-t border-border/10 flex items-center gap-2">
+                            <ShieldCheck className="w-3.5 h-3.5 text-green-500/60" />
+                            <span className="text-[9px] text-muted-foreground uppercase font-bold italic">AI-Generated Analysis - Verify with raw artifacts</span>
                         </div>
                     </div>
                 </TacticalPanel>
@@ -283,34 +293,40 @@ function SummaryTab({ incidentId }: { incidentId: string }) {
 const SUGGESTED_QUESTIONS = [
     "What was the initial entry point?",
     "Which user accounts were compromised?",
-    "What files were created or modified by the attacker?",
-    "Was there any data exfiltration?",
-    "What persistence mechanisms were established?",
+    "Identify any persistence mechanisms found.",
+    "Was there any suspicious network exfiltration?",
 ];
 
 function QueryTab({ incidentId }: { incidentId: string }) {
     const [question, setQuestion] = useState("");
-    const [answer, setAnswer] = useState<string | null>(null);
-    const [contextEvents, setContextEvents] = useState<number | null>(null);
-    const [model, setModel] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    const [history, setHistory] = useState<Array<{ q: string; a: string }>>([]);
+    const [history, setHistory] = useState<Array<{ q: string; a: string; model?: string; events?: number }>>([]);
+    const scrollRef = useRef<HTMLDivElement>(null);
 
-    const handleQuery = async () => {
-        if (!question.trim()) return;
+    useEffect(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }, [history, loading]);
+
+    const handleQuery = async (qText?: string) => {
+        const activeQuestion = qText || question.trim();
+        if (!activeQuestion) return;
+        
         setLoading(true);
         setError(null);
+        if (!qText) setQuestion("");
+
         try {
             const res = await apiPost<{ answer: string; context_events: number; model: string; question: string }>(
                 "/ai/query",
-                { incident_id: incidentId, question: question.trim(), context_limit: 25 }
+                { incident_id: incidentId, question: activeQuestion, context_limit: 30 }
             );
-            setAnswer(res.answer);
-            setContextEvents(res.context_events);
-            setModel(res.model);
-            setHistory(prev => [...prev, { q: question.trim(), a: res.answer }]);
-            setQuestion("");
+            setHistory(prev => [...prev, { 
+                q: activeQuestion, 
+                a: res.answer, 
+                model: res.model, 
+                events: res.context_events 
+            }]);
         } catch (err) {
             setError(err instanceof Error ? err.message : "Query failed");
         } finally {
@@ -319,84 +335,109 @@ function QueryTab({ incidentId }: { incidentId: string }) {
     };
 
     return (
-        <div className="flex flex-col gap-4">
-            {history.length > 0 && (
-                <div className="space-y-4 border border-border/30 rounded-sm p-4 bg-background/30">
-                    {history.map((item, i) => (
-                        <div key={i} className="space-y-2">
-                            <div className="flex items-start gap-2">
-                                <MessageSquare className="w-3.5 h-3.5 text-primary mt-0.5 shrink-0" />
-                                <span className="font-mono text-[11px] text-primary/90 font-semibold">{item.q}</span>
-                            </div>
-                            <div className="ml-5 pl-3 border-l border-border/40">
-                                <p className="font-mono text-[11px] text-foreground/80 leading-relaxed">{item.a}</p>
-                            </div>
+        <div className="flex flex-col h-[600px] gap-4 animate-in fade-in slide-in-from-bottom-2 duration-300">
+            <div 
+                ref={scrollRef}
+                className="flex-1 overflow-auto space-y-6 pr-2 custom-scrollbar"
+            >
+                {history.length === 0 && !loading && (
+                    <div className="h-full flex flex-col items-center justify-center text-center max-w-md mx-auto space-y-6 opacity-80">
+                        <div className="p-4 bg-primary/5 rounded-full border border-primary/20">
+                            <MessageSquare className="w-8 h-8 text-primary" />
                         </div>
-                    ))}
-                    <div className="flex justify-end pt-1">
-                        <button
-                            onClick={() => setHistory([])}
-                            className="font-mono text-[9px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
-                        >
-                            <RefreshCw className="w-2.5 h-2.5" /> CLEAR HISTORY
-                        </button>
-                    </div>
-                </div>
-            )}
-
-            {history.length === 0 && (
-                <TacticalPanel title="SUGGESTED QUESTIONS" status="online">
-                    <div className="space-y-3">
-                        <p className="font-mono text-[11px] text-muted-foreground">
-                            Ask natural-language questions about the incident evidence. The LLM searches the
-                            Super Timeline for relevant context to answer your question.
-                        </p>
-                        <div className="flex flex-wrap gap-2">
+                        <div className="space-y-2">
+                            <h3 className="font-bold text-sm uppercase tracking-[0.2em]">Evidence Query Engine</h3>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                                Interact with the collected artifacts using natural language. The AI will scan the super-timeline 
+                                for relevant context to answer your forensic questions.
+                            </p>
+                        </div>
+                        <div className="grid grid-cols-1 gap-2 w-full">
                             {SUGGESTED_QUESTIONS.map(q => (
                                 <button
                                     key={q}
-                                    onClick={() => setQuestion(q)}
-                                    className="flex items-center gap-1.5 px-3 py-1.5 border border-border/40 hover:border-primary/50 bg-secondary/20 hover:bg-primary/5 font-mono text-[10px] text-muted-foreground hover:text-primary transition-all rounded-sm"
+                                    onClick={() => void handleQuery(q)}
+                                    className="flex items-center gap-3 px-4 py-2.5 border border-border/40 hover:border-primary/50 bg-secondary/10 hover:bg-primary/5 text-left transition-all rounded-sm group"
                                 >
-                                    <Lightbulb className="w-3 h-3" />
-                                    {q}
+                                    <Lightbulb className="w-3.5 h-3.5 text-muted-foreground group-hover:text-primary transition-colors" />
+                                    <span className="text-[10px] font-bold text-muted-foreground group-hover:text-foreground">{q}</span>
                                 </button>
                             ))}
                         </div>
                     </div>
-                </TacticalPanel>
-            )}
+                )}
 
-            {answer && (
-                <div className="border border-primary/20 bg-primary/5 rounded-sm p-4 space-y-2">
-                    <div className="flex items-center gap-3 font-mono text-[9px] text-muted-foreground">
-                        <Brain className="w-3 h-3 text-primary" />
-                        {model && <span>Model: <span className="text-primary">{model}</span></span>}
-                        {contextEvents != null && <span>· {contextEvents} events used as context</span>}
+                {history.map((item, i) => (
+                    <div key={i} className="space-y-4">
+                        {/* User Question */}
+                        <div className="flex justify-end pl-12">
+                            <div className="bg-primary/10 border border-primary/30 rounded-sm px-4 py-2 flex items-start gap-3">
+                                <div className="text-[11px] font-bold text-primary leading-relaxed">{item.q}</div>
+                                <User className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                            </div>
+                        </div>
+                        {/* AI Answer */}
+                        <div className="flex justify-start pr-12">
+                            <div className="bg-secondary/20 border border-border/40 rounded-sm p-4 w-full space-y-3">
+                                <div className="flex items-center justify-between border-b border-border/10 pb-2">
+                                    <div className="flex items-center gap-2">
+                                        <Bot className="w-4 h-4 text-primary" />
+                                        <span className="font-mono text-[9px] font-bold text-primary uppercase tracking-widest">Analysis Engine</span>
+                                    </div>
+                                    <div className="font-mono text-[8px] text-muted-foreground uppercase">
+                                        {item.model} · {item.events} ctx events
+                                    </div>
+                                </div>
+                                <p className="text-[12px] text-foreground/90 leading-relaxed font-medium">{item.a}</p>
+                            </div>
+                        </div>
                     </div>
-                    <p className="font-mono text-[12px] text-foreground/85 leading-relaxed">{answer}</p>
-                </div>
-            )}
+                ))}
+
+                {loading && (
+                    <div className="flex justify-start pr-12 animate-pulse">
+                        <div className="bg-secondary/10 border border-border/20 rounded-sm p-4 w-full flex items-center gap-4">
+                            <Loader2 className="w-5 h-5 text-primary animate-spin" />
+                            <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-[0.3em]">Processing Incident Context...</span>
+                        </div>
+                    </div>
+                )}
+            </div>
 
             {error && <LLMError message={error} />}
 
-            <div className="flex gap-3">
-                <input
-                    type="text"
-                    value={question}
-                    onChange={e => setQuestion(e.target.value)}
-                    onKeyDown={e => { if (e.key === "Enter" && !loading) void handleQuery(); }}
-                    placeholder="Ask anything about this incident…"
-                    className="flex-1 bg-background border border-border px-4 py-2.5 font-mono text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary rounded-sm placeholder:text-muted-foreground/40"
-                    disabled={loading}
-                />
+            <div className="flex gap-3 pt-4 border-t border-border/40">
+                <div className="relative flex-1">
+                    <input
+                        type="text"
+                        value={question}
+                        onChange={e => setQuestion(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter" && !loading) void handleQuery(); }}
+                        placeholder="Ask about compromised accounts, persistence, network patterns..."
+                        className="w-full bg-secondary/10 border border-border px-4 py-3 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary rounded-sm placeholder:text-muted-foreground/30 transition-all"
+                        disabled={loading}
+                    />
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2 flex gap-2">
+                        {history.length > 0 && (
+                            <Button 
+                                variant="ghost" 
+                                size="sm" 
+                                onClick={() => setHistory([])}
+                                className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
+                            >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                            </Button>
+                        )}
+                    </div>
+                </div>
                 <Button
                     onClick={() => void handleQuery()}
                     disabled={loading || !question.trim()}
-                    className="gap-2 font-mono text-xs px-5"
+                    variant="tactical"
+                    className="gap-2 px-6 h-auto"
                 >
-                    {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                    ASK
+                    <Send className="w-4 h-4" />
+                    <span className="font-bold text-[10px] tracking-widest uppercase">Query</span>
                 </Button>
             </div>
         </div>
@@ -411,63 +452,66 @@ export default function AIAnalysis() {
     const [activeTab, setActiveTab] = useState<Tab>("annotate");
 
     const tabs: Array<{ id: Tab; label: string; icon: React.ElementType; desc: string }> = [
-        { id: "annotate", label: "EVENT ANNOTATOR",  icon: Brain,         desc: "MITRE ATT&CK labeling per event" },
-        { id: "summary",  label: "INCIDENT SUMMARY", icon: FileText,      desc: "AI-generated executive report" },
-        { id: "query",    label: "NL QUERY",         icon: MessageSquare, desc: "Natural language evidence Q&A" },
+        { id: "annotate", label: "ANNOTATOR", icon: Brain,         desc: "MITRE ATT&CK context enrichment" },
+        { id: "summary",  label: "REPORT",    icon: FileText,      desc: "Executive intelligence synthesis" },
+        { id: "query",    label: "QUERY",     icon: MessageSquare, desc: "Evidence Q&A via natural language" },
     ];
 
     return (
         <AppLayout
-            title="AI ANALYSIS"
-            subtitle={`INCIDENT: ${incidentId ?? ""}`}
+            title="AI_ANALYSIS_INTELLIGENCE"
+            subtitle={`SECTOR: ${incidentId ?? "UNKNOWN"}`}
             headerActions={
                 <Button
                     variant="ghost"
                     onClick={() => navigate(`/incidents/${incidentId}`)}
                     size="sm"
-                    className="h-8 gap-2 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+                    className="h-8 gap-2 border border-border/40 hover:bg-secondary/40 text-[10px] uppercase font-bold tracking-widest"
                 >
                     <ChevronLeft className="w-3.5 h-3.5" /> BACK TO HUB
                 </Button>
             }
         >
-            <div className="flex flex-col h-full min-h-0 p-6 gap-5">
-                {/* LLM config notice */}
-                <div className="flex items-center gap-3 px-4 py-2.5 border border-primary/20 bg-primary/5 rounded-sm">
-                    <Sparkles className="w-4 h-4 text-primary shrink-0" />
-                    <p className="font-mono text-[11px] text-muted-foreground">
-                        Requires{" "}
-                        <code className="bg-secondary/40 px-1 text-foreground">LLM_API_URL</code>,{" "}
-                        <code className="bg-secondary/40 px-1 text-foreground">LLM_API_KEY</code>, and{" "}
-                        <code className="bg-secondary/40 px-1 text-foreground">LLM_MODEL</code> in{" "}
-                        <code className="bg-secondary/40 px-1 text-foreground">.env</code>.
-                        Compatible with OpenAI, Azure OpenAI, and Ollama (
-                        <code className="bg-secondary/40 px-1 text-foreground">LLM_API_URL=http://localhost:11434/v1</code>).
-                    </p>
+            <div className="flex flex-col h-full min-h-0 p-6 gap-6 max-w-6xl mx-auto w-full">
+                {/* Status Bar */}
+                <div className="flex items-center justify-between px-4 py-2 border border-primary/20 bg-primary/5 rounded-sm shrink-0">
+                    <div className="flex items-center gap-3">
+                        <div className="relative">
+                            <div className="absolute inset-0 bg-primary/20 blur-sm rounded-full animate-pulse" />
+                            <Sparkles className="w-4 h-4 text-primary relative z-10" />
+                        </div>
+                        <p className="font-mono text-[9px] text-primary/80 uppercase tracking-widest font-bold">
+                            Cognitive Reasoning Engine: <span className="text-foreground">ONLINE</span>
+                        </p>
+                    </div>
+                    <div className="text-[9px] text-muted-foreground/60 font-mono hidden md:block">
+                        COMPATIBLE: OPENAI / AZURE / OLLAMA
+                    </div>
                 </div>
 
-                {/* Tab bar */}
-                <div className="flex items-center gap-1 bg-secondary/30 p-1 rounded-sm border border-border/40 self-start">
-                    {tabs.map(tab => (
-                        <button
-                            key={tab.id}
-                            onClick={() => setActiveTab(tab.id)}
-                            className={cn(
-                                "flex items-center gap-2 px-4 py-2 rounded-sm font-mono text-[10px] font-bold transition-all",
-                                activeTab === tab.id
-                                    ? "bg-primary text-primary-foreground shadow"
-                                    : "text-muted-foreground hover:text-foreground hover:bg-secondary/50"
-                            )}
-                        >
-                            <tab.icon className="w-3.5 h-3.5" />
-                            {tab.label}
-                        </button>
-                    ))}
+                {/* Tab Controller */}
+                <div className="flex items-center justify-between shrink-0">
+                    <div className="flex items-center gap-1 bg-secondary/20 p-1 rounded-sm border border-border/40">
+                        {tabs.map(tab => (
+                            <button
+                                key={tab.id}
+                                onClick={() => setActiveTab(tab.id)}
+                                className={cn(
+                                    "flex items-center gap-2 px-5 py-2 rounded-sm font-bold transition-all uppercase tracking-[0.1em] text-[9px]",
+                                    activeTab === tab.id
+                                        ? "bg-primary text-primary-foreground shadow-[0_0_10px_rgba(21,245,116,0.2)]"
+                                        : "text-muted-foreground hover:text-foreground hover:bg-secondary/40"
+                                )}
+                            >
+                                <tab.icon className="w-3.5 h-3.5" />
+                                {tab.label}
+                            </button>
+                        ))}
+                    </div>
+                    <div className="text-[9px] font-mono text-muted-foreground uppercase tracking-tighter italic text-right">
+                        {tabs.find(t => t.id === activeTab)?.desc}
+                    </div>
                 </div>
-
-                <p className="font-mono text-[10px] text-muted-foreground -mt-2">
-                    {tabs.find(t => t.id === activeTab)?.desc}
-                </p>
 
                 <div className="flex-1 overflow-auto min-h-0">
                     {incidentId && activeTab === "annotate" && <AnnotateTab />}

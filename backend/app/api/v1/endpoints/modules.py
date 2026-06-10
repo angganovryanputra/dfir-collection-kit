@@ -2,8 +2,9 @@ from functools import lru_cache
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, get_db
 from app.core.modules import (
     COLLECTION_PROFILES,
     MODULE_REGISTRY,
@@ -25,7 +26,8 @@ def _cached_modules_by_category(os_name: str | None) -> dict[str, Any]:
 @router.get("")
 async def list_modules(
     os: str | None = Query(default=None, description="Filter by OS: 'windows', 'linux', or 'macos'"),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """
     Return all registered collection modules grouped by category.
@@ -33,9 +35,37 @@ async def list_modules(
     Each entry includes: id, os, category, priority, output_relpath, estimated_size_mb.
     Pass ?os=windows, ?os=linux, or ?os=macos to restrict to a single platform.
     Darwin/Mac OS X strings are normalised to 'macos' automatically.
+    Custom modules from the DB are appended under a 'custom' category.
     """
+    from sqlalchemy import select
+    from app.models.platform_features import CustomModule
+
     normalized = normalize_os_name(os)
-    grouped = _cached_modules_by_category(normalized)
+    # Shallow-copy the cached dict so we don't mutate the lru_cache result
+    grouped: dict[str, Any] = {k: list(v) for k, v in _cached_modules_by_category(normalized).items()}
+
+    # Append admin-defined custom modules from DB
+    stmt = select(CustomModule).where(CustomModule.enabled == True)  # noqa: E712
+    if normalized:
+        stmt = stmt.where(CustomModule.os == normalized)
+    result = await db.execute(stmt)
+    custom_modules = list(result.scalars())
+
+    if custom_modules:
+        grouped.setdefault("custom", [])
+        for cm in custom_modules:
+            grouped["custom"].append({
+                "id": cm.id,
+                "os": cm.os,
+                "category": "custom",
+                "priority": 5,
+                "output_relpath": cm.output_relpath,
+                "estimated_size_mb": None,
+                "name": cm.name,
+                "description": cm.description,
+                "command": cm.command,
+            })
+
     return {"modules": grouped}
 
 

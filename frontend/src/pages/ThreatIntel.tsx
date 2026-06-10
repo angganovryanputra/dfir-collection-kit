@@ -5,7 +5,7 @@
  * to enable live lookups.  Without credentials the backend returns explanatory
  * errors rather than failing silently.
  */
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
@@ -39,7 +39,22 @@ export default function ThreatIntel() {
   const [iocValue, setIocValue] = useState("");
   const [results, setResults] = useState<EnrichResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [history, setHistory] = useState<Array<{ value: string; type: string }>>([]);
+  const [history, setHistory] = useState<Array<{ value: string; type: string }>>(() => {
+    try {
+      const raw = localStorage.getItem("dfir_threat_intel_history");
+      return raw ? (JSON.parse(raw) as Array<{ value: string; type: string }>) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("dfir_threat_intel_history", JSON.stringify(history));
+    } catch {
+      // ignore quota errors
+    }
+  }, [history]);
 
   const handleEnrich = async () => {
     const value = iocValue.trim();

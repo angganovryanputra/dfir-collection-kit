@@ -8,6 +8,7 @@ interface StatCardProps {
   className?: string;
   valueClassName?: string;
   labelClassName?: string;
+  onClick?: () => void;
 }
 
 export function StatCard({
@@ -17,11 +18,15 @@ export function StatCard({
   className,
   valueClassName,
   labelClassName,
+  onClick,
 }: StatCardProps) {
   return (
-    <div className={cn(
-      "border border-border bg-card p-4 transition-all duration-300 transition-spring relative overflow-hidden group hover:scale-[1.02] hover:border-primary/30 hover:shadow-[0_0_15px_rgba(21,245,116,0.08)]",
-      className
+    <div 
+      onClick={onClick}
+      className={cn(
+        "border border-border bg-card p-4 transition-all duration-300 transition-spring relative overflow-hidden group hover:scale-[1.02] hover:border-primary/30 hover:shadow-[0_0_15px_rgba(21,245,116,0.08)]",
+        onClick && "cursor-pointer active:scale-95",
+        className
     )}>
       {/* Decorative top accent line that slides in on hover */}
       <div className="absolute top-0 left-0 right-0 h-[1px] bg-primary/80 scale-x-0 group-hover:scale-x-100 transition-transform duration-300 transition-spring origin-left" />

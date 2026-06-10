@@ -15,8 +15,6 @@ import {
   ChevronRight,
   GitMerge,
   Database,
-  Users,
-  ClipboardList,
   Clock,
   Crosshair,
   Zap,
@@ -74,8 +72,6 @@ const NAV_SECTIONS: NavSection[] = [
     label: "System",
     items: [
       { label: "CUSTOM MODULES", icon: Database, path: "/admin/custom-modules", adminOnly: true },
-      { label: "AUDIT LOG", icon: ClipboardList, path: "/admin/audit-log", adminOnly: true },
-      { label: "USERS", icon: Users, path: "/admin/users", adminOnly: true },
       { label: "SETTINGS", icon: Settings, path: "/admin/settings", adminOnly: true },
     ],
   },
@@ -176,7 +172,7 @@ export function AppSidebar({
                 DFIR KIT
               </h1>
               <p className="font-mono text-[10px] text-muted-foreground">
-                v2.1.0
+                V0.1.0
               </p>
             </div>
           )}
@@ -185,23 +181,31 @@ export function AppSidebar({
 
       {/* Quick Stats */}
       {!isCollapsed && (
-        <div className="p-4 border-b border-border space-y-2">
-          <div className="flex items-center justify-between font-mono text-xs">
-            <div className="flex items-center gap-2 text-muted-foreground">
+        <div className="p-4 border-b border-border space-y-1">
+          <button
+            onClick={() => navigate("/dashboard")}
+            className="w-full flex items-center justify-between font-mono text-xs hover:bg-secondary/40 px-2 py-1 rounded-sm transition-colors group"
+            title="View active incidents"
+          >
+            <div className="flex items-center gap-2 text-muted-foreground group-hover:text-foreground">
               <Activity className="w-3 h-3" />
               <span>ACTIVE</span>
             </div>
             <span className="text-primary font-bold">{activeIncidents}</span>
-          </div>
-          <div className="flex items-center justify-between font-mono text-xs">
-            <div className="flex items-center gap-2 text-muted-foreground">
+          </button>
+          <button
+            onClick={() => navigate("/collectors")}
+            className="w-full flex items-center justify-between font-mono text-xs hover:bg-secondary/40 px-2 py-1 rounded-sm transition-colors group"
+            title="View collectors"
+          >
+            <div className="flex items-center gap-2 text-muted-foreground group-hover:text-foreground">
               <Server className="w-3 h-3" />
               <span>COLLECTORS</span>
             </div>
             <span className="text-primary font-bold">
               {onlineCollectors}/{totalCollectors}
             </span>
-          </div>
+          </button>
         </div>
       )}
 

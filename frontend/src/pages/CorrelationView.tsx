@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
@@ -20,6 +21,12 @@ export default function CorrelationView() {
   const [dateTo, setDateTo] = useState("");
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<CorrelationResult | null>(null);
+
+  const { data: incidents = [] } = useQuery<{ id: string; type: string; status: string }[]>({
+    queryKey: ["incidents-dropdown-corr"],
+    queryFn: () => apiGet<{ id: string; type: string; status: string }[]>("/incidents?limit=50"),
+    staleTime: 60_000,
+  });
 
   const addId = () => setIncidentIds(ids => [...ids, ""]);
   const removeId = (i: number) => setIncidentIds(ids => ids.filter((_, j) => j !== i));
@@ -65,12 +72,16 @@ export default function CorrelationView() {
               <div className="mt-2 space-y-2">
                 {incidentIds.map((id, i) => (
                   <div key={i} className="flex items-center gap-2">
-                    <input
+                    <select
                       className="flex-1 h-8 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary"
                       value={id}
                       onChange={e => updateId(i, e.target.value)}
-                      placeholder={`Incident ID ${i + 1}`}
-                    />
+                    >
+                      <option value="">— Incident {i + 1} —</option>
+                      {incidents.map(inc => (
+                        <option key={inc.id} value={inc.id}>{inc.id}</option>
+                      ))}
+                    </select>
                     {incidentIds.length > 2 && (
                       <button
                         className="text-muted-foreground hover:text-destructive"

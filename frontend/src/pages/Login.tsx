@@ -1118,7 +1118,7 @@ export default function Login() {
                   DFIR RAPID COLLECTION KIT
                 </h1>
                 <p className="font-mono text-sm text-muted-foreground uppercase tracking-wider">
-                  Evidence Collection System v2.1.0
+                  Evidence Collection System V0.1.0
                 </p>
                 {bootComplete && (
                   <p className="font-mono text-xs text-primary">

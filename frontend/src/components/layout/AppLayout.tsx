@@ -6,21 +6,21 @@ import { WarningBanner } from "@/components/WarningBanner";
 import { EvidenceProvider } from "@/context/EvidenceContext";
 import { EvidenceWorkspace } from "@/components/EvidenceWorkspace";
 import {
-    CommandDialog,
-    CommandInput,
-    CommandList,
-    CommandEmpty,
-    CommandGroup,
-    CommandItem,
-    CommandSeparator
+  CommandDialog,
+  CommandInput,
+  CommandList,
+  CommandEmpty,
+  CommandGroup,
+  CommandItem,
+  CommandSeparator
 } from "@/components/ui/command";
 import {
-    Activity,
-    FolderOpen,
-    Server,
-    Target,
-    Terminal,
-    HeartPulse,
+  Activity,
+  FolderOpen,
+  Server,
+  Target,
+  Terminal,
+  HeartPulse,
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
 import { apiGet } from "@/lib/api";
@@ -336,6 +336,7 @@ export function AppLayout({
               </div>
             </div>
             <div className="flex items-center gap-4 border-l border-border pl-4">
+              <span className="px-1.5 py-0.5 bg-primary/10 text-primary border border-primary/20 rounded-[2px] font-bold text-[9px]">v1.0.0</span>
               <span>OPERATOR: <span className="text-foreground font-bold">{currentUser?.username ?? "UNKNOWN"}</span></span>
               <span>ROLE: <span className="text-primary font-bold">{currentUser?.role?.toUpperCase() ?? "UNKNOWN"}</span></span>
               <FooterClock />

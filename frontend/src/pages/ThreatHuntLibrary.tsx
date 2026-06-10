@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
@@ -35,6 +36,7 @@ const CATEGORIES = [
 ];
 
 export default function ThreatHuntLibrary() {
+  const [searchParams] = useSearchParams();
   const qc = useQueryClient();
   const { toast } = useToast();
   const role = getStoredRole();
@@ -43,9 +45,15 @@ export default function ThreatHuntLibrary() {
   const [catFilter, setCatFilter] = useState("");
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-  const [runIncidentId, setRunIncidentId] = useState("");
+  const [runIncidentId, setRunIncidentId] = useState(searchParams.get("incident_id") ?? "");
   const [runResults, setRunResults] = useState<RunResult | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
+
+  const { data: incidents = [] } = useQuery<{ id: string; type: string; status: string }[]>({
+    queryKey: ["incidents-dropdown-hunt"],
+    queryFn: () => apiGet<{ id: string; type: string; status: string }[]>("/incidents?limit=50"),
+    staleTime: 60_000,
+  });
 
   const [form, setForm] = useState({
     name: "",
@@ -158,12 +166,16 @@ export default function ThreatHuntLibrary() {
           </div>
           <div className="flex items-center gap-2 flex-1">
             <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">RUN IN INCIDENT:</span>
-            <input
-              className="h-8 w-40 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-              placeholder="INC-001"
+            <select
+              className="h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary min-w-[160px]"
               value={runIncidentId}
               onChange={e => setRunIncidentId(e.target.value)}
-            />
+            >
+              <option value="">— Select incident —</option>
+              {incidents.map(inc => (
+                <option key={inc.id} value={inc.id}>{inc.id}</option>
+              ))}
+            </select>
           </div>
           {canEdit && (
             <Button variant="tactical" size="sm" onClick={() => { resetForm(); setShowForm(true); }}>

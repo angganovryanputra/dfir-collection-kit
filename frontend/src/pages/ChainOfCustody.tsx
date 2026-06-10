@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { getStoredAuth } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -19,8 +20,11 @@ import { apiGet } from "@/lib/api";
 
 
 export default function ChainOfCustody() {
+  const [searchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState("");
-  const [selectedIncident, setSelectedIncident] = useState<string | null>(null);
+  const [selectedIncident, setSelectedIncident] = useState<string | null>(
+    searchParams.get("incident_id")
+  );
   const [custodyLog, setCustodyLog] = useState<(ChainOfCustodyEntry & { incidentId: string })[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);

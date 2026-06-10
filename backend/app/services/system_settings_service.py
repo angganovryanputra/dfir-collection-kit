@@ -42,6 +42,14 @@ class RuntimeSettings:
     s3_bucket: str | None = None
     s3_region: str | None = None
     webhook_secret: str | None = None
+    # AI / LLM Settings
+    ai_provider: str | None = None
+    ai_model: str | None = None
+    ai_api_key: str | None = None
+    ai_api_url: str | None = None
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: str | None = None
+    google_oauth_refresh_token: str | None = None
 
 
 DEFAULT_SETTINGS = RuntimeSettings(

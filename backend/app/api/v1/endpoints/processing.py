@@ -145,6 +145,60 @@ async def get_sigma_hits_for_job(
     )
 
 
+@router.post(
+    "/incident/{incident_id}/trigger",
+    response_model=ProcessingTriggerResponse,
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
+async def trigger_processing_for_incident(
+    incident_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> ProcessingTriggerResponse:
+    """Trigger the parsing pipeline for the latest completed collection job of an incident.
+
+    Convenience endpoint: frontend doesn't need to look up the evidence job_id separately.
+    """
+    from app.crud.job import list_jobs_for_incident
+
+    existing = await get_latest_processing_job_by_incident_id(db, incident_id)
+    if existing and existing.status == "RUNNING":
+        return ProcessingTriggerResponse(
+            processing_job_id=existing.id,
+            status="RUNNING",
+            message="Pipeline already running",
+        )
+    if existing and existing.status == "DONE":
+        return ProcessingTriggerResponse(
+            processing_job_id=existing.id,
+            status="DONE",
+            message="Pipeline already completed",
+        )
+
+    jobs = await list_jobs_for_incident(db, incident_id)
+    completed_job = next(
+        (j for j in jobs if j.status in ("completed", "COMPLETED")), None
+    )
+    if not completed_job:
+        raise HTTPException(
+            status_code=422,
+            detail="No completed collection job found — collection must finish before processing can start",
+        )
+
+    runtime = await get_runtime_settings(db)
+    base_path = Path(runtime.evidence_storage_path) / incident_id / completed_job.id
+
+    from app.services.artifact_parser_service import dispatch_pipeline
+
+    dispatch_pipeline(incident_id, completed_job.id, base_path)
+
+    return ProcessingTriggerResponse(
+        processing_job_id=f"proc-{completed_job.id}",
+        status="PENDING",
+        message="Pipeline triggered",
+    )
+
+
 @router.get("/incident/{incident_id}/status", response_model=ProcessingJobOut)
 async def get_latest_processing_status_for_incident(
     incident_id: str,

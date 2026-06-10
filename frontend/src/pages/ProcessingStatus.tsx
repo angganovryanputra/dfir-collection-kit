@@ -10,7 +10,7 @@ import { TerminalLog } from "@/components/TerminalLog";
 import type { LogEntry } from "@/components/TerminalLog";
 import { useAdaptivePolling } from "@/lib/useAdaptivePolling";
 import { ChevronLeft, Activity, CheckCircle2, AlertTriangle, Search, Download, GitBranch, ShieldAlert, FileText, Bug, Layers, ChevronDown, ChevronUp, Info, Clock } from "lucide-react";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -99,6 +99,8 @@ export default function ProcessingStatus() {
     const navigate = useNavigate();
     const { id: incidentId } = useParams<{ id: string }>();
     const [errorExpanded, setErrorExpanded] = useState(false);
+    const [isStarting, setIsStarting] = useState(false);
+    const [startError, setStartError] = useState<string | null>(null);
     const { toast } = useToast();
 
     // Pipeline terminal log state
@@ -184,6 +186,22 @@ export default function ProcessingStatus() {
         return m > 0 ? `${m}m ${s % 60}s` : `${s}s`;
     };
 
+    const handleStartProcessing = async () => {
+        if (!incidentId) return;
+        setIsStarting(true);
+        setStartError(null);
+        try {
+            await apiPost(`/processing/incident/${incidentId}/trigger`, {});
+            await refetch();
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : "Failed to start pipeline";
+            setStartError(msg);
+            toast({ title: "Start Failed", description: msg, variant: "destructive" });
+        } finally {
+            setIsStarting(false);
+        }
+    };
+
     const role = getStoredRole();
     const { data: preflight } = useQuery<PreflightResponse>({
         queryKey: ["processing-preflight", incidentId],
@@ -198,9 +216,9 @@ export default function ProcessingStatus() {
             title="FORENSICS PROCESSING PIPELINE"
             subtitle={`INCIDENT: ${incidentId}`}
             headerActions={
-                <Button variant="ghost" onClick={() => navigate(`/evidence/${incidentId}`)} size="sm">
+                <Button variant="ghost" onClick={() => navigate(`/incidents/${incidentId}`)} size="sm">
                     <ChevronLeft className="w-4 h-4 mr-2" />
-                    BACK TO VAULT
+                    BACK TO HUB
                 </Button>
             }
         >
@@ -241,9 +259,25 @@ export default function ProcessingStatus() {
                             CHECKING PIPELINE STATUS...
                         </div>
                     ) : error ? (
-                        <div className="font-mono text-sm text-muted-foreground py-4">
-                            No processing job found. Evidence may still be collecting, or pipeline
-                            has not been triggered yet.
+                        <div className="space-y-4 py-2">
+                            <div className="font-mono text-sm text-muted-foreground">
+                                No processing job found. Collection must complete before the pipeline can run.
+                            </div>
+                            {startError && (
+                                <div className="font-mono text-xs text-destructive">{startError}</div>
+                            )}
+                            <Button
+                                variant="tactical"
+                                size="sm"
+                                onClick={() => void handleStartProcessing()}
+                                disabled={isStarting}
+                            >
+                                {isStarting ? (
+                                    <><Activity className="w-4 h-4 mr-2 animate-pulse" />STARTING...</>
+                                ) : (
+                                    <><Activity className="w-4 h-4 mr-2" />START PROCESSING PIPELINE</>
+                                )}
+                            </Button>
                         </div>
                     ) : job ? (
                         <div className="space-y-3 font-mono text-sm">

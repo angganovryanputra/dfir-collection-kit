@@ -20,26 +20,87 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user
+from app.core.deps import get_current_user, get_db, require_roles
 from app.models.user import User
+from app.services.system_settings_service import get_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Provider → default API URL (all providers expose OpenAI-compatible /chat/completions)
+_PROVIDER_DEFAULTS: dict[str, str] = {
+    "openai": "https://api.openai.com/v1",
+    "anthropic": "https://api.anthropic.com/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai",
+    "openrouter": "https://openrouter.ai/api/v1",
+    "ollama": "http://localhost:11434/v1",
+}
 
-def _llm_cfg() -> tuple[str, str, str]:
-    return (
-        os.getenv("LLM_API_URL", "https://api.openai.com/v1"),
-        os.getenv("LLM_API_KEY", ""),
-        os.getenv("LLM_MODEL", "gpt-4o-mini"),
-    )
+_PROVIDER_DEFAULT_MODELS: dict[str, str] = {
+    "openai": "gpt-4o-mini",
+    "anthropic": "claude-sonnet-4-6",
+    "gemini": "gemini-2.0-flash",
+    "openrouter": "openai/gpt-4o-mini",
+    "ollama": "llama3",
+}
 
 
-async def _chat(system: str, user: str, max_tokens: int = 1024) -> str:
-    url, key, model = _llm_cfg()
+async def _google_get_access_token(client_id: str, client_secret: str, refresh_token: str) -> str:
+    try:
+        import httpx
+    except ImportError:
+        raise RuntimeError("httpx not installed")
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Token refresh failed: {resp.text[:200]}")
+    return resp.json()["access_token"]
+
+
+async def _llm_cfg(db: AsyncSession) -> tuple[str, str, str]:
+    """Resolve LLM config: DB settings take precedence over env vars."""
+    try:
+        s = await get_settings(db)
+        provider = s.ai_provider or os.getenv("AI_PROVIDER", "openai")
+        model = s.ai_model or os.getenv("LLM_MODEL") or _PROVIDER_DEFAULT_MODELS.get(provider, "gpt-4o-mini")
+        if provider == "gemini" and s.google_oauth_refresh_token and s.google_oauth_client_id and s.google_oauth_client_secret:
+            try:
+                access_token = await _google_get_access_token(
+                    s.google_oauth_client_id,
+                    s.google_oauth_client_secret,
+                    s.google_oauth_refresh_token,
+                )
+                url = s.ai_api_url or _PROVIDER_DEFAULTS["gemini"]
+                return url, access_token, model
+            except Exception as exc:
+                logger.warning("Google OAuth token refresh failed: %s", exc)
+        api_key = s.ai_api_key or os.getenv("LLM_API_KEY", "")
+        url = s.ai_api_url or os.getenv("LLM_API_URL") or _PROVIDER_DEFAULTS.get(provider, "https://api.openai.com/v1")
+        return url, api_key, model
+    except Exception:
+        return (
+            os.getenv("LLM_API_URL", "https://api.openai.com/v1"),
+            os.getenv("LLM_API_KEY", ""),
+            os.getenv("LLM_MODEL", "gpt-4o-mini"),
+        )
+
+
+async def _chat(system: str, user: str, max_tokens: int = 1024, db: AsyncSession | None = None) -> str:
+    if db is None:
+        raise HTTPException(status_code=503, detail="DB session required for AI config")
+    url, key, model = await _llm_cfg(db)
     if not key:
-        raise HTTPException(status_code=503, detail="LLM_API_KEY not configured — set it in .env")
+        raise HTTPException(status_code=503, detail="AI API key not configured — set it in Settings → AI Config")
     try:
         import httpx
     except ImportError:
@@ -77,10 +138,95 @@ class AnnotatedEvent(BaseModel):
     severity: str | None = None
 
 
+@router.get("/config")
+async def get_ai_config(
+    _: User = Depends(require_roles("admin", "operator")),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Return current AI provider config (keys masked)."""
+    try:
+        s = await get_settings(db)
+        provider = s.ai_provider or os.getenv("AI_PROVIDER", "openai")
+        model = s.ai_model or os.getenv("LLM_MODEL") or _PROVIDER_DEFAULT_MODELS.get(provider, "gpt-4o-mini")
+        return {
+            "provider": provider,
+            "model": model,
+            "api_url": s.ai_api_url or os.getenv("LLM_API_URL") or _PROVIDER_DEFAULTS.get(provider, ""),
+            "api_key_set": bool(s.ai_api_key or os.getenv("LLM_API_KEY")),
+            "google_oauth_client_id": s.google_oauth_client_id or "",
+            "google_oauth_connected": bool(s.google_oauth_refresh_token),
+            "default_url": _PROVIDER_DEFAULTS.get(provider, ""),
+        }
+    except Exception:
+        return {"provider": "openai", "model": "gpt-4o-mini", "api_key_set": False, "google_oauth_connected": False}
+
+
+class GoogleOAuthExchangeRequest(BaseModel):
+    code: str
+    redirect_uri: str
+    code_verifier: str
+
+
+@router.post("/oauth/google/exchange", dependencies=[Depends(require_roles("admin", "operator"))])
+async def google_oauth_exchange(
+    payload: GoogleOAuthExchangeRequest,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """Exchange Google OAuth authorization code for refresh token and store in settings."""
+    try:
+        import httpx
+    except ImportError:
+        raise HTTPException(status_code=503, detail="httpx not installed")
+
+    s = await get_settings(db)
+    if not s.google_oauth_client_id or not s.google_oauth_client_secret:
+        raise HTTPException(status_code=400, detail="Google OAuth client_id/client_secret not configured in Settings")
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": s.google_oauth_client_id,
+                "client_secret": s.google_oauth_client_secret,
+                "code": payload.code,
+                "redirect_uri": payload.redirect_uri,
+                "code_verifier": payload.code_verifier,
+                "grant_type": "authorization_code",
+            },
+        )
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Google token exchange failed: {resp.text[:200]}")
+
+    token_data = resp.json()
+    refresh_token = token_data.get("refresh_token")
+    if not refresh_token:
+        raise HTTPException(status_code=502, detail="Google did not return a refresh_token — ensure 'access_type=offline' was sent")
+
+    s.google_oauth_refresh_token = refresh_token
+    await db.commit()
+    return {"connected": True, "scope": token_data.get("scope", "")}
+
+
+@router.delete("/oauth/google/disconnect", dependencies=[Depends(require_roles("admin", "operator"))])
+async def google_oauth_disconnect(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """Remove stored Google OAuth refresh token."""
+    s = await get_settings(db)
+    s.google_oauth_refresh_token = None
+    await db.commit()
+    return {"connected": False}
+
+
+# ── Event Annotation ──────────────────────────────────────────────────────────
+
 @router.post("/annotate", response_model=list[AnnotatedEvent])
 async def annotate_events(
     payload: AnnotateRequest,
     _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> list[AnnotatedEvent]:
     """Annotate timeline events with MITRE ATT&CK technique IDs and severity."""
     events = payload.events[: payload.max_events]
@@ -99,7 +245,7 @@ async def annotate_events(
     sanitized = [{k: str(v)[:200] for k, v in e.items()} for e in events]
     user = json.dumps(sanitized, indent=2)[:6000]
 
-    raw = await _chat(system, user, max_tokens=2048)
+    raw = await _chat(system, user, max_tokens=2048, db=db)
     try:
         raw_clean = raw.strip()
         if raw_clean.startswith("```"):
@@ -129,6 +275,7 @@ async def annotate_events(
 async def generate_summary(
     incident_id: str,
     _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Generate an executive summary of the incident's super timeline using an LLM."""
     import pathlib
@@ -163,8 +310,9 @@ async def generate_summary(
     context = json.dumps(sample, indent=2) if sample else "No timeline data available yet."
     user = f"Incident: {incident_id}\n\nTimeline sample ({len(sample)} events):\n{context}"
 
-    summary = await _chat(system, user, max_tokens=1200)
-    return {"incident_id": incident_id, "summary": summary, "sample_events": len(sample), "model": _llm_cfg()[2]}
+    _, _, model = await _llm_cfg(db)
+    summary = await _chat(system, user, max_tokens=1200, db=db)
+    return {"incident_id": incident_id, "summary": summary, "sample_events": len(sample), "model": model}
 
 
 # ── Natural Language Query ────────────────────────────────────────────────────
@@ -179,6 +327,7 @@ class NLQueryRequest(BaseModel):
 async def nl_query(
     payload: NLQueryRequest,
     _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Answer a natural-language question about an incident's collected evidence."""
     import pathlib
@@ -221,11 +370,12 @@ async def nl_query(
         f"{json.dumps(context, indent=2) if context else 'No timeline data available.'}"
     )
 
-    answer = await _chat(system, user, max_tokens=600)
+    _, _, model = await _llm_cfg(db)
+    answer = await _chat(system, user, max_tokens=600, db=db)
     return {
         "incident_id": payload.incident_id,
         "question": payload.question,
         "answer": answer,
         "context_events": len(context),
-        "model": _llm_cfg()[2],
+        "model": model,
     }

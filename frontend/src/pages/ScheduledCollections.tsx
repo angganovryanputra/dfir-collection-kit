@@ -262,7 +262,17 @@ export default function ScheduledCollections() {
                       label="NEXT RUN:"
                       value={sc.next_run_at ? new Date(sc.next_run_at).toLocaleString() : "Pending"}
                     />
-                    <KeyValueRow label="INCIDENT:" value={sc.incident_id} />
+                    <KeyValueRow
+                      label="INCIDENT:"
+                      value={
+                        <button
+                          className="font-mono text-primary hover:underline underline-offset-2 text-left"
+                          onClick={() => navigate(`/incidents/${sc.incident_id}`)}
+                        >
+                          {sc.incident_id}
+                        </button>
+                      }
+                    />
                     <KeyValueRow
                       label="STATUS:"
                       value={sc.enabled ? "ENABLED" : "DISABLED"}

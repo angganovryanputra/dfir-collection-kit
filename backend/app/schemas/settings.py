@@ -35,6 +35,14 @@ class SystemSettingsBase(BaseModel):
     s3_secret_key: str | None = None
     s3_bucket: str | None = None
     s3_region: str | None = None
+    # AI / LLM Settings
+    ai_provider: str | None = None
+    ai_model: str | None = None
+    ai_api_key: str | None = None
+    ai_api_url: str | None = None
+    google_oauth_client_id: str | None = None
+    google_oauth_client_secret: str | None = None
+    google_oauth_refresh_token: str | None = None
 
     @field_validator("notification_email", mode="before")
     @classmethod
@@ -70,7 +78,10 @@ class SystemSettingsApiOut(SystemSettingsBase):
     """API response schema — masks timesketch_token so it is never returned in plaintext."""
     id: str
 
-    @field_serializer("timesketch_token", "s3_secret_key", "webhook_secret")
+    @field_serializer(
+        "timesketch_token", "s3_secret_key", "webhook_secret",
+        "ai_api_key", "google_oauth_client_secret", "google_oauth_refresh_token",
+    )
     def _mask_token(self, v: str | None) -> str | None:
         return "***" if v else None
 

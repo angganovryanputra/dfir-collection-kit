@@ -76,7 +76,7 @@ const SuperTimelineRow = React.memo(({
     const eventSeq   = row["event_seq"] != null ? Number(row["event_seq"]) + 1 : ((page - 1) * pageSize + index + 1);
     const host       = String(row["host"] ?? row["computer"] ?? "UNKNOWN");
     const color      = getHostColor(host, knownHosts);
-    const srcShort   = String(row["source_short"] ?? "");
+    const srcShort   = String(row["source_short"] ?? "").toUpperCase();
     const srcColor   = getSourceColor(srcShort);
     const datetime   = String(row["datetime"] ?? row["timestamp"] ?? "—");
     const tsDesc     = String(row["timestamp_desc"] ?? "—");
@@ -89,13 +89,21 @@ const SuperTimelineRow = React.memo(({
     const isEvtxLike  = eventId != null;
     const displayName = row["display_name"] ? String(row["display_name"]) : null;
 
+    // ─── DFIR Contextual Tinting ───
     const isSigma = srcShort === "SIGMA" || srcShort === "HAYABUSA";
+    const isMft = srcShort === "MFT" || srcShort === "FILE";
+    const isReg = srcShort === "REG" || srcShort === "REGISTRY";
+    const isLog = srcShort === "EVTX" || srcShort === "LOG";
     
-    const rowCls = isSigma
-        ? "border-b border-red-500/20 bg-red-500/5 hover:bg-red-500/10"
-        : isInLmWindow
-            ? "border-b border-border/20 bg-orange-500/5 hover:bg-orange-500/10 border-l-2 border-l-orange-500/60"
-            : "border-b border-border/20 hover:bg-primary/5";
+    const rowCls = cn(
+        "border-b border-border/10 transition-colors",
+        isSigma ? "bg-red-500/5 hover:bg-red-500/10 border-l-2 border-l-red-500" :
+        isMft ? "bg-green-500/5 hover:bg-green-500/10 border-l-2 border-l-green-500/40" :
+        isReg ? "bg-purple-500/5 hover:bg-purple-500/10 border-l-2 border-l-purple-500/40" :
+        isLog ? "bg-blue-500/5 hover:bg-blue-500/10 border-l-2 border-l-blue-500/40" :
+        isInLmWindow ? "bg-orange-500/5 hover:bg-orange-500/10 border-l-2 border-l-orange-500" :
+        "hover:bg-primary/5"
+    );
 
     const tagMeta = tag ? EVENT_TAG_META[tag] : null;
     const isPinned = pinnedItems.some(i => i.id === evHash);
@@ -115,15 +123,15 @@ const SuperTimelineRow = React.memo(({
     return (
         <tr
             className={cn(
-                "transition-colors text-xs cursor-pointer group/row",
+                "text-[11px] cursor-pointer group/row",
                 rowCls,
-                isSelected && "ring-1 ring-inset ring-primary/60",
+                isSelected && "ring-1 ring-inset ring-primary/60 bg-primary/5",
                 isFocused && "bg-secondary/60 ring-1 ring-inset ring-primary/30"
             )}
-            style={{ contentVisibility: "auto", containIntrinsicSize: "0 40px" }}
+            style={{ contentVisibility: "auto", containIntrinsicSize: "0 36px" }}
             onClick={(e) => onRowClick(e, row, index)}
         >
-            <td className="px-2 py-1.5 text-right text-muted-foreground/50 text-[10px] select-none tabular-nums w-10 relative">
+            <td className="px-2 py-1.5 text-right text-muted-foreground/40 text-[9px] select-none tabular-nums w-10 relative font-mono">
                 <button 
                     onClick={handlePin}
                     className={cn(
@@ -134,37 +142,33 @@ const SuperTimelineRow = React.memo(({
                 >
                     <Pin className={cn("w-2.5 h-2.5", isPinned && "fill-current")} />
                 </button>
-                {eventSeq.toLocaleString()}
+                {eventSeq}
             </td>
             <td className="px-3 py-1.5 whitespace-nowrap">
-                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm border text-[10px] font-mono ${color.bg} ${color.text} ${color.border}`}>
-                    <Server className="w-2 h-2 shrink-0" />
+                <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm border text-[9px] font-mono font-bold tracking-tighter ${color.bg} ${color.text} ${color.border}`}>
                     {host}
                 </span>
             </td>
-            <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground tabular-nums">
-                <span className="flex items-center gap-1">
-                    <Clock className="w-2.5 h-2.5 shrink-0 text-muted-foreground/50" />
-                    {datetime}
-                </span>
+            <td className="px-3 py-1.5 whitespace-nowrap text-muted-foreground/80 tabular-nums font-mono text-[10px]">
+                {datetime}
             </td>
             <td className="px-3 py-1.5 whitespace-nowrap">
                 <span
-                    className="px-1.5 py-0.5 rounded-sm border border-border/40 bg-secondary/30 text-[10px] truncate block max-w-[130px]"
+                    className="px-1.5 py-0.5 rounded-sm border border-border/40 bg-secondary/30 text-[9px] text-muted-foreground truncate block max-w-[130px] font-mono uppercase tracking-tighter"
                     title={tsDesc}
                 >
-                    {truncate(tsDesc, 22)}
+                    {truncate(tsDesc, 20)}
                 </span>
             </td>
             <td className="px-3 py-1.5 whitespace-nowrap">
                 <div className="flex items-center gap-1.5">
                     {srcShort && (
-                        <span className={`px-1.5 py-0.5 rounded-sm border text-[10px] font-bold shrink-0 ${srcColor}`}>
+                        <span className={`px-1.5 py-0.5 rounded-sm border text-[9px] font-bold shrink-0 font-mono ${srcColor}`}>
                             {srcShort}
                         </span>
                     )}
-                    <span className="text-muted-foreground truncate block max-w-[90px] text-[10px]" title={source}>
-                        {truncate(source, 22)}
+                    <span className="text-muted-foreground/60 truncate block max-w-[90px] text-[9px] font-mono uppercase" title={source}>
+                        {truncate(source, 20)}
                     </span>
                 </div>
             </td>
@@ -172,17 +176,17 @@ const SuperTimelineRow = React.memo(({
                 <td className="px-3 py-1.5 whitespace-nowrap">
                     {eventLabel ? (
                         <span
-                            className={`px-1.5 py-0.5 rounded-sm border text-[10px] truncate block max-w-[110px] ${
+                            className={`px-1.5 py-0.5 rounded-sm border text-[9px] font-mono truncate block max-w-[110px] ${
                                 isEvtxLike
                                     ? "border-blue-500/30 bg-blue-500/10 text-blue-400 font-bold"
                                     : "border-orange-500/30 bg-orange-500/10 text-orange-400"
                             }`}
                             title={eventLabel}
                         >
-                            {isEvtxLike ? `EID:${eventLabel}` : truncate(eventLabel, 18)}
+                            {isEvtxLike ? `EID:${eventLabel}` : truncate(eventLabel, 15)}
                         </span>
                     ) : (
-                        <span className="text-muted-foreground/30">—</span>
+                        <span className="text-muted-foreground/20 text-[9px]">—</span>
                     )}
                 </td>
             )}
@@ -190,17 +194,17 @@ const SuperTimelineRow = React.memo(({
                 <td className="px-3 py-1.5 whitespace-nowrap">
                     {user ? (
                         <span className="flex items-center gap-1 text-[10px]">
-                            <User className="w-2.5 h-2.5 text-muted-foreground/60 shrink-0" />
+                            <User className="w-2.5 h-2.5 text-muted-foreground/40 shrink-0" />
                             <button
-                                className="text-foreground/80 hover:text-primary transition-colors"
+                                className="text-foreground/70 hover:text-primary transition-colors font-mono"
                                 title={`Filter by user: ${user}`}
                                 onClick={(e) => { e.stopPropagation(); onSearchChange(`user:"${user}"`); }}
                             >
-                                {truncate(user, 16)}
+                                {truncate(user, 14)}
                             </button>
                         </span>
                     ) : (
-                        <span className="text-muted-foreground/30">—</span>
+                        <span className="text-muted-foreground/20 text-[9px]">—</span>
                     )}
                 </td>
             )}
@@ -208,19 +212,19 @@ const SuperTimelineRow = React.memo(({
                 <td className="px-3 py-1.5 max-w-[160px]">
                     {displayName ? (
                         <span
-                            className="block truncate text-[10px] text-muted-foreground font-mono"
+                            className="block truncate text-[10px] text-muted-foreground/70 font-mono"
                             title={displayName}
                             style={{ direction: "rtl", textAlign: "left" }}
                         >
                             {displayName}
                         </span>
                     ) : (
-                        <span className="text-muted-foreground/30">—</span>
+                        <span className="text-muted-foreground/20 text-[9px]">—</span>
                     )}
                 </td>
             )}
             <td className="px-3 py-1.5 max-w-[0] w-full">
-                <span className="truncate block" title={message}>
+                <span className="truncate block text-foreground/90 leading-relaxed font-sans" title={message}>
                     {highlightedMessage ?? message}
                 </span>
             </td>
@@ -228,37 +232,12 @@ const SuperTimelineRow = React.memo(({
                 <div className="relative group/tag">
                     <button
                         className={cn(
-                            "px-1.5 py-0.5 rounded-sm border font-mono text-[10px] transition-all",
-                            tagMeta ? tagMeta.color : "border-border/20 text-muted-foreground/30 hover:border-border/60 hover:text-muted-foreground"
+                            "px-1.5 py-0.5 rounded-sm border font-mono text-[9px] transition-all font-bold",
+                            tagMeta ? tagMeta.color : "border-border/10 text-muted-foreground/20 hover:border-border/40 hover:text-muted-foreground/60"
                         )}
-                        title={tagMeta ? `Tag: ${tagMeta.label} (click to change)` : "Add tag"}
                     >
                         {tagMeta ? tagMeta.short : "+"}
                     </button>
-                    <div className="absolute right-0 top-full mt-0.5 z-50 hidden group-hover/tag:flex flex-col bg-card border border-border shadow-lg rounded-sm overflow-hidden min-w-[110px]">
-                        {(Object.entries(EVENT_TAG_META) as [EventTagValue, typeof EVENT_TAG_META[EventTagValue]][]).map(([k, v]) => (
-                            <button
-                                key={k}
-                                onClick={() => setEventTag(evHash, k)}
-                                className={cn(
-                                    "px-2 py-1.5 text-left font-mono text-[10px] transition-colors hover:bg-secondary/50 flex items-center gap-2",
-                                    tag === k ? v.color : "text-muted-foreground"
-                                )}
-                            >
-                                <span className={cn("w-1.5 h-1.5 rounded-full", tag === k ? "" : "bg-muted-foreground/30")}
-                                    style={tag === k ? { background: "currentColor" } : {}} />
-                                {v.label}
-                            </button>
-                        ))}
-                        {tag && (
-                            <button
-                                onClick={() => setEventTag(evHash, null)}
-                                className="px-2 py-1.5 text-left font-mono text-[10px] text-destructive/60 hover:bg-secondary/50 border-t border-border/40"
-                            >
-                                CLEAR
-                            </button>
-                        )}
-                    </div>
                 </div>
             </td>
         </tr>

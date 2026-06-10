@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useDebounce } from "@/hooks/useDebounce";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +42,10 @@ import {
   EyeOff,
   Download,
   Calendar,
+  Brain,
+  Link2,
+  Unlink2,
+  ExternalLink,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
 
@@ -152,7 +156,7 @@ interface IOCIndicator {
   created_at: string;
 }
 
-type TabType = "users" | "collectors" | "system" | "audit" | "threatintel";
+type TabType = "users" | "collectors" | "system" | "audit" | "threatintel" | "ai";
 
 function pwStrength(pw: string): 0 | 1 | 2 | 3 {
   if (!pw) return 0;
@@ -165,9 +169,35 @@ function pwStrength(pw: string): 0 | 1 | 2 | 3 {
 const PW_LABEL = ["", "WEAK", "MEDIUM", "STRONG"];
 const PW_COLOR = ["", "bg-destructive", "bg-yellow-500", "bg-green-500"];
 
+// ── AI Provider config ────────────────────────────────────────────────────────
+
+const AI_PROVIDERS = [
+  { id: "openai",     label: "OpenAI (ChatGPT)",  defaultModel: "gpt-4o-mini",        defaultUrl: "https://api.openai.com/v1",                             hasOAuth: false, apiKeyLink: "https://platform.openai.com/api-keys",                   note: "API key from platform.openai.com" },
+  { id: "anthropic",  label: "Anthropic (Claude)", defaultModel: "claude-sonnet-4-6",  defaultUrl: "https://api.anthropic.com/v1",                          hasOAuth: false, apiKeyLink: "https://console.anthropic.com/settings/keys",            note: "API key from console.anthropic.com" },
+  { id: "gemini",     label: "Google Gemini",      defaultModel: "gemini-2.0-flash",   defaultUrl: "https://generativelanguage.googleapis.com/v1beta/openai", hasOAuth: true,  apiKeyLink: "https://aistudio.google.com/app/apikey",                 note: "API key or connect via Google OAuth" },
+  { id: "openrouter", label: "OpenRouter",          defaultModel: "openai/gpt-4o-mini", defaultUrl: "https://openrouter.ai/api/v1",                          hasOAuth: false, apiKeyLink: "https://openrouter.ai/keys",                             note: "API key from openrouter.ai" },
+  { id: "ollama",     label: "Ollama (Local)",      defaultModel: "llama3",             defaultUrl: "http://localhost:11434/v1",                              hasOAuth: false, apiKeyLink: "",                                                       note: "No API key needed — runs locally" },
+] as const;
+
+type AIProvider = typeof AI_PROVIDERS[number]["id"];
+
+function generatePKCEPair(): { verifier: string; challenge: Promise<string> } {
+  const array = new Uint8Array(64);
+  crypto.getRandomValues(array);
+  const verifier = btoa(String.fromCharCode(...array)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+  const challenge = crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)).then((buf) =>
+    btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "")
+  );
+  return { verifier, challenge };
+}
+
 export default function AdminSettings() {
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState<TabType>("users");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [activeTab, setActiveTab] = useState<TabType>(() => {
+    const tab = searchParams.get("tab");
+    return (tab === "ai" || tab === "users" || tab === "collectors" || tab === "system" || tab === "audit" || tab === "threatintel") ? tab as TabType : "users";
+  });
   const [users, setUsers] = useState<User[]>([]);
   const [collectors, setCollectors] = useState<CollectorConfig[]>([]);
   const [systemSettings, setSystemSettings] = useState<SystemSettingsResponse | null>(null);
@@ -226,6 +256,20 @@ export default function AdminSettings() {
   const [isVerifyingTools, setIsVerifyingTools] = useState(false);
   const [validatingTool, setValidatingTool] = useState<string | null>(null);
 
+  // ── AI Config state ──────────────────────────────────────────────────────
+  const [aiProvider, setAiProvider] = useState<AIProvider>("openai");
+  const [aiModel, setAiModel] = useState("");
+  const [aiApiKey, setAiApiKey] = useState("");
+  const [aiApiUrl, setAiApiUrl] = useState("");
+  const [aiShowKey, setAiShowKey] = useState(false);
+  const [googleClientId, setGoogleClientId] = useState("");
+  const [googleClientSecret, setGoogleClientSecret] = useState("");
+  const [googleShowSecret, setGoogleShowSecret] = useState(false);
+  const [googleConnected, setGoogleConnected] = useState(false);
+  const [isSavingAi, setIsSavingAi] = useState(false);
+  const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
+  const [aiMessage, setAiMessage] = useState<{ ok: boolean; text: string } | null>(null);
+
   const usersQuery = useQuery({
     queryKey: ["users"],
     queryFn: () => apiGet<UserResponse[]>("/users"),
@@ -267,6 +311,111 @@ export default function AdminSettings() {
       setErrorMessage(null);
     }
   }, [settingsQuery.data]);
+
+  // ── Load AI config when AI tab is active ──────────────────────────────────
+  useEffect(() => {
+    if (activeTab !== "ai") return;
+    apiGet<{
+      provider: string; model: string; api_url: string; api_key_set: boolean;
+      google_oauth_client_id: string; google_oauth_connected: boolean;
+    }>("/ai/config")
+      .then((cfg) => {
+        setAiProvider((cfg.provider as AIProvider) || "openai");
+        setAiModel(cfg.model || "");
+        setAiApiUrl(cfg.api_url || "");
+        setGoogleClientId(cfg.google_oauth_client_id || "");
+        setGoogleConnected(cfg.google_oauth_connected);
+        if (cfg.api_key_set) setAiApiKey("***");
+      })
+      .catch(() => { /* best-effort */ });
+  }, [activeTab]);
+
+  // ── Google OAuth PKCE callback detection ─────────────────────────────────
+  useEffect(() => {
+    const code = searchParams.get("code");
+    const state = searchParams.get("state");
+    if (!code || state !== "google_oauth_gemini") return;
+    const verifier = sessionStorage.getItem("google_pkce_verifier");
+    const redirectUri = sessionStorage.getItem("google_oauth_redirect_uri");
+    if (!verifier || !redirectUri) return;
+    setActiveTab("ai");
+    setIsConnectingGoogle(true);
+    apiPost<{ connected: boolean; scope: string }>("/ai/oauth/google/exchange", {
+      code,
+      redirect_uri: redirectUri,
+      code_verifier: verifier,
+    })
+      .then((r) => {
+        setGoogleConnected(r.connected);
+        setAiMessage({ ok: true, text: "Google account connected successfully." });
+        sessionStorage.removeItem("google_pkce_verifier");
+        sessionStorage.removeItem("google_oauth_redirect_uri");
+        setSearchParams({}, { replace: true });
+      })
+      .catch((err) => {
+        setAiMessage({ ok: false, text: `OAuth failed: ${err instanceof Error ? err.message.slice(0, 150) : "Unknown error"}` });
+      })
+      .finally(() => setIsConnectingGoogle(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleGoogleConnect = useCallback(async () => {
+    if (!googleClientId) {
+      setAiMessage({ ok: false, text: "Enter your Google OAuth Client ID first." });
+      return;
+    }
+    const { verifier, challenge } = generatePKCEPair();
+    const codeChallenge = await challenge;
+    const redirectUri = `${window.location.origin}/admin/settings`;
+    sessionStorage.setItem("google_pkce_verifier", verifier);
+    sessionStorage.setItem("google_oauth_redirect_uri", redirectUri);
+    const params = new URLSearchParams({
+      client_id: googleClientId,
+      redirect_uri: redirectUri,
+      response_type: "code",
+      scope: "https://www.googleapis.com/auth/generative-language",
+      access_type: "offline",
+      prompt: "consent",
+      code_challenge: codeChallenge,
+      code_challenge_method: "S256",
+      state: "google_oauth_gemini",
+    });
+    window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  }, [googleClientId]);
+
+  const handleGoogleDisconnect = useCallback(async () => {
+    try {
+      await apiDelete("/ai/oauth/google/disconnect");
+      setGoogleConnected(false);
+      setAiMessage({ ok: true, text: "Google account disconnected." });
+    } catch {
+      setAiMessage({ ok: false, text: "Failed to disconnect." });
+    }
+  }, []);
+
+  const handleSaveAiConfig = useCallback(async () => {
+    setIsSavingAi(true);
+    setAiMessage(null);
+    const selectedProvider = AI_PROVIDERS.find(p => p.id === aiProvider);
+    const body: Record<string, unknown> = {
+      ai_provider: aiProvider,
+      ai_model: aiModel || selectedProvider?.defaultModel || "",
+      ai_api_url: aiApiUrl || selectedProvider?.defaultUrl || "",
+      google_oauth_client_id: googleClientId || null,
+    };
+    if (aiApiKey && aiApiKey !== "***") body.ai_api_key = aiApiKey;
+    if (googleClientSecret && googleClientSecret !== "***") body.google_oauth_client_secret = googleClientSecret;
+    try {
+      await apiPut("/settings", { ...systemSettings, ...body });
+      setAiMessage({ ok: true, text: "AI configuration saved." });
+      if (aiApiKey && aiApiKey !== "***") setAiApiKey("***");
+      if (googleClientSecret && googleClientSecret !== "***") setGoogleClientSecret("***");
+    } catch (err) {
+      setAiMessage({ ok: false, text: err instanceof Error ? err.message.slice(0, 200) : "Save failed" });
+    } finally {
+      setIsSavingAi(false);
+    }
+  }, [aiProvider, aiModel, aiApiKey, aiApiUrl, googleClientId, googleClientSecret, systemSettings]);
 
   const loadAdminData = async () => {
     setErrorMessage(null);
@@ -544,6 +693,7 @@ export default function AdminSettings() {
     { id: "system", label: "SYSTEM CONFIG", icon: <Settings className="w-4 h-4" /> },
     { id: "audit", label: "AUDIT LOGS", icon: <FileText className="w-4 h-4" /> },
     { id: "threatintel", label: "THREAT INTEL", icon: <ShieldAlert className="w-4 h-4" /> },
+    { id: "ai", label: "AI CONFIG", icon: <Brain className="w-4 h-4" /> },
   ];
 
   const refreshCollectors = async () => {
@@ -1660,6 +1810,224 @@ export default function AdminSettings() {
                 </TacticalPanel>
               </>
             )}
+
+            {/* AI Config Tab */}
+            {activeTab === "ai" && (() => {
+              const providerInfo = AI_PROVIDERS.find(p => p.id === aiProvider)!;
+              return (
+                <>
+                  <div className="flex items-center justify-between">
+                    <h2 className="font-mono text-sm font-bold uppercase tracking-wider text-foreground">
+                      AI / LLM Configuration
+                    </h2>
+                  </div>
+
+                  {aiMessage && (
+                    <div className={`flex items-center gap-2 p-3 border rounded-sm font-mono text-xs ${
+                      aiMessage.ok ? "border-primary/40 bg-primary/5 text-primary" : "border-destructive/40 bg-destructive/5 text-destructive"
+                    }`}>
+                      {aiMessage.ok ? <CheckCircle2 className="w-4 h-4 shrink-0" /> : <XCircle className="w-4 h-4 shrink-0" />}
+                      {aiMessage.text}
+                    </div>
+                  )}
+
+                  {isConnectingGoogle && (
+                    <div className="flex items-center gap-2 p-3 border border-primary/30 bg-primary/5 rounded-sm font-mono text-xs text-primary animate-pulse">
+                      <CircleDashed className="w-4 h-4 animate-spin shrink-0" />
+                      Completing Google OAuth flow...
+                    </div>
+                  )}
+
+                  {/* Provider Selection */}
+                  <TacticalPanel title="PROVIDER" status="active">
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2">
+                      {AI_PROVIDERS.map((p) => (
+                        <button
+                          key={p.id}
+                          onClick={() => {
+                            setAiProvider(p.id);
+                            setAiModel(p.defaultModel);
+                            setAiApiUrl(p.defaultUrl);
+                            setAiMessage(null);
+                          }}
+                          className={`flex flex-col items-center gap-1.5 p-3 border rounded-sm font-mono text-xs transition-colors ${
+                            aiProvider === p.id
+                              ? "border-primary bg-primary/10 text-primary"
+                              : "border-border text-muted-foreground hover:border-primary/50 hover:text-foreground"
+                          }`}
+                        >
+                          <Brain className={`w-5 h-5 ${aiProvider === p.id ? "text-primary" : "text-muted-foreground"}`} />
+                          <span className="font-bold text-center leading-tight">{p.label}</span>
+                          {p.hasOAuth && (
+                            <span className="text-[9px] px-1 border border-primary/30 rounded text-primary/80">OAuth</span>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="mt-3 text-xs text-muted-foreground font-mono">{providerInfo.note}</p>
+                  </TacticalPanel>
+
+                  {/* Model & URL Config */}
+                  <TacticalPanel title="MODEL CONFIGURATION" status="active">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1.5">
+                        <FormLabel className="text-[10px] text-muted-foreground uppercase">Model Name</FormLabel>
+                        <Input
+                          className="font-mono text-xs"
+                          value={aiModel}
+                          onChange={(e) => setAiModel(e.target.value)}
+                          placeholder={providerInfo.defaultModel}
+                        />
+                        <p className="text-[10px] text-muted-foreground">Default: {providerInfo.defaultModel}</p>
+                      </div>
+                      <div className="space-y-1.5">
+                        <FormLabel className="text-[10px] text-muted-foreground uppercase">API Base URL</FormLabel>
+                        <Input
+                          className="font-mono text-xs"
+                          value={aiApiUrl}
+                          onChange={(e) => setAiApiUrl(e.target.value)}
+                          placeholder={providerInfo.defaultUrl}
+                        />
+                        <p className="text-[10px] text-muted-foreground">Leave blank to use default</p>
+                      </div>
+                    </div>
+                  </TacticalPanel>
+
+                  {/* Authentication */}
+                  <TacticalPanel title="AUTHENTICATION" status={googleConnected && aiProvider === "gemini" ? "online" : "active"}>
+                    {aiProvider === "gemini" ? (
+                      <div className="space-y-4">
+                        {/* Option A: OAuth */}
+                        <div className="border border-primary/20 rounded-sm p-4 space-y-3">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs font-bold uppercase text-primary">Option A — Google OAuth (Recommended)</span>
+                            {googleConnected && (
+                              <span className="text-[10px] px-1.5 py-0.5 bg-primary/10 border border-primary/30 text-primary rounded">CONNECTED</span>
+                            )}
+                          </div>
+                          <p className="text-[10px] text-muted-foreground leading-relaxed">
+                            Connect your Google account using OAuth 2.0 PKCE. Your DFIR Kit will use your Google identity to call the Gemini API.
+                            Requires a Google Cloud project with the Generative Language API enabled and an OAuth 2.0 Web App client.
+                            <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="ml-1 text-primary hover:underline inline-flex items-center gap-0.5">
+                              Create credentials <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                          </p>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div className="space-y-1.5">
+                              <FormLabel className="text-[10px] text-muted-foreground uppercase">Google OAuth Client ID</FormLabel>
+                              <Input
+                                className="font-mono text-xs"
+                                value={googleClientId}
+                                onChange={(e) => setGoogleClientId(e.target.value)}
+                                placeholder="1234567890-xxx.apps.googleusercontent.com"
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <FormLabel className="text-[10px] text-muted-foreground uppercase">Client Secret</FormLabel>
+                              <div className="relative">
+                                <Input
+                                  type={googleShowSecret ? "text" : "password"}
+                                  className="font-mono text-xs pr-8"
+                                  value={googleClientSecret}
+                                  onChange={(e) => setGoogleClientSecret(e.target.value)}
+                                  placeholder={googleClientSecret === "***" ? "Saved (hidden)" : "GOCSPX-xxx..."}
+                                />
+                                <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setGoogleShowSecret(v => !v)}>
+                                  {googleShowSecret ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex gap-2">
+                            {googleConnected ? (
+                              <Button variant="outline" size="sm" className="gap-2 text-destructive border-destructive/40 hover:bg-destructive/10 text-xs" onClick={() => void handleGoogleDisconnect()}>
+                                <Unlink2 className="w-3.5 h-3.5" />
+                                DISCONNECT GOOGLE
+                              </Button>
+                            ) : (
+                              <Button variant="tactical" size="sm" className="gap-2 text-xs" disabled={!googleClientId || isConnectingGoogle} onClick={() => void handleGoogleConnect()}>
+                                <Link2 className="w-3.5 h-3.5" />
+                                CONNECT WITH GOOGLE
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Option B: API Key */}
+                        <div className="border border-border/40 rounded-sm p-4 space-y-3">
+                          <span className="font-mono text-xs font-bold uppercase text-muted-foreground">Option B — Gemini API Key</span>
+                          <p className="text-[10px] text-muted-foreground leading-relaxed">
+                            Use a Google AI Studio API key instead of OAuth.
+                            <a href={providerInfo.apiKeyLink} target="_blank" rel="noopener noreferrer" className="ml-1 text-primary hover:underline inline-flex items-center gap-0.5">
+                              Get key from AI Studio <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                          </p>
+                          <div className="space-y-1.5">
+                            <FormLabel className="text-[10px] text-muted-foreground uppercase">Gemini API Key</FormLabel>
+                            <div className="relative">
+                              <Input
+                                type={aiShowKey ? "text" : "password"}
+                                className="font-mono text-xs pr-8"
+                                value={aiApiKey}
+                                onChange={(e) => setAiApiKey(e.target.value)}
+                                placeholder={aiApiKey === "***" ? "Saved (hidden)" : "AIza..."}
+                              />
+                              <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setAiShowKey(v => !v)}>
+                                {aiShowKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : aiProvider === "ollama" ? (
+                      <div className="p-3 border border-primary/20 bg-primary/5 rounded-sm font-mono text-xs text-primary">
+                        No API key required — Ollama runs locally. Ensure Ollama is running at the URL above.
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="flex items-start gap-3 p-3 border border-border/40 bg-secondary/10 rounded-sm">
+                          <Key className="w-4 h-4 text-muted-foreground mt-0.5 shrink-0" />
+                          <div className="space-y-1">
+                            <p className="font-mono text-xs text-muted-foreground leading-relaxed">
+                              {aiProvider === "openai" && "OpenAI does not support OAuth for direct API access. Use an API key from your OpenAI account."}
+                              {aiProvider === "anthropic" && "Anthropic does not support OAuth for direct API access. Use an API key from your Anthropic Console."}
+                              {aiProvider === "openrouter" && "OpenRouter uses API keys for authentication."}
+                            </p>
+                            {providerInfo.apiKeyLink && (
+                              <a href={providerInfo.apiKeyLink} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                                Get API key <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                          </div>
+                        </div>
+                        <div className="space-y-1.5">
+                          <FormLabel className="text-[10px] text-muted-foreground uppercase">API Key</FormLabel>
+                          <div className="relative">
+                            <Input
+                              type={aiShowKey ? "text" : "password"}
+                              className="font-mono text-xs pr-8"
+                              value={aiApiKey}
+                              onChange={(e) => setAiApiKey(e.target.value)}
+                              placeholder={aiApiKey === "***" ? "Saved (hidden)" : `${aiProvider === "openai" ? "sk-..." : aiProvider === "anthropic" ? "sk-ant-..." : "Enter API key..."}`}
+                            />
+                            <button type="button" className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground" onClick={() => setAiShowKey(v => !v)}>
+                              {aiShowKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </TacticalPanel>
+
+                  <div className="flex justify-end">
+                    <Button variant="tactical" size="sm" className="gap-2" disabled={isSavingAi} onClick={() => void handleSaveAiConfig()}>
+                      <Save className="w-4 h-4" />
+                      {isSavingAi ? "SAVING..." : "SAVE AI CONFIG"}
+                    </Button>
+                  </div>
+                </>
+              );
+            })()}
           </div>
         </div>
       </div>

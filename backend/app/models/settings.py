@@ -40,3 +40,11 @@ class SystemSettings(Base):
     s3_secret_key: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     s3_bucket: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     s3_region: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    # AI / LLM Settings
+    ai_provider: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    ai_model: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    ai_api_key: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    ai_api_url: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    google_oauth_client_id: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    google_oauth_client_secret: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    google_oauth_refresh_token: Mapped[str | None] = mapped_column(String, nullable=True, default=None)

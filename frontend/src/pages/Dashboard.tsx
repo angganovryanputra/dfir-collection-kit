@@ -7,6 +7,7 @@ import { TacticalPanel } from "@/components/TacticalPanel";
 import { StatusIndicator } from "@/components/StatusIndicator";
 import { TablePagination } from "@/components/TablePagination";
 import { StatCard } from "@/components/common/StatCard";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useAdaptivePolling } from "@/lib/useAdaptivePolling";
 import { useDebounce } from "@/hooks/useDebounce";
 import {
@@ -110,35 +111,34 @@ const IncidentRow = memo(({ incident, onClick }: { incident: Incident; onClick: 
             style={{ contentVisibility: "auto", containIntrinsicSize: "auto 86px" }}
             onClick={() => onClick(incident)}
         >
-            {/* Slide-in vertical accent line on hover */}
             <div className="absolute top-0 left-0 bottom-0 w-[1.5px] bg-primary scale-y-0 group-hover:scale-y-100 transition-transform duration-300 transition-spring origin-top" />
             <div className="flex items-start justify-between gap-4">
                 <div className="space-y-2 flex-1 min-w-0">
                     <div className="flex items-center gap-3 flex-wrap">
                         <span className="font-mono text-sm font-bold text-foreground">{incident.id}</span>
-                        <span className="font-mono text-xs px-2 py-0.5 bg-primary/10 text-primary border border-primary/30">
+                        <span className="font-mono text-[10px] px-2 py-0.5 bg-primary/10 text-primary border border-primary/30 rounded-sm font-bold tracking-tight">
                             {incident.type.replace(/_/g, " ")}
                         </span>
                         {isCollectionDone && (
-                            <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 border border-green-500/30 bg-green-500/10 text-green-400 rounded-sm">
+                            <span className="flex items-center gap-1 font-mono text-[9px] px-2 py-0.5 border border-green-500/30 bg-green-500/10 text-green-400 rounded-sm">
                                 <CheckCircle2 className="w-2.5 h-2.5" />
                                 ANALYSIS READY
                             </span>
                         )}
                         {isCollecting && (
-                            <span className="flex items-center gap-1 font-mono text-[10px] px-2 py-0.5 border border-primary/30 bg-primary/10 text-primary rounded-sm animate-pulse">
+                            <span className="flex items-center gap-1 font-mono text-[9px] px-2 py-0.5 border border-primary/30 bg-primary/10 text-primary rounded-sm animate-pulse">
                                 COLLECTING…
                             </span>
                         )}
                     </div>
-                    <div className="font-mono text-xs text-muted-foreground space-y-1">
-                        <div>TARGETS: {incident.targetEndpoints.slice(0, 4).join(", ")}{incident.targetEndpoints.length > 4 ? ` +${incident.targetEndpoints.length - 4}` : ""}</div>
-                        <div>OPERATOR: {incident.operator}</div>
+                    <div className="text-[11px] text-muted-foreground space-y-1">
+                        <div className="truncate">TARGETS: <span className="font-mono text-foreground/80">{incident.targetEndpoints.slice(0, 4).join(", ")}{incident.targetEndpoints.length > 4 ? ` +${incident.targetEndpoints.length - 4}` : ""}</span></div>
+                        <div>OPERATOR: <span className="font-mono text-foreground/80">{incident.operator}</span></div>
                     </div>
                 </div>
                 <div className="text-right space-y-2 shrink-0">
                     {getIndicator(incident.status)}
-                    <div className="font-mono text-xs text-muted-foreground">
+                    <div className="font-mono text-[10px] text-muted-foreground">
                         {new Date(incident.updatedAt).toLocaleString()}
                     </div>
                     <ArrowUpRight className="w-4 h-4 text-primary opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
@@ -148,6 +148,23 @@ const IncidentRow = memo(({ incident, onClick }: { incident: Incident; onClick: 
     );
 });
 IncidentRow.displayName = "IncidentRow";
+
+const DashboardSkeleton = () => (
+    <div className="space-y-6">
+        <div className="grid grid-cols-4 gap-4">
+            {[1, 2, 3, 4].map(i => <Skeleton key={i} className="h-28" />)}
+        </div>
+        <div className="grid grid-cols-12 gap-6">
+            <div className="col-span-8">
+                <Skeleton className="h-[600px]" />
+            </div>
+            <div className="col-span-4 space-y-6">
+                <Skeleton className="h-[300px]" />
+                <Skeleton className="h-[200px]" />
+            </div>
+        </div>
+    </div>
+);
 
 // ─── Main Page ─────────────────────────────────────────────────────────────
 
@@ -169,7 +186,7 @@ export default function Dashboard() {
       return p.toString();
   }, [debouncedSearch, incidentStatusFilter, currentPage, itemsPerPage]);
 
-  const { data: incidentData, error: incError } = useQuery({
+  const { data: incidentData, error: incError, isLoading: isIncLoading } = useQuery({
     queryKey: ["incidents", debouncedSearch, incidentStatusFilter, currentPage, itemsPerPage],
     queryFn: () => apiGet<{ total: number; items: IncidentResponse[] }>(`/incidents?${incidentParams}`),
     staleTime: 20_000,
@@ -179,7 +196,7 @@ export default function Dashboard() {
   const totalItems = incidentData?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
 
-  const { data: collectors = [], refetch: refetchCollectors } = useQuery<CollectorResponse[], Error, Collector[]>({
+  const { data: collectors = [], refetch: refetchCollectors, isLoading: isCollLoading } = useQuery<CollectorResponse[], Error, Collector[]>({
     queryKey: ["collectors"],
     queryFn: () => apiGet<CollectorResponse[]>("/collectors"),
     select: (data) => data.map(mapCollector),
@@ -248,6 +265,8 @@ export default function Dashboard() {
     navigate(`/incidents/${incident.id}`);
   }, [navigate]);
 
+  const isInitialLoading = (isIncLoading || isCollLoading) && !incidentData;
+
   return (
     <AppLayout
       title="COMMAND CENTER"
@@ -261,202 +280,228 @@ export default function Dashboard() {
       }
     >
       <div className="p-6 space-y-6">
-        {/* Alerts Section */}
-        {(!toolsConfigured || errorMessage) && (
-            <div className="space-y-2">
-                {!toolsConfigured && (
-                  <div className="border border-warning/40 bg-warning/5 p-3 font-mono text-xs text-warning flex items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
-                        <ShieldAlert className="w-4 h-4" />
-                        <span>
-                          CRITICAL: FORENSICS TOOLS NOT CONFIGURED — Analysis capabilities (Hayabusa/Chainsaw) are currently offline.
-                        </span>
-                    </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0 text-warning border border-warning/40 hover:bg-warning/10 h-7"
-                      onClick={() => navigate("/admin/settings")}
-                    >
-                      RESOLVE
-                    </Button>
-                  </div>
-                )}
-                {errorMessage && (
-                  <div className="border border-destructive/40 bg-destructive/5 p-3 font-mono text-xs text-destructive flex items-center gap-3">
-                    <AlertTriangle className="w-4 h-4" />
-                    <span>{errorMessage}</span>
-                  </div>
-                )}
-            </div>
-        )}
-
-        {/* Stats HUD */}
-        <div className="grid grid-cols-4 gap-4">
-          <StatCard
-            icon={<Activity className="w-5 h-5 text-primary" />}
-            value={activeIncidents}
-            valueClassName="text-primary"
-            label="Active Incidents (Page)"
-          />
-          <StatCard
-            icon={<HardDrive className="w-5 h-5 text-primary" />}
-            value={`${onlineCollectors}/${collectors.length}`}
-            valueClassName="text-primary"
-            label="Collectors Online"
-          />
-          <StatCard
-            icon={<Database className="w-5 h-5 text-primary" />}
-            value={String(totalEvidenceFiles)}
-            valueClassName="text-primary"
-            label="Evidence Items"
-          />
-          <StatCard
-            icon={<AlertTriangle className={cn("w-5 h-5", systemAlerts > 0 ? "text-warning" : "text-muted-foreground")} />}
-            value={String(systemAlerts)}
-            valueClassName={systemAlerts > 0 ? "text-warning" : "text-muted-foreground"}
-            label="System Alerts"
-          />
-        </div>
-
-        <div className="grid grid-cols-12 gap-6">
-          {/* Main Content - Incidents */}
-          <div className="col-span-8 space-y-6">
-            <TacticalPanel
-              title="ACTIVE INCIDENTS"
-              status="active"
-              headerActions={
-                <span className="font-mono text-xs text-primary">
-                  {totalItems} TOTAL INCIDENTS
-                </span>
-              }
-            >
-              <div className="flex items-center gap-2 mb-3">
-                <input
-                  className="flex-1 h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none focus:ring-1 focus:ring-primary"
-                  placeholder="Search incident ID or operator..."
-                  value={incidentSearch}
-                  onChange={e => {
-                    setIncidentSearch(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                />
-                <select
-                  className="h-8 px-2 bg-background border border-input rounded-sm font-mono text-xs focus:outline-none"
-                  value={incidentStatusFilter}
-                  onChange={e => {
-                    setIncidentStatusFilter(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                >
-                  <option value="">ALL STATUS</option>
-                  <option value="PENDING">PENDING</option>
-                  <option value="ACTIVE">ACTIVE</option>
-                  <option value="COLLECTION_IN_PROGRESS">COLLECTING</option>
-                  <option value="COLLECTION_COMPLETE">COMPLETE</option>
-                  <option value="COLLECTION_FAILED">FAILED</option>
-                  <option value="CLOSED">CLOSED</option>
-                </select>
-              </div>
-              <div className="space-y-3">
-                {incidents.length === 0 ? (
-                  <div className="px-4 py-6 text-center font-mono text-xs text-muted-foreground">
-                    No incidents available.
-                  </div>
-                ) : (
-                  incidents.map((incident) => (
-                      <IncidentRow 
-                        key={incident.id} 
-                        incident={incident} 
-                        onClick={handleIncidentClick} 
-                      />
-                  ))
-                )}
-              </div>
-              <TablePagination
-                currentPage={currentPage}
-                totalPages={totalPages}
-                totalItems={totalItems}
-                itemsPerPage={itemsPerPage}
-                onPageChange={setCurrentPage}
-                onItemsPerPageChange={(val) => {
-                  setItemsPerPage(val);
-                  setCurrentPage(1);
-                }}
-              />
-            </TacticalPanel>
-          </div>
-
-          {/* Sidebar - System Status */}
-          <div className="col-span-4 space-y-6">
-            {/* Collectors Status */}
-            <TacticalPanel
-              title="COLLECTOR STATUS"
-              status={onlineCollectors === collectors.length ? "online" : "warning"}
-            >
-              <div className="space-y-3">
-                {collectors.slice(0, 10).map((collector) => (
-                  <div
-                    key={collector.id}
-                    className="flex items-center justify-between py-2 border-b border-border last:border-0"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <HardDrive className="w-4 h-4 text-muted-foreground shrink-0" />
-                      <span className="font-mono text-sm truncate">{collector.name}</span>
-                    </div>
-                    <StatusIndicator 
-                        status={collector.status === "ONLINE" ? "online" : collector.status === "BUSY" ? "pending" : "offline"} 
-                        size="sm" 
-                    />
-                  </div>
-                ))}
-                {collectors.length > 10 && (
-                    <div className="text-center pt-2">
-                        <Button variant="link" size="sm" onClick={() => navigate("/collectors")} className="text-[10px] h-auto p-0">
-                            VIEW ALL {collectors.length} COLLECTORS →
+        {isInitialLoading ? (
+            <DashboardSkeleton />
+        ) : (
+          <>
+            {/* Alerts Section */}
+            {(!toolsConfigured || errorMessage) && (
+                <div className="space-y-2">
+                    {!toolsConfigured && (
+                      <div className="border border-warning/40 bg-warning/5 p-3 text-xs text-warning flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-3">
+                            <ShieldAlert className="w-4 h-4" />
+                            <span className="font-medium">
+                              CRITICAL: FORENSICS TOOLS NOT CONFIGURED — Analysis capabilities (Hayabusa/Chainsaw) are currently offline.
+                            </span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 text-warning border border-warning/40 hover:bg-warning/10 h-7 text-[10px]"
+                          onClick={() => navigate("/admin/settings")}
+                        >
+                          RESOLVE
                         </Button>
-                    </div>
-                )}
-              </div>
-            </TacticalPanel>
+                      </div>
+                    )}
+                    {errorMessage && (
+                      <div className="border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive flex items-center gap-3">
+                        <AlertTriangle className="w-4 h-4" />
+                        <span className="font-medium">{errorMessage}</span>
+                      </div>
+                    )}
+                </div>
+            )}
 
-            {/* System Alerts */}
-            <TacticalPanel title="SYSTEM ALERTS" status={systemAlerts > 0 ? "warning" : "online"}>
-              <div className="space-y-3">
-                {systemAlerts === 0 ? (
-                  <div className="p-3 text-center font-mono text-xs text-muted-foreground">
-                    No active alerts.
+            {/* Stats HUD */}
+            <div className="grid grid-cols-4 gap-4">
+              <StatCard
+                icon={<Activity className="w-5 h-5 text-primary" />}
+                value={activeIncidents}
+                valueClassName="text-primary"
+                label="Active Incidents (Page)"
+                onClick={() => setIncidentStatusFilter("ACTIVE")}
+              />
+              <StatCard
+                icon={<HardDrive className="w-5 h-5 text-primary" />}
+                value={`${onlineCollectors}/${collectors.length}`}
+                valueClassName="text-primary"
+                label="Collectors Online"
+                onClick={() => navigate("/collectors")}
+              />
+              <StatCard
+                icon={<Database className="w-5 h-5 text-primary" />}
+                value={String(totalEvidenceFiles)}
+                valueClassName="text-primary"
+                label="Evidence Items"
+                onClick={() => navigate("/evidence")}
+              />
+              <StatCard
+                icon={<AlertTriangle className={cn("w-5 h-5", systemAlerts > 0 ? "text-warning" : "text-muted-foreground")} />}
+                value={String(systemAlerts)}
+                valueClassName={systemAlerts > 0 ? "text-warning" : "text-muted-foreground"}
+                label="System Alerts"
+              />
+            </div>
+
+            <div className="grid grid-cols-12 gap-6">
+              {/* Main Content - Incidents */}
+              <div className="col-span-8 space-y-6">
+                <TacticalPanel
+                  title="ACTIVE INCIDENTS"
+                  status="active"
+                  headerActions={
+                    <div className="flex items-center gap-4">
+                      {incidentStatusFilter && (
+                        <Button 
+                          variant="ghost" 
+                          size="sm" 
+                          onClick={() => setIncidentStatusFilter("")}
+                          className="h-6 px-2 text-[10px] text-primary border border-primary/20 hover:bg-primary/10"
+                        >
+                          CLEAR FILTER
+                        </Button>
+                      )}
+                      <span className="font-mono text-[10px] text-primary font-bold">
+                        {totalItems} TOTAL
+                      </span>
+                    </div>
+                  }
+                >
+                  <div className="flex items-center gap-2 mb-3">
+                    <input
+                      className="flex-1 h-8 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary transition-all"
+                      placeholder="Search incident ID or operator..."
+                      value={incidentSearch}
+                      onChange={e => {
+                        setIncidentSearch(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                    />
+                    <select
+                      className="h-8 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none cursor-pointer"
+                      value={incidentStatusFilter}
+                      onChange={e => {
+                        setIncidentStatusFilter(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                    >
+                      <option value="">ALL STATUS</option>
+                      <option value="PENDING">PENDING</option>
+                      <option value="ACTIVE">ACTIVE</option>
+                      <option value="COLLECTION_IN_PROGRESS">COLLECTING</option>
+                      <option value="COLLECTION_COMPLETE">COMPLETE</option>
+                      <option value="COLLECTION_FAILED">FAILED</option>
+                      <option value="CLOSED">CLOSED</option>
+                    </select>
                   </div>
-                ) : (
-                  <>
-                    {hasStorageWarning && (
-                      <div className="flex items-start gap-3 p-3 bg-warning/5 border border-warning/20">
-                        <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
-                        <div className="font-mono text-xs space-y-1">
-                          <div className="text-warning font-bold">STORAGE WARNING</div>
-                          <div className="text-muted-foreground">
-                            Evidence vault at {formattedStoragePercent} capacity
-                          </div>
-                        </div>
+                  <div className="space-y-3">
+                    {incidents.length === 0 ? (
+                      <div className="px-4 py-12 text-center text-xs text-muted-foreground border border-dashed border-border/40">
+                        No incidents matching the current criteria.
                       </div>
+                    ) : (
+                      incidents.map((incident) => (
+                          <IncidentRow 
+                            key={incident.id} 
+                            incident={incident} 
+                            onClick={handleIncidentClick} 
+                          />
+                      ))
                     )}
-                    {offlineCollector && (
-                      <div className="flex items-start gap-3 p-3 bg-destructive/5 border border-destructive/20">
-                        <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
-                        <div className="font-mono text-xs space-y-1">
-                          <div className="text-destructive font-bold">COLLECTOR OFFLINE</div>
-                          <div className="text-muted-foreground">
-                            {offlineCollector.name} last seen {offlineCollectorLastSeen}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </>
-                )}
+                  </div>
+                  <TablePagination
+                    currentPage={currentPage}
+                    totalPages={totalPages}
+                    totalItems={totalItems}
+                    itemsPerPage={itemsPerPage}
+                    onPageChange={setCurrentPage}
+                    onItemsPerPageChange={(val) => {
+                      setItemsPerPage(val);
+                      setCurrentPage(1);
+                    }}
+                  />
+                </TacticalPanel>
               </div>
-            </TacticalPanel>
-          </div>
-        </div>
+
+              {/* Sidebar - System Status */}
+              <div className="col-span-4 space-y-6">
+                {/* Collectors Status */}
+                <TacticalPanel
+                  title="COLLECTOR STATUS"
+                  status={onlineCollectors === collectors.length ? "online" : "warning"}
+                >
+                  <div className="space-y-3">
+                    {collectors.slice(0, 10).map((collector) => (
+                      <div
+                        key={collector.id}
+                        className="flex items-center justify-between py-2 border-b border-border/40 last:border-0"
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <HardDrive className="w-4 h-4 text-muted-foreground shrink-0" />
+                          <span className="text-xs font-medium truncate">{collector.name}</span>
+                        </div>
+                        <StatusIndicator 
+                            status={collector.status === "ONLINE" ? "online" : collector.status === "BUSY" ? "pending" : "offline"} 
+                            size="sm" 
+                        />
+                      </div>
+                    ))}
+                    {collectors.length > 10 && (
+                        <div className="text-center pt-2">
+                            <Button variant="link" size="sm" onClick={() => navigate("/collectors")} className="text-[10px] h-auto p-0 text-primary/80 hover:text-primary">
+                                VIEW ALL {collectors.length} COLLECTORS →
+                            </Button>
+                        </div>
+                    )}
+                    {collectors.length === 0 && (
+                      <div className="py-4 text-center text-[10px] text-muted-foreground">
+                        No collectors registered.
+                      </div>
+                    )}
+                  </div>
+                </TacticalPanel>
+
+                {/* System Alerts */}
+                <TacticalPanel title="SYSTEM ALERTS" status={systemAlerts > 0 ? "warning" : "online"}>
+                  <div className="space-y-3">
+                    {systemAlerts === 0 ? (
+                      <div className="p-3 text-center text-[10px] text-muted-foreground bg-secondary/10 border border-dashed border-border/40">
+                        SYSTEM INTEGRITY NOMINAL
+                      </div>
+                    ) : (
+                      <>
+                        {hasStorageWarning && (
+                          <div className="flex items-start gap-3 p-3 bg-warning/5 border border-warning/20">
+                            <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+                            <div className="text-[11px] space-y-1">
+                              <div className="text-warning font-bold">STORAGE WARNING</div>
+                              <div className="text-muted-foreground leading-tight">
+                                Evidence vault is reaching capacity ({formattedStoragePercent}). Consider offloading evidence.
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        {offlineCollector && (
+                          <div className="flex items-start gap-3 p-3 bg-destructive/5 border border-destructive/20">
+                            <AlertTriangle className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                            <div className="text-[11px] space-y-1">
+                              <div className="text-destructive font-bold">COLLECTOR OFFLINE</div>
+                              <div className="text-muted-foreground leading-tight">
+                                {offlineCollector.name} has missed heartbeats since {offlineCollectorLastSeen}.
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </TacticalPanel>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </AppLayout>
   );

@@ -3,8 +3,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
-import { Plus, Trash2, ToggleLeft, ToggleRight } from "lucide-react";
-import { apiGet, apiPost, apiDelete } from "@/lib/api";
+import { Plus, Trash2, ToggleLeft, ToggleRight, Edit2, Check, X } from "lucide-react";
+import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
 import { useToast } from "@/components/ui/use-toast";
 
@@ -42,6 +42,15 @@ export default function CustomModules() {
     enabled: true,
   });
 
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: "",
+    description: "",
+    command: "",
+    output_relpath: "",
+    category: "artifacts",
+  });
+
   const { data: modules = [], isLoading } = useQuery<CustomModule[]>({
     queryKey: ["custom-modules"],
     queryFn: () => apiGet<CustomModule[]>("/platform/custom-modules"),
@@ -70,6 +79,23 @@ export default function CustomModules() {
       resetForm();
     },
     onError: () => toast({ title: "Failed to create module", variant: "destructive" }),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (id: string) =>
+      apiPatch(`/platform/custom-modules/${id}`, {
+        name: editForm.name,
+        description: editForm.description || null,
+        command: editForm.command,
+        output_relpath: editForm.output_relpath,
+        category: editForm.category,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["custom-modules"] });
+      toast({ title: "Module updated" });
+      setEditingId(null);
+    },
+    onError: () => toast({ title: "Failed to update module", variant: "destructive" }),
   });
 
   const deleteMutation = useMutation({
@@ -199,6 +225,24 @@ export default function CustomModules() {
                       ) : (
                         <ToggleLeft className="w-4 h-4 text-muted-foreground" />
                       )}
+                      {canEdit && editingId !== m.id && (
+                        <button
+                          className="text-muted-foreground hover:text-foreground p-1"
+                          title="Edit module"
+                          onClick={() => {
+                            setEditingId(m.id);
+                            setEditForm({
+                              name: m.name,
+                              description: m.description ?? "",
+                              command: m.command,
+                              output_relpath: m.output_relpath,
+                              category: m.category,
+                            });
+                          }}
+                        >
+                          <Edit2 className="w-3 h-3" />
+                        </button>
+                      )}
                       {isAdmin && (
                         <button
                           className="text-muted-foreground hover:text-destructive p-1"
@@ -209,11 +253,83 @@ export default function CustomModules() {
                       )}
                     </div>
                   </div>
-                  {m.description && <div className="text-muted-foreground">{m.description}</div>}
-                  <pre className="bg-secondary/30 px-2 py-1 rounded-sm text-muted-foreground overflow-x-auto whitespace-pre-wrap break-all text-xs">
-                    {m.command}
-                  </pre>
-                  <div className="text-muted-foreground text-xs">→ {m.output_relpath}</div>
+
+                  {editingId === m.id ? (
+                    <div className="space-y-2 pt-1 border-t border-border/40 mt-1">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] text-muted-foreground uppercase">Name</label>
+                          <input
+                            className="mt-0.5 w-full h-7 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                            value={editForm.name}
+                            onChange={e => setEditForm(f => ({ ...f, name: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-muted-foreground uppercase">Category</label>
+                          <select
+                            className="mt-0.5 w-full h-7 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none"
+                            value={editForm.category}
+                            onChange={e => setEditForm(f => ({ ...f, category: e.target.value }))}
+                          >
+                            {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-muted-foreground uppercase">Command</label>
+                        <textarea
+                          className="mt-0.5 w-full px-2 py-1 bg-background border border-input rounded-sm text-xs font-mono resize-none focus:outline-none focus:ring-1 focus:ring-primary"
+                          rows={2}
+                          value={editForm.command}
+                          onChange={e => setEditForm(f => ({ ...f, command: e.target.value }))}
+                        />
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[10px] text-muted-foreground uppercase">Output Path</label>
+                          <input
+                            className="mt-0.5 w-full h-7 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                            value={editForm.output_relpath}
+                            onChange={e => setEditForm(f => ({ ...f, output_relpath: e.target.value }))}
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-muted-foreground uppercase">Description</label>
+                          <input
+                            className="mt-0.5 w-full h-7 px-2 bg-background border border-input rounded-sm text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                            value={editForm.description}
+                            onChange={e => setEditForm(f => ({ ...f, description: e.target.value }))}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="flex items-center gap-1 px-2 py-1 bg-primary/10 border border-primary/40 rounded-sm text-primary text-xs hover:bg-primary/20 disabled:opacity-50"
+                          disabled={!editForm.name || !editForm.command || updateMutation.isPending}
+                          onClick={() => updateMutation.mutate(m.id)}
+                        >
+                          <Check className="w-3 h-3" />
+                          SAVE
+                        </button>
+                        <button
+                          className="flex items-center gap-1 px-2 py-1 border border-border rounded-sm text-muted-foreground text-xs hover:text-foreground"
+                          onClick={() => setEditingId(null)}
+                        >
+                          <X className="w-3 h-3" />
+                          CANCEL
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      {m.description && <div className="text-muted-foreground">{m.description}</div>}
+                      <pre className="bg-secondary/30 px-2 py-1 rounded-sm text-muted-foreground overflow-x-auto whitespace-pre-wrap break-all text-xs">
+                        {m.command}
+                      </pre>
+                      <div className="text-muted-foreground text-xs">→ {m.output_relpath}</div>
+                    </>
+                  )}
                 </div>
               ))}
             </div>
