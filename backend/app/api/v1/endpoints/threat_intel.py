@@ -31,6 +31,23 @@ router = APIRouter()
 _HASH_RE = re.compile(r"^[0-9a-fA-F]{32,64}$")
 _IP_RE = re.compile(r"^(\d{1,3}\.){3}\d{1,3}$")
 _DOMAIN_RE = re.compile(r"^[a-zA-Z0-9._\-]{3,253}$")
+# URLs are base64-encoded before being placed in the VT path, so only length is bounded.
+_URL_MAX_LEN = 2048
+
+_IOC_VALIDATORS = {"hash": _HASH_RE, "ip": _IP_RE, "domain": _DOMAIN_RE}
+
+
+def _validate_ioc(ioc_type: str, ioc_value: str) -> None:
+    """Reject malformed IOC values before they reach outbound API URLs."""
+    if ioc_type == "url":
+        if not (1 <= len(ioc_value) <= _URL_MAX_LEN) or any(c in ioc_value for c in "\r\n\x00"):
+            raise HTTPException(status_code=422, detail="Invalid URL IOC value")
+        return
+    pattern = _IOC_VALIDATORS.get(ioc_type)
+    if pattern is None:
+        raise HTTPException(status_code=422, detail=f"Unsupported ioc_type: {ioc_type}")
+    if not pattern.match(ioc_value):
+        raise HTTPException(status_code=422, detail=f"Invalid {ioc_type} IOC value format")
 
 
 class EnrichRequest(BaseModel):
@@ -57,6 +74,7 @@ async def enrich_ioc(
     _: User = Depends(get_current_user),
 ) -> list[EnrichResult]:
     """Enrich a single IOC against all configured threat intel services."""
+    _validate_ioc(payload.ioc_type, payload.ioc_value)
     services = payload.services or ["virustotal", "misp"]
     results: list[EnrichResult] = []
     for svc in services:
@@ -174,7 +192,8 @@ async def _misp_enrich(ioc_type: str, ioc_value: str) -> EnrichResult:
         import httpx
         headers = {"Authorization": misp_key, "Accept": "application/json", "Content-Type": "application/json"}
         body = {"value": ioc_value, "type": type_map[ioc_type], "limit": 10, "returnFormat": "json"}
-        async with httpx.AsyncClient(timeout=15.0, verify=False) as client:
+        verify_tls = os.getenv("MISP_VERIFY_TLS", "true").lower() not in ("false", "0", "no")
+        async with httpx.AsyncClient(timeout=15.0, verify=verify_tls) as client:
             resp = await client.post(f"{misp_url.rstrip('/')}/attributes/restSearch", json=body, headers=headers)
         if resp.status_code != 200:
             return EnrichResult(ioc_type=ioc_type, ioc_value=ioc_value, service="misp",

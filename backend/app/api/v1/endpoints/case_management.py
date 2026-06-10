@@ -81,7 +81,8 @@ async def export_to_thehive(
     try:
         import httpx
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-        async with httpx.AsyncClient(timeout=20.0, verify=False) as client:
+        verify_tls = os.getenv("THEHIVE_VERIFY_TLS", "true").lower() not in ("false", "0", "no")
+        async with httpx.AsyncClient(timeout=20.0, verify=verify_tls) as client:
             resp = await client.post(f"{url.rstrip('/')}/api/v1/case", json=body, headers=headers)
         if resp.status_code not in (200, 201):
             return ExportResult(service="thehive", success=False, error=f"HTTP {resp.status_code}: {resp.text[:150]}")

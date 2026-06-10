@@ -15,7 +15,7 @@ class SuperTimeline(Base):
     __table_args__ = (Index("ix_super_timelines_incident_id", "incident_id"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    incident_id: Mapped[str] = mapped_column(String, ForeignKey("incidents.id"), index=True)
+    incident_id: Mapped[str] = mapped_column(String, ForeignKey("incidents.id"))
     status: Mapped[str] = mapped_column(String, default="PENDING")  # PENDING|BUILDING|DONE|FAILED
     host_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     event_count: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
@@ -35,7 +35,7 @@ class LateralMovement(Base):
     __table_args__ = (Index("ix_lateral_movements_incident_id", "incident_id"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    incident_id: Mapped[str] = mapped_column(String, ForeignKey("incidents.id"), index=True)
+    incident_id: Mapped[str] = mapped_column(String, ForeignKey("incidents.id"))
     super_timeline_id: Mapped[str] = mapped_column(
         String, ForeignKey("super_timelines.id"), index=True
     )

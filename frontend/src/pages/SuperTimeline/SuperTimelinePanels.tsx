@@ -242,15 +242,21 @@ interface ComparePanelProps {
     knownHosts: string[];
     onClose: () => void;
     onFilterSearch: (q: string) => void;
+    isSidebarCollapsed?: boolean;
 }
 
 export function ComparePanel({
-    events, knownHosts, onClose, onFilterSearch
+    events, knownHosts, onClose, onFilterSearch, isSidebarCollapsed = false
 }: ComparePanelProps) {
     const allKeys = Array.from(new Set(events.flatMap(e => Object.keys(e)))).sort();
 
     return (
-        <div className="fixed inset-x-10 bottom-0 top-20 bg-card border border-border shadow-2xl z-50 flex flex-col font-mono animate-in slide-in-from-bottom duration-300 rounded-t-lg">
+        <div 
+            className={cn(
+                "fixed bottom-0 top-20 right-6 bg-card border border-border shadow-2xl z-50 flex flex-col font-mono animate-in slide-in-from-bottom duration-300 rounded-t-lg transition-all",
+                isSidebarCollapsed ? "left-[80px]" : "left-[272px]"
+            )}
+        >
             <div className="flex items-center justify-between p-4 border-b border-border bg-secondary/40 rounded-t-lg">
                 <div className="flex items-center gap-3">
                     <LayoutGrid className="w-5 h-5 text-primary" />

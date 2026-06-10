@@ -66,10 +66,25 @@ export default function SuperTimeline() {
 
     const [selectedEvent, setSelectedEvent] = useState<Record<string, unknown> | null>(null);
     const [compareEvents, setCompareEvents] = useState<Record<string, unknown>[] | null>(null);
+    const [hideLmGraph, setHideLmGraph] = useState(false);
     const [focusedRowIndex, setFocusedRowIndex] = useState(-1);
     const [showBookmarks, setShowBookmarks] = useState(false);
     const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
     const [eventTags, setEventTags] = useState<Record<string, EventTagValue | null>>({});
+
+    // Read sidebar state from dynamic DOM measurement to ensure comparison panel doesn't overlap
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+    useEffect(() => {
+        const checkSidebar = () => {
+            const sidebar = document.querySelector('aside');
+            if (sidebar) {
+                setIsSidebarCollapsed(sidebar.offsetWidth < 100);
+            }
+        };
+        const interval = setInterval(checkSidebar, 500);
+        checkSidebar();
+        return () => clearInterval(interval);
+    }, []);
 
     const [isBuilding, setIsBuilding] = useState(false);
     const [buildError, setBuildError] = useState<string | null>(null);
@@ -413,28 +428,46 @@ export default function SuperTimeline() {
                                     </button>
                                 </div>
 
-                                <SuperTimelineToolbar 
-                                    visibleCols={visibleCols}
-                                    toggleCol={(k) => {
-                                        const next = new Set(visibleCols);
-                                        if (next.has(k)) next.delete(k); else next.add(k);
-                                        setVisibleCols(next);
-                                        localStorage.setItem(COL_STORAGE_KEY, JSON.stringify(Array.from(next)));
-                                    }}
-                                    showBookmarks={showBookmarks}
-                                    setShowBookmarks={setShowBookmarks}
-                                    bookmarkCount={bookmarks.length}
-                                    onExport={handleExport}
-                                    isExporting={isExporting}
-                                    activeFilterCount={activeFilterCount}
-                                    totalEvents={timelineData?.total ?? 0}
-                                />
+                                <div className="flex items-center gap-2">
+                                    <SuperTimelineToolbar 
+                                        visibleCols={visibleCols}
+                                        toggleCol={(k) => {
+                                            const next = new Set(visibleCols);
+                                            if (next.has(k)) next.delete(k); else next.add(k);
+                                            setVisibleCols(next);
+                                            localStorage.setItem(COL_STORAGE_KEY, JSON.stringify(Array.from(next)));
+                                        }}
+                                        showBookmarks={showBookmarks}
+                                        setShowBookmarks={setShowBookmarks}
+                                        bookmarkCount={bookmarks.length}
+                                        onExport={handleExport}
+                                        isExporting={isExporting}
+                                        activeFilterCount={activeFilterCount}
+                                        totalEvents={timelineData?.total ?? 0}
+                                    />
+                                    {lmDetections.length > 0 && (
+                                        <div className="flex items-center gap-2 border-l border-border/40 pl-3 ml-2">
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => setHideLmGraph(!hideLmGraph)}
+                                                className={cn(
+                                                    "h-7 gap-1.5 font-mono text-[9px] font-bold uppercase transition-all",
+                                                    hideLmGraph ? "text-muted-foreground hover:text-foreground" : "text-red-400 bg-red-500/5 hover:bg-red-500/10"
+                                                )}
+                                            >
+                                                <Network className="w-3 h-3" />
+                                                {hideLmGraph ? "SHOW GRAPH" : "HIDE GRAPH"}
+                                            </Button>
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
 
                         {/* ─── Lateral Movement Map (auto-shown when detections exist) ─── */}
-                        {lmDetections.length > 0 && (
-                            <div className="shrink-0 px-6 py-4 border-b border-border/40 bg-background/20">
+                        {lmDetections.length > 0 && !hideLmGraph && (
+                            <div className="shrink-0 px-6 py-4 border-b border-border/40 bg-background/20 animate-in slide-in-from-top duration-300">
                                 <LateralMovementMap
                                     detections={lmDetections}
                                     onFilterHost={(host) => {
@@ -543,6 +576,7 @@ export default function SuperTimeline() {
                     knownHosts={timelineData?.hosts ?? []}
                     onClose={() => setCompareEvents(null)}
                     onFilterSearch={(q) => { setSearchInput(q); setPage(1); }}
+                    isSidebarCollapsed={isSidebarCollapsed}
                 />
             )}
         </AppLayout>

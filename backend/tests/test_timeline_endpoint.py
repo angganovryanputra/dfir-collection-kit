@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models.evidence import EvidenceItem
+from app.models.incident import Incident
 from app.models.processing import ProcessingJob
 from app.models.user import User
 from app.core.security import get_password_hash
@@ -26,6 +27,16 @@ def _build_user(username: str = "ADMIN", role: str = "admin") -> User:
         last_login="-",
         created_at=datetime.now(timezone.utc).isoformat(),
         password_hash=get_password_hash("secret"),
+    )
+
+
+def _build_incident(incident_id: str) -> Incident:
+    return Incident(
+        id=incident_id,
+        type="MALWARE",
+        status="OPEN",
+        target_endpoints=["host-01"],
+        operator="ADMIN",
     )
 
 
@@ -76,6 +87,10 @@ class TestTimelineEndpoint:
     async def test_400_when_not_timeline_type(self, client, db_session):
         user = _build_user()
         db_session.add(user)
+        db_session.add(_build_incident("INC-001"))
+        # Commit the parent incident first — without relationship() mappings the
+        # unit of work does not order inserts by FK dependency.
+        await db_session.commit()
         item = _build_evidence_item("INC-001", name="test.evtx", etype="RAW")
         db_session.add(item)
         await db_session.commit()
@@ -109,8 +124,22 @@ class TestProcessingStatus:
 
     async def test_returns_job_status_when_job_exists(self, client, db_session):
         """Returns job details when a processing job record exists."""
+        from app.models.job import Job
+
         user = _build_user()
         db_session.add(user)
+        db_session.add(_build_incident("INC-004"))
+        await db_session.commit()
+        db_session.add(
+            Job(
+                id="JOB-INC-004",
+                incident_id="INC-004",
+                status="DONE",
+                modules=[],
+                output_path="/tmp/out",
+            )
+        )
+        await db_session.commit()
         job = ProcessingJob(
             id="proc-JOB-INC-004",
             incident_id="INC-004",

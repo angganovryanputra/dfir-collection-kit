@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -28,6 +29,23 @@ from app.services.system_settings_service import get_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Incident IDs become filesystem path components — must never contain separators.
+_SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
+
+_AI_DISCLAIMER = (
+    "AI-generated content — may contain errors or omissions. "
+    "Requires analyst validation against the underlying evidence before use."
+)
+
+
+def _validate_incident_id(incident_id: str) -> str:
+    if not _SAFE_ID_RE.match(incident_id):
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid incident_id: must be 1-128 alphanumeric/hyphen/underscore characters",
+        )
+    return incident_id
 
 # Provider → default API URL (all providers expose OpenAI-compatible /chat/completions)
 _PROVIDER_DEFAULTS: dict[str, str] = {
@@ -274,13 +292,14 @@ async def annotate_events(
 @router.post("/summary/{incident_id}")
 async def generate_summary(
     incident_id: str,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Generate an executive summary of the incident's super timeline using an LLM."""
     import pathlib
     from app.core.config import settings as app_settings
 
+    _validate_incident_id(incident_id)
     db_path = pathlib.Path(app_settings.EVIDENCE_STORAGE_PATH) / incident_id / "timeline" / "super_timeline.duckdb"
     sample: list[dict] = []
 
@@ -312,7 +331,27 @@ async def generate_summary(
 
     _, _, model = await _llm_cfg(db)
     summary = await _chat(system, user, max_tokens=1200, db=db)
-    return {"incident_id": incident_id, "summary": summary, "sample_events": len(sample), "model": model}
+
+    from app.services.audit_log_service import safe_record_event
+    await safe_record_event(
+        db,
+        event_type="ai.summary.generated",
+        actor_type="user",
+        actor_id=current_user.username,
+        source="api",
+        action="generate_summary",
+        target_type="incident",
+        target_id=incident_id,
+        status="success",
+        message=f"AI executive summary generated (model={model}, sample_events={len(sample)})",
+    )
+    return {
+        "incident_id": incident_id,
+        "summary": summary,
+        "sample_events": len(sample),
+        "model": model,
+        "disclaimer": _AI_DISCLAIMER,
+    }
 
 
 # ── Natural Language Query ────────────────────────────────────────────────────
@@ -333,24 +372,27 @@ async def nl_query(
     import pathlib
     from app.core.config import settings as app_settings
 
+    _validate_incident_id(payload.incident_id)
     db_path = pathlib.Path(app_settings.EVIDENCE_STORAGE_PATH) / payload.incident_id / "timeline" / "super_timeline.duckdb"
     context: list[dict] = []
 
     if db_path.exists():
         def _get(p: pathlib.Path, q: str, limit: int) -> list[dict]:
             import duckdb
-            safe_q = q.replace("'", "''")[:80]
+            limit = max(1, min(int(limit), 100))
             con = duckdb.connect(str(p), read_only=True)
             try:
                 rows = con.execute(
-                    f"SELECT datetime, source, host, message FROM events "
-                    f"WHERE CAST(message AS VARCHAR) ILIKE '%{safe_q}%' "
-                    f"ORDER BY datetime NULLS LAST LIMIT {limit}"
+                    "SELECT datetime, source, host, message FROM events "
+                    "WHERE CAST(message AS VARCHAR) ILIKE '%' || ? || '%' "
+                    "ORDER BY datetime NULLS LAST LIMIT ?",
+                    [q[:80], limit],
                 ).fetchall()
                 if not rows:
                     rows = con.execute(
-                        f"SELECT datetime, source, host, message FROM events "
-                        f"ORDER BY datetime NULLS LAST LIMIT {limit}"
+                        "SELECT datetime, source, host, message FROM events "
+                        "ORDER BY datetime NULLS LAST LIMIT ?",
+                        [limit],
                     ).fetchall()
                 return [{"dt": str(r[0]), "src": r[1], "host": r[2], "msg": str(r[3])[:300]} for r in rows]
             finally:
@@ -378,4 +420,5 @@ async def nl_query(
         "answer": answer,
         "context_events": len(context),
         "model": model,
+        "disclaimer": _AI_DISCLAIMER,
     }

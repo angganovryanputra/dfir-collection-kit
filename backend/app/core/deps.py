@@ -80,6 +80,9 @@ def require_roles(*roles: str):
                 message="Insufficient permissions",
                 metadata={"required_roles": roles, "user_role": user.role},
             )
+            # Commit before raising — get_db rolls back on exception, which would
+            # otherwise silently discard the permission-denied audit record.
+            await db.commit()
             raise HTTPException(status_code=403, detail="Insufficient permissions")
         return user
 

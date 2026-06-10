@@ -26,10 +26,13 @@ import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user
+from app.api.v1.endpoints.agents import verify_agent_secret
+from app.core.deps import get_current_user, get_db
 from app.models.user import User
+from app.services.audit_log_service import safe_record_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -71,6 +74,7 @@ async def analyst_ws(
         return
 
     await websocket.accept()
+    analyst_name = str(payload.get("sub", "unknown"))
     logger.info("Analyst WS connected for agent %s", agent_id)
 
     try:
@@ -104,6 +108,24 @@ async def analyst_ws(
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 })
                 _ws_queues[command_id] = result_queue
+
+            try:
+                from app.db.session import AsyncSessionLocal
+                async with AsyncSessionLocal() as audit_db:
+                    await safe_record_event(
+                        audit_db,
+                        event_type="agent.command.submitted",
+                        actor_type="user",
+                        actor_id=analyst_name,
+                        source="websocket",
+                        action="run_command",
+                        target_type="agent",
+                        target_id=agent_id,
+                        status="queued",
+                        message=cmd[:500],
+                    )
+            except Exception as exc:
+                logger.warning("Audit log for WS command failed: %s", exc)
 
             await websocket.send_text(json.dumps({
                 "type": "queued",
@@ -145,8 +167,12 @@ async def analyst_ws(
 # ── Agent poll endpoint ────────────────────────────────────────────────────────
 
 @router.get("/poll/{agent_id}")
-async def poll_for_command(agent_id: str) -> dict:
+async def poll_for_command(
+    agent_id: str,
+    agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
+) -> dict:
     """Agent calls this endpoint periodically to check for pending commands."""
+    verify_agent_secret(agent_token)
     async with _pending_lock:
         queue = _pending.get(agent_id, [])
         if not queue:
@@ -160,8 +186,13 @@ async def poll_for_command(agent_id: str) -> dict:
 
 
 @router.post("/result/{command_id}")
-async def post_command_result(command_id: str, payload: dict) -> dict:
+async def post_command_result(
+    command_id: str,
+    payload: dict,
+    agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
+) -> dict:
     """Agent posts execution output back to the waiting analyst WebSocket."""
+    verify_agent_secret(agent_token)
     result_queue = _ws_queues.get(command_id)
     if result_queue is None:
         return {"status": "no_subscriber"}
@@ -181,6 +212,7 @@ async def run_command_sync(
     agent_id: str,
     payload: dict,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Submit a command synchronously — blocks until the agent replies or times out."""
     if current_user.role not in ("admin", "operator"):
@@ -190,6 +222,19 @@ async def run_command_sync(
     timeout_sec = min(int(payload.get("timeout_sec", 30)), _MAX_TIMEOUT_SEC)
     if not cmd:
         raise HTTPException(status_code=422, detail="cmd is required")
+
+    await safe_record_event(
+        db,
+        event_type="agent.command.submitted",
+        actor_type="user",
+        actor_id=current_user.username,
+        source="api",
+        action="run_command",
+        target_type="agent",
+        target_id=agent_id,
+        status="queued",
+        message=cmd[:500],
+    )
 
     command_id = f"CMD-{uuid4().hex[:12].upper()}"
     result_queue: asyncio.Queue = asyncio.Queue()

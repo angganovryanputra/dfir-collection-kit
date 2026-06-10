@@ -86,6 +86,9 @@ async def login(
                 message="Login blocked",
             metadata={"reason": "max_failed_logins", "client_ip": client_ip},
             )
+            # Commit before raising — get_db rolls back on exception, which would
+            # otherwise silently discard the failure audit record.
+            await db.commit()
             raise HTTPException(
                 status_code=403,
                 detail={"message": "Login failed. Please check your credentials.", "client_ip": client_ip},
@@ -104,6 +107,7 @@ async def login(
             message="Login failed",
             metadata={"reason": "invalid_credentials", "client_ip": client_ip},
         )
+        await db.commit()
         raise HTTPException(
             status_code=401,
             detail={"message": "Login failed. Please check your credentials.", "client_ip": client_ip},
@@ -122,6 +126,7 @@ async def login(
             message="Login blocked",
             metadata={"reason": "user_inactive", "client_ip": client_ip},
         )
+        await db.commit()
         raise HTTPException(
             status_code=403,
             detail={"message": "Login failed. Please check your credentials.", "client_ip": client_ip},
@@ -144,6 +149,7 @@ async def login(
                 "client_ip": client_ip,
             },
         )
+        await db.commit()
         raise HTTPException(
             status_code=403,
             detail={"message": "Role selection does not match account role.", "client_ip": client_ip},
