@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useMemo } from "react";
 
 export type EvidenceItem = {
     id: string;
@@ -39,25 +39,32 @@ export function EvidenceProvider({ children }: { children: ReactNode }) {
         localStorage.setItem("dfir_pinned_evidence", JSON.stringify(pinnedItems));
     }, [pinnedItems]);
 
-    const pinItem = (item: Omit<EvidenceItem, "pinnedAt">) => {
+    const pinItem = useCallback((item: Omit<EvidenceItem, "pinnedAt">) => {
         setPinnedItems((prev) => {
             if (prev.some((i) => i.id === item.id)) return prev;
             return [{ ...item, pinnedAt: new Date().toISOString() }, ...prev];
         });
-    };
+    }, []);
 
-    const unpinItem = (id: string) => {
+    const unpinItem = useCallback((id: string) => {
         setPinnedItems((prev) => prev.filter((i) => i.id !== id));
-    };
+    }, []);
 
-    const clearWorkspace = () => {
+    const clearWorkspace = useCallback(() => {
         if (window.confirm("ARE YOU SURE YOU WANT TO CLEAR ALL PINNED EVIDENCE?")) {
             setPinnedItems([]);
         }
-    };
+    }, []);
+
+    const contextValue = useMemo(() => ({
+        pinnedItems,
+        pinItem,
+        unpinItem,
+        clearWorkspace
+    }), [pinnedItems, pinItem, unpinItem, clearWorkspace]);
 
     return (
-        <EvidenceContext.Provider value={{ pinnedItems, pinItem, unpinItem, clearWorkspace }}>
+        <EvidenceContext.Provider value={contextValue}>
             {children}
         </EvidenceContext.Provider>
     );

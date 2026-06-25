@@ -49,12 +49,33 @@ const AIAnalysis           = React.lazy(() => import("./pages/AIAnalysis"));
 /** Tactical loading skeleton — shown while a lazy page chunk is fetching. */
 function PageSkeleton() {
   return (
-    <div className="flex items-center justify-center min-h-screen bg-background">
-      <div className="flex flex-col items-center gap-3">
-        <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-        <span className="font-mono text-[10px] text-muted-foreground uppercase tracking-widest animate-pulse">
-          LOADING MODULE…
-        </span>
+    <div className="flex h-screen w-screen bg-background text-foreground overflow-hidden font-mono">
+      {/* Fake Sidebar */}
+      <div className="w-64 border-r border-border/40 bg-card/10 flex flex-col shrink-0 p-4 space-y-6">
+        <div className="h-8 bg-secondary/30 rounded-sm animate-pulse w-3/4" />
+        <div className="space-y-3 flex-1">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div key={i} className="h-7 bg-secondary/20 rounded-sm animate-pulse w-full" />
+          ))}
+        </div>
+        <div className="h-8 bg-secondary/30 rounded-sm animate-pulse w-1/2" />
+      </div>
+
+      {/* Fake Content Area */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Fake Topbar */}
+        <div className="h-14 border-b border-border/40 bg-card/10 px-6 flex items-center justify-between shrink-0">
+          <div className="h-4 bg-secondary/30 rounded-sm animate-pulse w-1/4" />
+          <div className="h-6 bg-secondary/30 rounded-sm animate-pulse w-32" />
+        </div>
+
+        {/* Loading Content */}
+        <div className="flex-1 p-6 flex flex-col items-center justify-center gap-3 bg-background/50">
+          <div className="w-8 h-8 border-2 border-primary/40 border-t-transparent rounded-full animate-spin" />
+          <span className="text-[10px] text-muted-foreground uppercase tracking-widest animate-pulse">
+            LOADING SECURE MODULE…
+          </span>
+        </div>
       </div>
     </div>
   );

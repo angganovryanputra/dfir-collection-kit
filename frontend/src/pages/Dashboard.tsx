@@ -291,8 +291,9 @@ export default function Dashboard() {
   useAdaptivePolling({
       enabled: true,
       onPoll: async () => {
-          await refetchCollectors();
-          return "polled";
+          const res = await refetchCollectors();
+          const list = res.data ?? [];
+          return list.map(c => `${c.id}:${c.status}`).join(",");
       },
       initialInterval: 15000,
       maxInterval: 60000,

@@ -124,8 +124,9 @@ export default function ProcessingStatus() {
     useAdaptivePolling({
         enabled: isRunning,
         onPoll: async () => {
-            await refetch();
-            return job ? `${job.status}:${job.phase}` : null;
+            const res = await refetch();
+            const newJob = res.data;
+            return newJob ? `${newJob.status}:${newJob.phase}` : null;
         },
         initialInterval: 2000,
         maxInterval: 15_000,
@@ -134,7 +135,7 @@ export default function ProcessingStatus() {
 
     // Fetch pipeline logs (collection_logs written during processing phases)
     const fetchPipelineLogs = useCallback(async () => {
-        if (!incidentId) return;
+        if (!incidentId) return 0;
         try {
             const data = await apiGet<{
                 logs: Array<{ sequence: number; level: string; message: string; timestamp: string }>;
@@ -151,16 +152,17 @@ export default function ProcessingStatus() {
                 ]);
                 lastLogSeqRef.current = data.last_sequence;
             }
+            return data.logs.length;
         } catch {
-            // best-effort
+            return 0;
         }
     }, [incidentId]);
 
     useAdaptivePolling({
         enabled: isRunning,
         onPoll: async () => {
-            await fetchPipelineLogs();
-            return isRunning ? "running" : null;
+            const count = await fetchPipelineLogs();
+            return count > 0 ? `logs-${Date.now()}` : "no-new-logs";
         },
         initialInterval: 2000,
         maxInterval: 10_000,

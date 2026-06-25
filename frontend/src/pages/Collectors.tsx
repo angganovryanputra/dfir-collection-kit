@@ -119,8 +119,9 @@ export default function Collectors() {
   useAdaptivePolling({
       enabled: true,
       onPoll: async () => {
-          await refetch();
-          return "polled";
+          const res = await refetch();
+          const list = res.data ?? [];
+          return list.map(c => `${c.id}:${c.status}`).join(",");
       },
       initialInterval: 15000,
       maxInterval: 60000,

@@ -25,6 +25,64 @@ interface VirtualizedDataTableProps<T> {
   className?: string;
 }
 
+interface VirtualizedRowProps<T> {
+  item: T;
+  index: number;
+  columns: VirtualColumnDef<T>[];
+  gridTemplateColumns: string;
+  onRowClick?: (e: React.MouseEvent, item: T, index: number) => void;
+  rowClassName?: (item: T, index: number) => string;
+  size: number;
+  start: number;
+}
+
+const VirtualizedRow = React.memo(function VirtualizedRow<T>({
+  item,
+  index,
+  columns,
+  gridTemplateColumns,
+  onRowClick,
+  rowClassName,
+  size,
+  start,
+}: VirtualizedRowProps<T>) {
+  return (
+    <div
+      onClick={(e) => onRowClick?.(e, item, index)}
+      className={cn(
+        "absolute top-0 left-0 w-full grid border-b border-border/5 transition-colors group",
+        onRowClick && "cursor-pointer hover:bg-secondary/40",
+        rowClassName?.(item, index)
+      )}
+      style={{
+        height: `${size}px`,
+        transform: `translateY(${start}px)`,
+        gridTemplateColumns,
+      }}
+    >
+      {columns.map((col) => (
+        <div
+          key={col.id}
+          className={cn("px-4 py-2 text-xs flex items-center min-w-0", col.className)}
+        >
+          {col.cell(item, index)}
+        </div>
+      ))}
+    </div>
+  );
+}, (prev, next) => {
+  return (
+    prev.item === next.item &&
+    prev.index === next.index &&
+    prev.columns === next.columns &&
+    prev.gridTemplateColumns === next.gridTemplateColumns &&
+    prev.size === next.size &&
+    prev.start === next.start &&
+    prev.onRowClick === next.onRowClick &&
+    prev.rowClassName?.(prev.item, prev.index) === next.rowClassName?.(next.item, next.index)
+  );
+}) as <T>(props: VirtualizedRowProps<T>) => React.ReactElement;
+
 /**
  * High-performance virtualized data table for massive forensic datasets.
  * Powered by @tanstack/react-virtual.
@@ -131,29 +189,17 @@ export function VirtualizedDataTable<T>({
           {virtualizer.getVirtualItems().map((virtualRow) => {
             const item = data[virtualRow.index];
             return (
-              <div
+              <VirtualizedRow
                 key={virtualRow.key}
-                onClick={(e) => onRowClick?.(e, item, virtualRow.index)}
-                className={cn(
-                  "absolute top-0 left-0 w-full grid border-b border-border/5 transition-colors group",
-                  onRowClick && "cursor-pointer hover:bg-secondary/40",
-                  rowClassName?.(item, virtualRow.index)
-                )}
-                style={{
-                  height: `${virtualRow.size}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
-                  gridTemplateColumns,
-                }}
-              >
-                {columns.map((col) => (
-                  <div
-                    key={col.id}
-                    className={cn("px-4 py-2 text-xs flex items-center min-w-0", col.className)}
-                  >
-                    {col.cell(item, virtualRow.index)}
-                  </div>
-                ))}
-              </div>
+                item={item}
+                index={virtualRow.index}
+                columns={columns}
+                gridTemplateColumns={gridTemplateColumns}
+                onRowClick={onRowClick}
+                rowClassName={rowClassName}
+                size={virtualRow.size}
+                start={virtualRow.start}
+              />
             );
           })}
         </div>

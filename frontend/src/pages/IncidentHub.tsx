@@ -248,8 +248,10 @@ export default function IncidentHub() {
     useAdaptivePolling({
         enabled: pollingEnabled,
         onPoll: async () => {
-            await Promise.all([refetchProc(), refetchST()]);
-            return "polled";
+            const [procRes, stRes] = await Promise.all([refetchProc(), refetchST()]);
+            const pStatus = procRes.data?.status ?? "none";
+            const stStatusVal = stRes.data?.status ?? "none";
+            return `${pStatus}_${stStatusVal}`;
         },
     });
 
