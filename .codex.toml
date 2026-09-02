@@ -1,0 +1,59 @@
+# Codex CLI Configuration
+# https://github.com/openai/codex
+
+[model]
+# Default model to use
+model = "gpt-4o"
+
+# Maximum tokens for context window
+max_context_tokens = 128000
+
+[ui]
+# Output format
+format = "markdown"
+
+# Show diffs inline
+inline_diffs = true
+
+[mcp]
+# Enable MCP servers
+enabled = true
+
+# Auto-discover MCP servers in .mcp.json
+auto_discover = true
+
+[filesystem]
+# Allow Codex to read files
+read = true
+
+# Allow Codex to write files
+write = true
+
+# Allow Codex to execute commands
+execute = true
+
+# Restricted directories (relative to project root)
+restricted_dirs = [
+    ".git",
+    "node_modules",
+    "__pycache__",
+    ".venv",
+    "vendor"
+]
+
+[security]
+# Require approval for destructive operations
+require_approval = true
+
+# Allow network access
+network = true
+
+# Allow shell execution
+shell = true
+
+[cache]
+# Enable response caching
+enabled = true
+
+# Cache TTL in seconds
+ttl = 3600
