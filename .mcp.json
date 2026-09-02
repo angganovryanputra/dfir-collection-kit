@@ -1,64 +1,8 @@
 {
   "mcpServers": {
-    "code-review-graph": {
-      "command": "code-review-graph",
-      "args": ["serve"],
-      "type": "stdio"
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
-      "type": "stdio"
-    },
-    "github": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-github"],
-      "type": "stdio",
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
-      }
-    },
-    "postgres": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-postgres"],
-      "type": "stdio",
-      "env": {
-        "POSTGRES_CONNECTION_STRING": "${DATABASE_URL}"
-      }
-    },
-    "memory": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-memory"],
-      "type": "stdio"
-    },
-    "fetch": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-fetch"],
-      "type": "stdio"
-    },
-    "puppeteer": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-puppeteer"],
-      "type": "stdio"
-    },
-    "sequential-thinking": {
-      "command": "npx",
-      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
-      "type": "stdio"
-    },
-    "context7": {
-      "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"],
-      "type": "stdio"
-    },
-    "serena": {
-      "command": "npx",
-      "args": ["-y", "@oraios/serena"],
-      "type": "stdio"
-    },
-    "taskmaster": {
-      "command": "npx",
-      "args": ["-y", "@taskmaster-ai/taskmaster-ai"],
+    "codegraph": {
+      "command": "cmd",
+      "args": ["/c", "C:\Users\angga\AppData\Local\codegraph\current\bin\codegraph.cmd", "serve"],
       "type": "stdio"
     }
   }

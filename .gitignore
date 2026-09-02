@@ -94,3 +94,4 @@ temp/
  frontend/test.html
 # Added by code-review-graph
 .code-review-graph/
+.codegraph/
