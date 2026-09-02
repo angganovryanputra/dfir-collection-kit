@@ -162,8 +162,45 @@ def test_siem_url_validation():
 def test_siem_valid_request():
     from app.api.v1.endpoints.platform_features import SIEMExportRequest
     req = SIEMExportRequest(target="splunk", incident_id="INC-001",
-                             splunk_hec_url="https://splunk:8088", splunk_hec_token="t")
+                             splunk_hec_url="https://8.8.8.8:8088", splunk_hec_token="t")
     assert req.target == "splunk"
+
+
+def test_siem_url_rejects_cleartext_and_private_destinations():
+    from pydantic import ValidationError
+    from app.api.v1.endpoints.platform_features import SIEMExportRequest
+
+    for url in ("http://8.8.8.8", "https://127.0.0.1", "https://10.0.0.1"):
+        with pytest.raises(ValidationError):
+            SIEMExportRequest(target="splunk", incident_id="INC-001", splunk_hec_url=url, splunk_hec_token="t")
+
+
+def test_custom_module_command_and_path_validation():
+    from pydantic import ValidationError
+    from app.api.v1.endpoints.platform_features import CustomModuleCreate
+
+    valid = CustomModuleCreate(
+        name="host-info", os="linux", category="system", command="uname -a", output_relpath="custom/host.txt"
+    )
+    assert valid.command == "uname -a"
+    for command in ("id; whoami", "echo $HOME", "echo one\necho two"):
+        with pytest.raises(ValidationError):
+            CustomModuleCreate(
+                name="unsafe", os="linux", category="system", command=command, output_relpath="custom/out.txt"
+            )
+    with pytest.raises(ValidationError):
+        CustomModuleCreate(
+            name="unsafe-path", os="linux", category="system", command="id", output_relpath="../outside.txt"
+        )
+
+
+def test_chain_signature_is_keyed(monkeypatch):
+    from app.core.config import settings
+    from app.core.security import compute_chain_signature
+
+    monkeypatch.setattr(settings, "CHAIN_OF_CUSTODY_SIGNING_KEY", "unit-test-coc-key")
+    assert compute_chain_signature("a" * 64) == compute_chain_signature("a" * 64)
+    assert compute_chain_signature("a" * 64) != compute_chain_signature("b" * 64)
 
 
 def test_elastic_index_validation():

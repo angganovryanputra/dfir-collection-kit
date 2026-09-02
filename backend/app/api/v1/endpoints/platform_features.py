@@ -5,11 +5,15 @@ and SIEM export.
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
 import logging
 import re
+import socket
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -83,6 +87,52 @@ def _validate_hunt_query_sql(sql: str) -> None:
             "Query contains blocked operations (ATTACH, read_csv, COPY, filesystem functions, etc.)"
         )
 
+
+def _validate_siem_url(value: str) -> str:
+    """Accept only public HTTPS destinations to prevent SSRF and MITM."""
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("SIEM URL must be an HTTPS URL without embedded credentials")
+    from app.core.config import settings
+
+    hostname = parsed.hostname.lower().rstrip(".")
+    allowed_hosts = {host.strip().lower().rstrip(".") for host in settings.SIEM_ALLOWED_HOSTS.split(",") if host.strip()}
+    try:
+        addresses = {item[4][0] for item in socket.getaddrinfo(hostname, parsed.port or 443)}
+    except socket.gaierror as exc:
+        raise ValueError("SIEM hostname cannot be resolved") from exc
+    for address in addresses:
+        ip = ipaddress.ip_address(address)
+        if ip.is_loopback or ip.is_link_local:
+            raise ValueError("SIEM URL must not resolve to a loopback or link-local address")
+        if not ip.is_global and hostname not in allowed_hosts:
+            raise ValueError("SIEM URL must not resolve to a private, loopback, or link-local address")
+    return value
+
+
+_SHELL_METACHARACTERS = re.compile(r"[;&|`$<>\r\n]")
+
+
+def _validate_custom_command(value: str | None) -> str | None:
+    """Permit one bounded command only; pipelines and shell expansion are unsafe."""
+    if value is None:
+        return None
+    command = value.strip()
+    if not command or len(command) > 1024:
+        raise ValueError("command must contain 1-1024 characters")
+    if _SHELL_METACHARACTERS.search(command):
+        raise ValueError("command may not contain shell operators, redirection, expansion, or newlines")
+    return command
+
+
+def _validate_output_relpath(value: str | None) -> str | None:
+    if value is None:
+        return None
+    path = PurePosixPath(value.strip())
+    if not value.strip() or path.is_absolute() or ".." in path.parts:
+        raise ValueError("output_relpath must be a non-empty relative path without '..'")
+    return path.as_posix()
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic schemas
 # ─────────────────────────────────────────────────────────────────────────────
@@ -97,6 +147,9 @@ class CustomModuleCreate(BaseModel):
     output_relpath: str
     enabled: bool = True
 
+    _command_is_safe = field_validator("command")(_validate_custom_command)
+    _output_is_safe = field_validator("output_relpath")(_validate_output_relpath)
+
 
 class CustomModuleUpdate(BaseModel):
     name: str | None = None
@@ -105,6 +158,9 @@ class CustomModuleUpdate(BaseModel):
     command: str | None = None
     output_relpath: str | None = None
     enabled: bool | None = None
+
+    _command_is_safe = field_validator("command")(_validate_custom_command)
+    _output_is_safe = field_validator("output_relpath")(_validate_output_relpath)
 
 
 class CustomModuleOut(BaseModel):
@@ -293,7 +349,7 @@ async def list_custom_modules(
 @router.post(
     "/custom-modules",
     response_model=CustomModuleOut,
-    dependencies=[Depends(require_roles("operator", "admin"))],
+    dependencies=[Depends(require_roles("admin"))],
 )
 async def create_custom_module(
     payload: CustomModuleCreate,
@@ -310,19 +366,32 @@ async def create_custom_module(
     db.add(module)
     await db.commit()
     await db.refresh(module)
+    await safe_record_event(
+        db,
+        event_type="custom_module_created",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="backend",
+        action="create custom module",
+        target_type="custom_module",
+        target_id=module.id,
+        status="success",
+        message="Custom module created",
+        metadata={"name": module.name, "os": module.os},
+    )
     return CustomModuleOut.model_validate(module)
 
 
 @router.patch(
     "/custom-modules/{module_id}",
     response_model=CustomModuleOut,
-    dependencies=[Depends(require_roles("admin", "operator"))],
+    dependencies=[Depends(require_roles("admin"))],
 )
 async def update_custom_module(
     module_id: str,
     payload: CustomModuleUpdate,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> CustomModuleOut:
     result = await db.execute(select(CustomModule).where(CustomModule.id == module_id))
     module = result.scalar_one_or_none()
@@ -332,6 +401,19 @@ async def update_custom_module(
         setattr(module, field, value)
     await db.commit()
     await db.refresh(module)
+    await safe_record_event(
+        db,
+        event_type="custom_module_updated",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="backend",
+        action="update custom module",
+        target_type="custom_module",
+        target_id=module.id,
+        status="success",
+        message="Custom module updated",
+        metadata={"changed": sorted(payload.model_dump(exclude_unset=True).keys())},
+    )
     return CustomModuleOut.model_validate(module)
 
 
@@ -342,14 +424,28 @@ async def update_custom_module(
 async def delete_custom_module(
     module_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     result = await db.execute(
         delete(CustomModule).where(CustomModule.id == module_id).returning(CustomModule.id)
     )
-    if not result.scalar():
+    deleted = result.scalar()
+    if not deleted:
         raise HTTPException(status_code=404, detail="Custom module not found")
     await db.commit()
+    await safe_record_event(
+        db,
+        event_type="custom_module_deleted",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="backend",
+        action="delete custom module",
+        target_type="custom_module",
+        target_id=module_id,
+        status="success",
+        message="Custom module deleted",
+        metadata={},
+    )
     return {"deleted": module_id}
 
 
@@ -844,9 +940,7 @@ class SIEMExportRequest(BaseModel):
     @field_validator("splunk_hec_url", "elastic_url", "timesketch_url", mode="before")
     @classmethod
     def _validate_url(cls, v: str | None) -> str | None:
-        if v and not v.startswith(("https://", "http://")):
-            raise ValueError("URL must start with https:// or http://")
-        return v
+        return _validate_siem_url(v) if v else v
 
     @field_validator("elastic_index", mode="before")
     @classmethod
@@ -913,7 +1007,7 @@ async def _push_splunk(payload: SIEMExportRequest, events: list[dict]) -> dict:
             for e in events
         )
         headers = {"Authorization": f"Splunk {payload.splunk_hec_token}"}
-        async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(payload.splunk_hec_url, content=batch, headers=headers)
         if resp.status_code >= 400:
             raise HTTPException(status_code=502, detail=f"Splunk HEC returned {resp.status_code}: {resp.text[:200]}")
@@ -936,7 +1030,7 @@ async def _push_elastic(payload: SIEMExportRequest, events: list[dict]) -> dict:
         headers: dict[str, str] = {"Content-Type": "application/x-ndjson"}
         if payload.elastic_api_key:
             headers["Authorization"] = f"ApiKey {payload.elastic_api_key}"
-        async with httpx.AsyncClient(timeout=60.0, verify=False) as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(f"{payload.elastic_url.rstrip('/')}/_bulk", content=body, headers=headers)
         if resp.status_code >= 400:
             raise HTTPException(status_code=502, detail=f"Elastic returned {resp.status_code}: {resp.text[:200]}")
@@ -958,7 +1052,7 @@ async def _push_timesketch(payload: SIEMExportRequest, events: list[dict]) -> di
         headers = {"Authorization": f"Bearer {payload.timesketch_token}"}
         jsonl = "\n".join(json.dumps(e, default=str) for e in events)
         files = {"file": ("timeline.jsonl", jsonl.encode(), "application/jsonlines")}
-        async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
+        async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(url, headers=headers, files=files)
         if resp.status_code >= 400:
             raise HTTPException(status_code=502, detail=f"Timesketch returned {resp.status_code}: {resp.text[:200]}")

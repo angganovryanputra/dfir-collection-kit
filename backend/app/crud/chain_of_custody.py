@@ -1,7 +1,7 @@
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import compute_chain_hash
+from app.core.security import compute_chain_hash, compute_chain_signature
 from app.models.chain_of_custody import ChainOfCustodyEntry
 from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
 
@@ -28,6 +28,8 @@ def verify_entries(entries: list[ChainOfCustodyEntry]) -> None:
         )
         if entry.previous_hash != previous_hash or entry.entry_hash != expected_hash:
             raise ValueError("Chain-of-custody integrity check failed")
+        if entry.entry_signature and entry.entry_signature != compute_chain_signature(entry.entry_hash):
+            raise ValueError("Chain-of-custody signature check failed")
         previous_hash = entry.entry_hash
 
 
@@ -59,6 +61,7 @@ async def create_entry(db: AsyncSession, payload: ChainOfCustodyEntryCreate) -> 
         sequence=sequence,
         previous_hash=previous_hash,
         entry_hash=entry_hash,
+        entry_signature=compute_chain_signature(entry_hash),
     )
     db.add(entry)
     await db.flush()

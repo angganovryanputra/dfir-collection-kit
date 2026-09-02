@@ -29,8 +29,34 @@ _REVOKED_CLEANUP_INTERVAL_SEC = 3600
 _last_revoked_cleanup: float = 0.0
 
 
+def _revocation_redis():
+    """Best-effort shared revocation store; memory fallback supports local dev."""
+    if not settings.REDIS_URL:
+        return None
+    try:
+        import redis
+
+        return redis.Redis.from_url(
+            settings.REDIS_URL,
+            socket_connect_timeout=0.2,
+            socket_timeout=0.2,
+            decode_responses=True,
+        )
+    except Exception:
+        return None
+
+
 def revoke_token(jti: str, exp: float) -> None:
     """Add the given JTI to the revocation list until it expires."""
+    ttl = max(1, int(exp - time.time()))
+    redis_client = _revocation_redis()
+    if redis_client is not None:
+        try:
+            redis_client.setex(f"dfir:revoked-jti:{jti}", ttl, "1")
+        except Exception:
+            # Retain local revocation as a fail-safe when Redis is temporarily unavailable.
+            pass
+
     global _last_revoked_cleanup
     with _revoked_lock:
         _revoked_jtis[jti] = exp
@@ -44,6 +70,13 @@ def revoke_token(jti: str, exp: float) -> None:
 
 def is_token_revoked(jti: str) -> bool:
     """Return True if the token has been explicitly revoked and has not yet expired."""
+    redis_client = _revocation_redis()
+    if redis_client is not None:
+        try:
+            if redis_client.exists(f"dfir:revoked-jti:{jti}"):
+                return True
+        except Exception:
+            pass
     now = time.time()
     with _revoked_lock:
         exp = _revoked_jtis.get(jti)
@@ -102,6 +135,17 @@ def compute_chain_hash(
         ]
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def compute_chain_signature(entry_hash: str) -> str:
+    """Server-side HMAC for new chain entries.
+
+    A plain hash chain detects accidental changes but can be recomputed by a
+    database writer.  This signature makes undetected alteration require a
+    server secret; legacy unsigned rows remain readable during migration.
+    """
+    key = settings.CHAIN_OF_CUSTODY_SIGNING_KEY or settings.SECRET_KEY
+    return hmac.new(key.encode("utf-8"), entry_hash.encode("ascii"), hashlib.sha256).hexdigest()
 
 
 def compute_export_signature(path: str) -> str:

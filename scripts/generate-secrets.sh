@@ -30,6 +30,7 @@ print(''.join(secrets.choice(chars) for _ in range(24)))
 DB_PASSWORD=$(gen_password)
 SECRET_KEY=$(gen_secret)
 AGENT_SHARED_SECRET=$(gen_secret)
+CHAIN_OF_CUSTODY_SIGNING_KEY=$(gen_secret)
 ADMIN_PASSWORD=$(gen_password)
 ANALYST_PASSWORD=$(gen_password)
 VIEWER_PASSWORD=$(gen_password)
@@ -46,6 +47,7 @@ POSTGRES_DB=dfir
 # ── Security Keys ─────────────────────────────────────────────────────────────
 SECRET_KEY=${SECRET_KEY}
 AGENT_SHARED_SECRET=${AGENT_SHARED_SECRET}
+CHAIN_OF_CUSTODY_SIGNING_KEY=${CHAIN_OF_CUSTODY_SIGNING_KEY}
 
 # ── Auth Settings ─────────────────────────────────────────────────────────────
 REQUIRE_AUTH=true
@@ -84,6 +86,7 @@ echo ""
 echo "  POSTGRES_PASSWORD   = ${DB_PASSWORD:0:8}..."
 echo "  SECRET_KEY          = ${SECRET_KEY:0:12}..."
 echo "  AGENT_SHARED_SECRET = ${AGENT_SHARED_SECRET:0:12}..."
+echo "  CHAIN_OF_CUSTODY_SIGNING_KEY = ${CHAIN_OF_CUSTODY_SIGNING_KEY:0:12}..."
 echo "  ADMIN_PASSWORD      = ${ADMIN_PASSWORD:0:8}..."
 echo ""
 echo "[NEXT STEP] Generate TLS certificates:"

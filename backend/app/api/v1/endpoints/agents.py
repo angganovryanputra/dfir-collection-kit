@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import hmac
 import logging
 import re
+import secrets
 from datetime import datetime, timezone
 from hmac import compare_digest
 from pathlib import Path
@@ -44,10 +47,27 @@ from app.services.system_settings_service import get_runtime_settings
 router = APIRouter()
 
 
-def verify_agent_secret(agent_token: str | None) -> None:
+class AgentRegistrationOut(DeviceOut):
+    agent_token: str | None = None
+
+
+def _token_digest(token: str) -> str:
+    from app.core.config import settings
+
+    return hmac.new(settings.SECRET_KEY.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def verify_enrollment_secret(agent_token: str | None) -> None:
     from app.core.config import settings
     expected = settings.AGENT_SHARED_SECRET or ""
     if not expected or not agent_token or not compare_digest(agent_token, expected):
+        raise HTTPException(status_code=401, detail="Invalid enrollment token")
+
+
+def verify_agent_secret(agent_token: str | None, device) -> None:
+    if not device or not device.agent_token_hash or not agent_token:
+        raise HTTPException(status_code=401, detail="Agent must enroll before making authenticated requests")
+    if not compare_digest(_token_digest(agent_token), device.agent_token_hash):
         raise HTTPException(status_code=401, detail="Invalid agent token")
 
 
@@ -76,15 +96,24 @@ async def get_agent(
     return DeviceOut.model_validate(agent)
 
 
-@router.post("/register", response_model=DeviceOut)
+@router.post("/register", response_model=AgentRegistrationOut)
 async def register_agent(
     payload: DeviceCreate,
     db: AsyncSession = Depends(get_db),
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
-) -> DeviceOut:
-    verify_agent_secret(agent_token)
+) -> AgentRegistrationOut:
     existing = await get_device(db, payload.id)
+    issued_token: str | None = None
     if existing:
+        if existing.agent_token_hash:
+            verify_agent_secret(agent_token, existing)
+        else:
+            # One-time compatibility path for agents enrolled before per-agent
+            # credentials were introduced.  It is removed once the device has
+            # received its replacement token.
+            verify_enrollment_secret(agent_token)
+            issued_token = secrets.token_urlsafe(32)
+            existing.agent_token_hash = _token_digest(issued_token)
         updated = await update_device(db, payload.id, DeviceUpdate(**payload.model_dump()))
         if not updated:
             raise HTTPException(status_code=404, detail="Agent not found")
@@ -101,8 +130,11 @@ async def register_agent(
             message="Agent re-registered",
             metadata={"hostname": updated.hostname, "os": updated.os},
         )
-        return DeviceOut.model_validate(updated)
+        return AgentRegistrationOut.model_validate(updated).model_copy(update={"agent_token": issued_token})
+    verify_enrollment_secret(agent_token)
+    issued_token = secrets.token_urlsafe(32)
     device = await create_device(db, payload)
+    device.agent_token_hash = _token_digest(issued_token)
     await safe_record_event(
         db,
         event_type="agent_registered",
@@ -116,7 +148,7 @@ async def register_agent(
         message="Agent registered",
         metadata={"hostname": device.hostname, "os": device.os},
     )
-    return DeviceOut.model_validate(device)
+    return AgentRegistrationOut.model_validate(device).model_copy(update={"agent_token": issued_token})
 
 
 @router.post("/{agent_id}/heartbeat", response_model=DeviceOut)
@@ -126,7 +158,8 @@ async def agent_heartbeat(
     db: AsyncSession = Depends(get_db),
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
 ) -> DeviceOut:
-    verify_agent_secret(agent_token)
+    device = await get_device(db, agent_id)
+    verify_agent_secret(agent_token, device)
     updated = await update_device(db, agent_id, payload)
     if not updated:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -186,7 +219,8 @@ async def get_next_job(
     db: AsyncSession = Depends(get_db),
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
 ) -> JobInstruction:
-    verify_agent_secret(agent_token)
+    device = await get_device(db, agent_id)
+    verify_agent_secret(agent_token, device)
     runtime_settings = await get_runtime_settings(db)
     job = await get_next_job_for_agent(db, agent_id)
     if not job:
@@ -231,7 +265,8 @@ async def get_job_status_for_agent(
     db: AsyncSession = Depends(get_db),
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
 ) -> dict:
-    verify_agent_secret(agent_token)
+    device = await get_device(db, agent_id)
+    verify_agent_secret(agent_token, device)
     job = await get_job(db, job_id)
     if not job or job.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -246,7 +281,8 @@ async def update_job_status_endpoint(
     db: AsyncSession = Depends(get_db),
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
 ) -> JobOut:
-    verify_agent_secret(agent_token)
+    device = await get_device(db, agent_id)
+    verify_agent_secret(agent_token, device)
     job = await get_job(db, job_id)
     if not job or job.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -329,7 +365,8 @@ async def get_job_upload_url(
     db: AsyncSession = Depends(get_db),
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
 ) -> dict:
-    verify_agent_secret(agent_token)
+    device = await get_device(db, agent_id)
+    verify_agent_secret(agent_token, device)
     job = await get_job(db, job_id)
     if not job or job.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -352,7 +389,8 @@ async def complete_job_upload(
     db: AsyncSession = Depends(get_db),
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
 ) -> dict:
-    verify_agent_secret(agent_token)
+    device = await get_device(db, agent_id)
+    verify_agent_secret(agent_token, device)
     job = await get_job(db, job_id)
     if not job or job.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -366,9 +404,13 @@ async def complete_job_upload(
     if not s3_service:
         raise HTTPException(status_code=400, detail="S3 Object Storage is not enabled")
     
-    # Trigger Celery task to download, extract, and process the evidence
-    from app.core.config import settings
-    base_path = Path(settings.STORAGE_PATH) / str(job.incident_id) / str(job.id)
+    # Use the same configured evidence root as the direct-upload path.  The
+    # application Settings object intentionally has no STORAGE_PATH alias;
+    # using it here made every S3 completion request fail before dispatch.
+    runtime_settings = await get_runtime_settings(db)
+    if not _SAFE_ID_RE.match(job.incident_id) or not _SAFE_ID_RE.match(job.id):
+        raise HTTPException(status_code=400, detail="Invalid job or incident identifier")
+    base_path = safe_join(Path(runtime_settings.evidence_storage_path), job.incident_id, job.id)
     object_key = f"{job.incident_id}/{job.id}/collection.zip"
 
     # Mark job as processing
@@ -389,7 +431,8 @@ async def upload_job_evidence(
     db: AsyncSession = Depends(get_db),
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
 ) -> dict:
-    verify_agent_secret(agent_token)
+    device = await get_device(db, agent_id)
+    verify_agent_secret(agent_token, device)
     job = await get_job(db, job_id)
     if not job or job.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -403,6 +446,8 @@ async def upload_job_evidence(
 
     # C4: Use safe_join to prevent path traversal
     base_path = safe_join(Path(runtime_settings.evidence_storage_path), job.incident_id, job.id)
+    if (base_path / "LOCKED").exists():
+        raise HTTPException(status_code=409, detail="Evidence for this job is locked and cannot be replaced")
     zip_path = base_path / "collection.zip"
     max_bytes = runtime_settings.max_file_size_gb * 1024 * 1024 * 1024
     size = await asyncio.to_thread(save_upload, file, zip_path, max_bytes)
@@ -466,10 +511,15 @@ async def upload_job_evidence(
         )
         await create_folder(db, folder_payload)
 
-        # Hash all files concurrently in a thread pool
-        item_hashes = await asyncio.gather(
-            *[asyncio.to_thread(hash_file, item, runtime_settings.hash_algorithm) for item in extracted_files]
-        )
+        # Bound hashing concurrency: a ZIP can legally contain millions of
+        # members, so one task per member would otherwise exhaust memory.
+        hash_limit = asyncio.Semaphore(16)
+
+        async def _hash_item(item: Path) -> str:
+            async with hash_limit:
+                return await asyncio.to_thread(hash_file, item, runtime_settings.hash_algorithm)
+
+        item_hashes = await asyncio.gather(*(_hash_item(item) for item in extracted_files))
         for idx, (item, item_hash) in enumerate(zip(extracted_files, item_hashes), start=1):
             item_payload = EvidenceItemCreate(
                 id=f"{job.id}-{idx}",

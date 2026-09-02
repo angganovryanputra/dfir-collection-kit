@@ -16,26 +16,41 @@ def _set_agent_secret(monkeypatch, value: str) -> None:
     monkeypatch.setattr(settings, "AGENT_SHARED_SECRET", value)
 
 
+def _set_agent_token(monkeypatch, value: str) -> None:
+    from app.api.v1.endpoints.agents import _token_digest
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "SECRET_KEY", "unit-test-server-key")
+
+    class Device:
+        agent_token_hash = _token_digest(value)
+
+    async def get_device(_db, _agent_id):
+        return Device()
+
+    monkeypatch.setattr("app.api.v1.endpoints.agent_commands.get_device", get_device)
+
+
 async def test_poll_rejects_missing_token(monkeypatch):
     from app.api.v1.endpoints.agent_commands import poll_for_command
-    _set_agent_secret(monkeypatch, "unit-test-secret")
+    _set_agent_token(monkeypatch, "unit-test-agent-token")
     with pytest.raises(HTTPException) as exc:
-        await poll_for_command("AGT-TEST", agent_token=None)
+        await poll_for_command("AGT-TEST", agent_token=None, db=None)
     assert exc.value.status_code == 401
 
 
 async def test_poll_rejects_wrong_token(monkeypatch):
     from app.api.v1.endpoints.agent_commands import poll_for_command
-    _set_agent_secret(monkeypatch, "unit-test-secret")
+    _set_agent_token(monkeypatch, "unit-test-agent-token")
     with pytest.raises(HTTPException) as exc:
-        await poll_for_command("AGT-TEST", agent_token="wrong")
+        await poll_for_command("AGT-TEST", agent_token="wrong", db=None)
     assert exc.value.status_code == 401
 
 
 async def test_poll_accepts_valid_token(monkeypatch):
     from app.api.v1.endpoints.agent_commands import poll_for_command
-    _set_agent_secret(monkeypatch, "unit-test-secret")
-    result = await poll_for_command("AGT-EMPTY", agent_token="unit-test-secret")
+    _set_agent_token(monkeypatch, "unit-test-agent-token")
+    result = await poll_for_command("AGT-EMPTY", agent_token="unit-test-agent-token", db=None)
     assert result == {}
 
 

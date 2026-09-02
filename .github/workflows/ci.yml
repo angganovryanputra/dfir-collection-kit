@@ -309,18 +309,19 @@ jobs:
       - name: Check service health
         run: |
           # Check backend health
-          curl -f --silent --max-time 10 http://localhost:8000/api/v1/status/health || exit 1
+          curl -k -f --silent --max-time 10 https://localhost/api/v1/status/health || exit 1
           echo "Backend is healthy"
           
           # Check frontend
-          curl -f --silent --max-time 10 http://localhost:443/ || exit 1
+          curl -k -f --silent --max-time 10 https://localhost/ || exit 1
           echo "Frontend is accessible"
 
       - name: Run API smoke tests
         run: |
           # Test login
           curl -f --silent --max-time 10 \
-            -X POST http://localhost:8000/api/v1/auth/login \
+            -X POST https://localhost/api/v1/auth/login \
+            -k \
             -H "Content-Type: application/json" \
             -d '{"username":"admin","password":"test_admin_pass"}' || exit 1
           echo "Login endpoint works"

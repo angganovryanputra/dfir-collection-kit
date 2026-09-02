@@ -3,9 +3,9 @@ from pydantic import BaseModel
 
 class ChainOfCustodyEntryBase(BaseModel):
     incident_id: str
-    timestamp: str
+    timestamp: str = ""
     action: str
-    actor: str
+    actor: str = ""
     target: str
 
 
@@ -18,6 +18,7 @@ class ChainOfCustodyEntryOut(ChainOfCustodyEntryBase):
     sequence: int
     previous_hash: str | None = None
     entry_hash: str
+    entry_signature: str | None = None
 
     class Config:
         from_attributes = True

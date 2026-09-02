@@ -1,5 +1,6 @@
 import csv
 import io
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -39,7 +40,17 @@ async def create_entry_endpoint(
     current_user: User = Depends(get_current_user),
 ) -> ChainOfCustodyEntryOut:
     try:
-        entry = await create_entry(db, payload)
+        # Actor and timestamp are evidentiary facts controlled by the service,
+        # not attributes a caller may forge.
+        entry = await create_entry(
+            db,
+            payload.model_copy(
+                update={
+                    "actor": f"USER {current_user.username}",
+                    "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                }
+            ),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     await safe_record_event(

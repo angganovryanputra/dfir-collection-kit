@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.agents import verify_agent_secret
 from app.core.deps import get_current_user, get_db
+from app.crud.device import get_device
 from app.models.user import User
 from app.services.audit_log_service import safe_record_event
 
@@ -42,6 +43,7 @@ router = APIRouter()
 # _ws_queues: command_id → asyncio.Queue receiving chunks from the agent
 _pending: dict[str, list[dict]] = {}
 _ws_queues: dict[str, asyncio.Queue] = {}
+_command_agents: dict[str, str] = {}
 _pending_lock = asyncio.Lock()
 
 # Maximum allowed command timeout (seconds)
@@ -108,6 +110,7 @@ async def analyst_ws(
                     "created_at": datetime.now(timezone.utc).isoformat(),
                 })
                 _ws_queues[command_id] = result_queue
+                _command_agents[command_id] = agent_id
 
             try:
                 from app.db.session import AsyncSessionLocal
@@ -154,6 +157,7 @@ async def analyst_ws(
             finally:
                 async with _pending_lock:
                     _ws_queues.pop(command_id, None)
+                    _command_agents.pop(command_id, None)
     except WebSocketDisconnect:
         logger.info("Analyst WS disconnected for agent %s", agent_id)
     except Exception as exc:
@@ -170,9 +174,10 @@ async def analyst_ws(
 async def poll_for_command(
     agent_id: str,
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Agent calls this endpoint periodically to check for pending commands."""
-    verify_agent_secret(agent_token)
+    verify_agent_secret(agent_token, await get_device(db, agent_id))
     async with _pending_lock:
         queue = _pending.get(agent_id, [])
         if not queue:
@@ -190,12 +195,14 @@ async def post_command_result(
     command_id: str,
     payload: dict,
     agent_token: str | None = Header(default=None, alias="X-Agent-Token"),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Agent posts execution output back to the waiting analyst WebSocket."""
-    verify_agent_secret(agent_token)
     result_queue = _ws_queues.get(command_id)
     if result_queue is None:
         return {"status": "no_subscriber"}
+    agent_id = _command_agents.get(command_id)
+    verify_agent_secret(agent_token, await get_device(db, agent_id) if agent_id else None)
 
     output = payload.get("output", "")
     exit_code = int(payload.get("exit_code", 0))
@@ -247,6 +254,7 @@ async def run_command_sync(
             "created_at": datetime.now(timezone.utc).isoformat(),
         })
         _ws_queues[command_id] = result_queue
+        _command_agents[command_id] = agent_id
 
     deadline = time.monotonic() + timeout_sec + 30
     output_parts: list[str] = []
@@ -270,6 +278,7 @@ async def run_command_sync(
     finally:
         async with _pending_lock:
             _ws_queues.pop(command_id, None)
+            _command_agents.pop(command_id, None)
 
     return {
         "command_id": command_id,

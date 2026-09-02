@@ -154,11 +154,18 @@ func (c *Client) makeRequest(ctx context.Context, method, path string, body inte
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set(HeaderAgentToken, c.config.AgentSharedSecret)
+	req.Header.Set(HeaderAgentToken, c.authToken())
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	return c.httpClient.Do(req)
+}
+
+func (c *Client) authToken() string {
+	if c.config.AgentToken != "" {
+		return c.config.AgentToken
+	}
+	return c.config.AgentSharedSecret
 }
 
 // makeRequestWithRetry wraps makeRequest with exponential back-off for
@@ -246,7 +253,15 @@ func (c *Client) Register(ctx context.Context) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("registration failed: HTTP %d: %s", resp.StatusCode, string(body))
 	}
 	var result map[string]interface{}
-	_ = json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode registration response: %w", err)
+	}
+	if token, ok := result["agent_token"].(string); ok && token != "" {
+		if err := config.SaveAgentToken(c.config.DataDir, token); err != nil {
+			return nil, fmt.Errorf("persist agent credential: %w", err)
+		}
+		c.config.AgentToken = token
+	}
 	logging.Info("Agent registered successfully: %s", c.config.AgentID)
 	return result, nil
 }
@@ -258,7 +273,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ping: create request: %w", err)
 	}
-	req.Header.Set(HeaderAgentToken, c.config.AgentSharedSecret)
+	req.Header.Set(HeaderAgentToken, c.authToken())
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("backend unreachable at %s: %w", c.baseURL, err)
@@ -475,7 +490,7 @@ func (c *Client) streamingMultipartUpload(ctx context.Context, jobID, zipPath st
 		<-writeErrCh
 		return fmt.Errorf("create upload request: %w", err)
 	}
-	req.Header.Set(HeaderAgentToken, c.config.AgentSharedSecret)
+	req.Header.Set(HeaderAgentToken, c.authToken())
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
 	resp, httpErr := c.uploadClient.Do(req)

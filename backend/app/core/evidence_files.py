@@ -27,15 +27,20 @@ def safe_join(base: Path, *paths: str) -> Path:
 def save_upload(file: UploadFile, destination: Path, max_bytes: int) -> int:
     total = 0
     ensure_directory(destination.parent)
-    with destination.open("wb") as handle:
-        while True:
-            chunk = file.file.read(1024 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > max_bytes:
-                raise HTTPException(status_code=413, detail="Upload exceeds size limit")
-            handle.write(chunk)
+    try:
+        with destination.open("wb") as handle:
+            while True:
+                chunk = file.file.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    raise HTTPException(status_code=413, detail="Upload exceeds size limit")
+                handle.write(chunk)
+    except Exception:
+        # Never leave a partial archive available for a later processing run.
+        destination.unlink(missing_ok=True)
+        raise
     return total
 
 

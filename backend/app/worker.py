@@ -98,9 +98,15 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
     from app.db.session import AsyncSessionLocal
     from app.services.s3_service import get_s3_service
     from app.services.system_settings_service import get_runtime_settings
-    from app.services.evidence_files import extract_zip, analyze_extracted_files, write_hash_manifest, hash_file
-    from app.crud.evidence import create_folder, create_evidence_file
-    from app.models.agent import Job
+    # Keep the S3 path on the same evidence primitives and data model as the
+    # streamed agent upload.  The old imports referred to a removed service
+    # and an obsolete CRUD API, so S3 processing failed at task startup.
+    from app.core.evidence_files import extract_zip, hash_file, write_hash_manifest, write_lock_marker
+    from app.crud.chain_of_custody import create_entry
+    from app.crud.evidence import create_folder, create_item
+    from app.models.job import Job
+    from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
+    from app.schemas.evidence import EvidenceFolderCreate, EvidenceItemCreate
     from sqlalchemy import select
     from datetime import datetime, timezone
     from app.core.evidence_files import append_chain_log
@@ -159,22 +165,49 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
                 metadata={"files": len(extracted_files)},
             )
 
-            files_data = await analyze_extracted_files(extracted_dir)
-
-            # 3. Create DB records
-            folder = await create_folder(db, incident_id, name="root", parent_id=None)
-
-            for fd in files_data:
-                await create_evidence_file(
-                    db,
+            # 3. Create DB records using the canonical evidence schema.
+            total_size = await asyncio.to_thread(lambda: sum(p.stat().st_size for p in extracted_files))
+            await create_folder(
+                db,
+                EvidenceFolderCreate(
+                    id=job_id,
                     incident_id=incident_id,
-                    folder_id=folder.id,
-                    name=fd["name"],
-                    original_path=fd["original_path"],
-                    size=fd["size"],
-                    hash_val=fd["hash"],
-                    hash_type=runtime_settings.hash_algorithm,
+                    type="COLLECTION",
+                    date=datetime.now(timezone.utc).date().isoformat(),
+                    files_count=len(extracted_files),
+                    total_size=str(total_size),
+                    status="LOCKED",
+                ),
+            )
+            for idx, evidence_file in enumerate(extracted_files, start=1):
+                await create_item(
+                    db,
+                    EvidenceItemCreate(
+                        id=f"{job_id}-{idx}",
+                        incident_id=incident_id,
+                        name=evidence_file.name,
+                        type="FILE",
+                        size=str(evidence_file.stat().st_size),
+                        status="HASH_VERIFIED",
+                        hash=await asyncio.to_thread(
+                            hash_file, evidence_file, runtime_settings.hash_algorithm
+                        ),
+                        collected_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    ),
                 )
+
+            timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            await create_entry(
+                db,
+                ChainOfCustodyEntryCreate(
+                    id=f"coc-{job_id}",
+                    incident_id=incident_id,
+                    timestamp=timestamp,
+                    action="EVIDENCE UPLOAD",
+                    actor="SYSTEM S3 INGEST",
+                    target=zip_path.name,
+                ),
+            )
 
             # 4. Update Job and CoC
             result = await db.execute(select(Job).where(Job.id == job_id))
@@ -193,6 +226,7 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
                 await asyncio.to_thread(
                     append_chain_log, chain_log_path, f"{timestamp} | HASH | {chain_log_hash}"
                 )
+                await asyncio.to_thread(write_lock_marker, base_path / "LOCKED")
 
             # 5. Start parsing pipeline
             await run_parsing_pipeline(incident_id, job_id, base_path, db)

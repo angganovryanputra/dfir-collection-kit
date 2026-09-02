@@ -57,6 +57,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dfir}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-dfir}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set. Run scripts/generate-secrets.sh}
+      CHAIN_OF_CUSTODY_SIGNING_KEY: ${CHAIN_OF_CUSTODY_SIGNING_KEY:-}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
       EVIDENCE_STORAGE_PATH: /vault/evidence
       AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:?AGENT_SHARED_SECRET must be set. Run scripts/generate-secrets.sh}
@@ -71,6 +72,7 @@ services:
       SIGMA_RULES_DIR:  ${SIGMA_RULES_DIR:-/opt/chainsaw/rules/}
       CELERY_BROKER_URL:    redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set. Run scripts/generate-secrets.sh}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set. Run scripts/generate-secrets.sh}@redis:6379/0
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set. Run scripts/generate-secrets.sh}@redis:6379/0
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-false}
     # Backend is only reachable via the nginx proxy — no direct host port
     expose:
@@ -113,6 +115,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dfir}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-dfir}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set}
+      CHAIN_OF_CUSTODY_SIGNING_KEY: ${CHAIN_OF_CUSTODY_SIGNING_KEY:-}
       AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:?AGENT_SHARED_SECRET must be set}
       EVIDENCE_STORAGE_PATH: /vault/evidence
       EZTOOLS_DIR:      ${EZTOOLS_DIR:-/opt/eztools}
@@ -152,6 +155,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dfir}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@db:5432/${POSTGRES_DB:-dfir}
       SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set}
+      CHAIN_OF_CUSTODY_SIGNING_KEY: ${CHAIN_OF_CUSTODY_SIGNING_KEY:-}
       AGENT_SHARED_SECRET: ${AGENT_SHARED_SECRET:?AGENT_SHARED_SECRET must be set}
       EVIDENCE_STORAGE_PATH: /vault/evidence
       CELERY_BROKER_URL:    redis://:${REDIS_PASSWORD:?REDIS_PASSWORD must be set. Run scripts/generate-secrets.sh}@redis:6379/0

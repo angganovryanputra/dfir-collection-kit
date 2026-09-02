@@ -15,7 +15,7 @@ from app.services.system_settings_service import get_runtime_settings
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_VALID_OS = {"windows", "linux"}
+_VALID_OS = {"windows", "linux", "macos"}
 _VALID_ARCH = {"amd64", "arm64", "x86"}
 
 

@@ -48,6 +48,17 @@ func TestCustomModuleExecution(t *testing.T) {
 	}
 }
 
+func TestCustomModuleRejectsShellOperators(t *testing.T) {
+	tmpDir := t.TempDir()
+	executor := jobs.NewExecutor(&config.Config{AgentID: "test-agent-custom", OS: "linux"}, nil)
+	err := executor.Run(context.Background(), "JOB-CUST-REJECT", "INC-CUST-001", tmpDir, []api.JobModule{{
+		ModuleID: "custom_unsafe_test", OutputRelPath: "custom/out.txt", Command: "echo safe; uname -a",
+	}}, 5, 0, 1)
+	if err == nil {
+		t.Fatal("custom module with a shell operator should be rejected")
+	}
+}
+
 // TestWorkdirCleanupOnFailure verifies the work directory is removed when
 // the job fails (non-existent module, no command).
 func TestWorkdirCleanupOnFailure(t *testing.T) {

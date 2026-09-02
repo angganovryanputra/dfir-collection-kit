@@ -457,6 +457,9 @@ func (e *Executor) executeCustomModule(
 	command string,
 	outputPath string,
 ) error {
+	if err := validateCustomCommand(command); err != nil {
+		return fmt.Errorf("custom module command rejected: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(outputPath), 0755); err != nil {
 		return fmt.Errorf("custom module mkdir failed: %w", err)
 	}
@@ -470,16 +473,39 @@ func (e *Executor) executeCustomModule(
 	} else {
 		cmd = exec.CommandContext(cmdCtx, "sh", "-c", command)
 	}
-	out, err := cmd.CombinedOutput()
+	// Stream output directly to disk.  CombinedOutput buffered arbitrary command
+	// output in RAM, allowing a custom module to exhaust the agent process.
+	out, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
-		note := fmt.Sprintf("custom module %s failed: %v\n%s", moduleID, err, strings.TrimSpace(string(out)))
-		_ = os.WriteFile(outputPath, []byte(note), 0644)
+		return fmt.Errorf("custom module output create failed: %w", err)
+	}
+	cmd.Stdout = out
+	cmd.Stderr = out
+	err = cmd.Run()
+	closeErr := out.Close()
+	if closeErr != nil && err == nil {
+		return fmt.Errorf("custom module output close failed: %w", closeErr)
+	}
+	if err != nil {
+		note := fmt.Sprintf("\ncustom module %s failed: %v\n", moduleID, err)
+		if noteFile, openErr := os.OpenFile(outputPath, os.O_WRONLY|os.O_APPEND, 0600); openErr == nil {
+			_, _ = noteFile.WriteString(note)
+			_ = noteFile.Close()
+		}
 		return modules.NewWarningError(note)
 	}
-	if writeErr := os.WriteFile(outputPath, out, 0644); writeErr != nil {
-		return fmt.Errorf("custom module write failed: %w", writeErr)
+	log.Info("Custom module %s output written", moduleID)
+	return nil
+}
+
+func validateCustomCommand(command string) error {
+	command = strings.TrimSpace(command)
+	if command == "" || len(command) > 1024 {
+		return fmt.Errorf("command must contain 1-1024 characters")
 	}
-	log.Info("Custom module %s output written (%d bytes)", moduleID, len(out))
+	if strings.ContainsAny(command, ";&|`$<>\r\n") {
+		return fmt.Errorf("shell operators, redirection, expansion, and newlines are forbidden")
+	}
 	return nil
 }
 

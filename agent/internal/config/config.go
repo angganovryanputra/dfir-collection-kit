@@ -40,7 +40,8 @@ const (
 	DefaultMaxRetries        = 0    // 0 = retry forever until registration succeeds
 	DefaultRetryIntervalSec  = 15
 	AgentIDFile              = "agent_id.json"
-	DefaultBackendURL        = "http://localhost:8000/api/v1"
+	AgentTokenFile           = "agent_token"
+	DefaultBackendURL        = "https://localhost/api/v1"
 	ConfigFileName           = "dfir-agent.conf"
 )
 
@@ -49,6 +50,7 @@ type Config struct {
 	// Core connectivity
 	BackendURL        string
 	AgentSharedSecret string
+	AgentToken        string
 	AgentID           string
 	Hostname          string
 	IPAddress         string
@@ -190,15 +192,6 @@ func Load(f *Flags) (*Config, error) {
 
 	// ── Secret (required) ────────────────────────────────────────────────────
 	secret := str(f.Secret, "secret", "DFIR_AGENT_SECRET", "")
-	if secret == "" {
-		return nil, errors.New(
-			"agent secret is required.\n" +
-				"  Options:\n" +
-				"    1. Flag:       dfir-agent -secret YOUR_SECRET\n" +
-				"    2. Config:     secret = YOUR_SECRET  (in dfir-agent.conf)\n" +
-				"    3. Env var:    set DFIR_AGENT_SECRET=YOUR_SECRET",
-		)
-	}
 
 	// ── Portable data directory ───────────────────────────────────────────────
 	// Priority: --data-dir flag → config data_dir → DFIR_DATA_DIR env
@@ -217,6 +210,13 @@ func Load(f *Flags) (*Config, error) {
 		// Non-fatal — agent will still work, just ID won't persist
 		fmt.Fprintf(os.Stderr, "[WARN] Cannot create data dir %s: %v\n", dataDir, mkErr)
 	}
+	agentToken := str(nil, "agent_token", "DFIR_AGENT_TOKEN", "")
+	if agentToken == "" {
+		agentToken = loadAgentToken(dataDir)
+	}
+	if secret == "" && agentToken == "" {
+		return nil, errors.New("an enrollment secret or persisted agent token is required")
+	}
 
 	// ── Agent ID ──────────────────────────────────────────────────────────────
 	idOverride := str(f.AgentID, "agent_id", "DFIR_AGENT_ID", "")
@@ -228,6 +228,7 @@ func Load(f *Flags) (*Config, error) {
 	return &Config{
 		BackendURL:        str(f.Backend, "backend", "DFIR_BACKEND_URL", DefaultBackendURL),
 		AgentSharedSecret: secret,
+		AgentToken:        agentToken,
 		AgentID:           agentID,
 		Hostname:          str(f.Hostname, "hostname", "DFIR_HOSTNAME", ""),
 		IPAddress:         str(nil, "ip_address", "DFIR_IP_ADDRESS", ""),
@@ -258,6 +259,25 @@ func Load(f *Flags) (*Config, error) {
 }
 
 // LoadDryRun builds a minimal config for offline local module execution.
+func loadAgentToken(dataDir string) string {
+	data, err := os.ReadFile(filepath.Join(dataDir, AgentTokenFile))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// SaveAgentToken stores the one-time enrollment credential with owner-only permissions.
+func SaveAgentToken(dataDir, token string) error {
+	if token == "" {
+		return errors.New("agent token is empty")
+	}
+	if err := os.MkdirAll(dataDir, 0750); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dataDir, AgentTokenFile), []byte(token), 0600)
+}
+
 func LoadDryRun(f *Flags) (*Config, error) {
 	dataDir := ""
 	if f.DataDir != nil && *f.DataDir != "" {
