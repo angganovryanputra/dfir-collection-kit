@@ -15,6 +15,21 @@ from app.models.user import User
 security_scheme = HTTPBearer(auto_error=False)
 
 
+def get_request_token(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None,
+) -> str | None:
+    """Return a bearer token from an API client or the browser session cookie.
+
+    Header credentials take precedence so service/API clients retain their
+    existing authentication contract.  Browser code never needs access to the
+    cookie value because it is marked HttpOnly by the login endpoint.
+    """
+    if credentials and credentials.credentials:
+        return credentials.credentials
+    return request.cookies.get(settings.AUTH_COOKIE_NAME)
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         try:
@@ -40,9 +55,9 @@ async def get_current_user(
         if user:
             return user
         raise HTTPException(status_code=401, detail="Auth disabled but user missing")
-    if not credentials or not credentials.credentials:
-        raise HTTPException(status_code=401, detail="Missing bearer token")
-    token = credentials.credentials
+    token = get_request_token(request, credentials)
+    if not token:
+        raise HTTPException(status_code=401, detail="Missing authentication credentials")
     try:
         payload = decode_access_token(token)
     except JWTError:

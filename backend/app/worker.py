@@ -11,11 +11,31 @@ import asyncio
 import logging
 import os
 from pathlib import Path
+from typing import Awaitable, TypeVar
 
 from celery import Celery
 from celery.exceptions import SoftTimeLimitExceeded
 
 logger = logging.getLogger(__name__)
+_TaskResult = TypeVar("_TaskResult")
+
+
+async def _run_with_disposed_engine(coroutine: Awaitable[_TaskResult]) -> _TaskResult:
+    """Run a task coroutine and release asyncpg connections in its own loop.
+
+    Celery prefork workers execute more than one task over their lifetime while
+    ``asyncio.run`` creates a new event loop for each task.  An asyncpg
+    connection kept in SQLAlchemy's pool belongs to the loop that created it;
+    retaining it caused the next scheduled task to fail with "attached to a
+    different loop".  Dispose in the originating loop so later tasks open a
+    connection bound to their own loop.
+    """
+    try:
+        return await coroutine
+    finally:
+        from app.db.session import engine
+
+        await engine.dispose()
 
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 result_backend = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
@@ -65,7 +85,7 @@ def run_pipeline_task(self, incident_id: str, job_id: str, base_path: str) -> di
 
     logger.info("Celery: starting pipeline for job %s (incident %s)", job_id, incident_id)
     try:
-        asyncio.run(run_pipeline_background(incident_id, job_id, Path(base_path)))
+        asyncio.run(_run_with_disposed_engine(run_pipeline_background(incident_id, job_id, Path(base_path))))
         logger.info("Celery: pipeline completed for job %s", job_id)
         return {"status": "done", "job_id": job_id}
     except SoftTimeLimitExceeded:
@@ -83,7 +103,11 @@ def process_s3_upload_task(self, incident_id: str, job_id: str, base_path: str, 
     """
     logger.info("Celery: starting S3 processing for job %s", job_id)
     try:
-        asyncio.run(process_s3_upload_background(incident_id, job_id, Path(base_path), object_key))
+        asyncio.run(
+            _run_with_disposed_engine(
+                process_s3_upload_background(incident_id, job_id, Path(base_path), object_key)
+            )
+        )
         logger.info("Celery: S3 processing completed for job %s", job_id)
         return {"status": "done", "job_id": job_id}
     except SoftTimeLimitExceeded:
@@ -104,6 +128,7 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
     from app.core.evidence_files import extract_zip, hash_file, write_hash_manifest, write_lock_marker
     from app.crud.chain_of_custody import create_entry
     from app.crud.evidence import create_folder, create_item
+    from app.crud.job import sync_incident_collection_status
     from app.models.job import Job
     from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
     from app.schemas.evidence import EvidenceFolderCreate, EvidenceItemCreate
@@ -215,6 +240,7 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
             if job:
                 job.status = "completed"
                 job.completed_at = datetime.now(timezone.utc)
+                await sync_incident_collection_status(db, incident_id)
                 await db.commit()
                 
                 timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -238,6 +264,7 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
             if job:
                 job.status = "failed"
                 job.error_message = str(exc)[:500]
+                await sync_incident_collection_status(db, incident_id)
                 await db.commit()
             raise
 
@@ -245,7 +272,7 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
 @celery_app.task(name="dfir.check_scheduled_collections")
 def check_scheduled_collections_task() -> dict:
     """Celery Beat task: dispatch pending scheduled collections whose next_run_at has passed."""
-    asyncio.run(_run_scheduled_collections())
+    asyncio.run(_run_with_disposed_engine(_run_scheduled_collections()))
     return {"status": "checked"}
 
 
@@ -306,7 +333,7 @@ def run_scheduled_collection_task(self, incident_id: str, schedule_id: str) -> d
     """Trigger a collection for a scheduled collection entry."""
     logger.info("Running scheduled collection %s for incident %s", schedule_id, incident_id)
     try:
-        asyncio.run(_trigger_scheduled_collection(incident_id, schedule_id))
+        asyncio.run(_run_with_disposed_engine(_trigger_scheduled_collection(incident_id, schedule_id)))
         return {"status": "done", "schedule_id": schedule_id}
     except Exception as exc:
         logger.error("Scheduled collection %s failed: %s", schedule_id, exc, exc_info=True)
@@ -314,9 +341,12 @@ def run_scheduled_collection_task(self, incident_id: str, schedule_id: str) -> d
 
 
 async def _trigger_scheduled_collection(incident_id: str, schedule_id: str) -> None:
-    """Look up the ScheduledCollection and create a collection job for it."""
+    """Create one uniquely identified, OS-compatible job per scheduled target."""
+    from uuid import uuid4
+
     from app.db.session import AsyncSessionLocal
-    from app.models.platform_features import ScheduledCollection
+    from app.models.device import Device
+    from app.models.platform_features import CustomModule, ScheduledCollection
     from app.crud.incident import get_incident, update_incident
     from app.crud.job import create_job
     from app.schemas.incident import IncidentUpdate
@@ -338,37 +368,61 @@ async def _trigger_scheduled_collection(incident_id: str, schedule_id: str) -> N
             logger.warning("Incident %s not available for scheduled collection", incident_id)
             return
 
-        os_name = normalize_os_name("windows")  # default
-        try:
-            if sc.module_ids:
-                modules = build_modules(module_ids=list(sc.module_ids), os_name=os_name)
-            elif sc.profile:
-                modules = build_modules(
-                    module_ids=get_profile_modules(sc.profile, os_name or "windows"),
-                    os_name=os_name,
-                )
-            else:
-                modules = build_modules(os_name=os_name)
-        except ValueError as exc:
-            logger.error("Scheduled collection %s: module build failed: %s", schedule_id, exc)
-            return
-
-        job_id = f"JOB-{incident_id}-SCHED-{schedule_id[:8]}"
-        await create_job(
-            db,
-            JobCreate(id=job_id, incident_id=incident_id),
-            modules,
-            f"{incident_id}/{job_id}",
+        device_result = await db.execute(
+            select(Device).where(Device.hostname.in_(incident.target_endpoints or []))
         )
+        devices = list(device_result.scalars().all())
+        custom_result = await db.execute(select(CustomModule).where(CustomModule.enabled == True))  # noqa: E712
+        custom_by_os: dict[str, list[dict]] = {}
+        for module in custom_result.scalars():
+            custom_by_os.setdefault(module.os, []).append({
+                "module_id": module.id,
+                "output_relpath": module.output_relpath,
+                "params": {},
+                "command": module.command,
+            })
+
+        targets: list[Device | None] = devices or [None]
+        job_ids: list[str] = []
+        for device in targets:
+            os_name = normalize_os_name(device.os if device else None) or "windows"
+            try:
+                if sc.module_ids:
+                    modules = build_modules(module_ids=list(sc.module_ids), os_name=os_name)
+                elif sc.profile:
+                    modules = build_modules(
+                        module_ids=get_profile_modules(sc.profile, os_name), os_name=os_name
+                    )
+                else:
+                    modules = build_modules(os_name=os_name)
+            except ValueError as exc:
+                logger.error("Scheduled collection %s for OS %s: module build failed: %s", schedule_id, os_name, exc)
+                continue
+
+            modules.extend(custom_by_os.get(os_name, []))
+            # Each due occurrence needs its own ID. The prior deterministic ID
+            # prevented every schedule from running more than once.
+            job_id = f"JOB-{incident_id}-SCHED-{schedule_id[:8]}-{uuid4().hex[:10]}"
+            await create_job(
+                db,
+                JobCreate(id=job_id, incident_id=incident_id, agent_id=device.id if device else None),
+                modules,
+                f"{incident_id}/{job_id}",
+            )
+            job_ids.append(job_id)
+
+        if not job_ids:
+            logger.error("Scheduled collection %s did not create any compatible jobs", schedule_id)
+            return
         await update_incident(db, incident_id, IncidentUpdate(status="COLLECTION_IN_PROGRESS"))
         await db.commit()
-        logger.info("Scheduled collection job created: %s", job_id)
+        logger.info("Scheduled collection jobs created: %s", ", ".join(job_ids))
 
 
 @celery_app.task(name="dfir.expire_legal_holds")
 def expire_legal_holds_task() -> dict:
     """Celery Beat task: mark expired legal holds as EXPIRED."""
-    asyncio.run(_expire_legal_holds())
+    asyncio.run(_run_with_disposed_engine(_expire_legal_holds()))
     return {"status": "checked"}
 
 
@@ -403,7 +457,7 @@ def verify_evidence_integrity_task() -> dict:
     Periodically re-hash all LOCKED evidence files and compare against the stored
     manifest.  Any mismatch is logged as a TAMPER_DETECTED audit event.
     """
-    asyncio.run(_verify_evidence_integrity())
+    asyncio.run(_run_with_disposed_engine(_verify_evidence_integrity()))
     return {"status": "done"}
 
 
@@ -481,7 +535,7 @@ def run_super_timeline_task(self, incident_id: str, base_path: str) -> dict:
 
     logger.info("Celery: starting super timeline for incident %s", incident_id)
     try:
-        asyncio.run(build_super_timeline_background(incident_id, Path(base_path)))
+        asyncio.run(_run_with_disposed_engine(build_super_timeline_background(incident_id, Path(base_path))))
         logger.info("Celery: super timeline completed for incident %s", incident_id)
         return {"status": "done", "incident_id": incident_id}
     except SoftTimeLimitExceeded:

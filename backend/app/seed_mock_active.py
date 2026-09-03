@@ -71,7 +71,7 @@ _ACTIVE_INCIDENTS = [
     {
         "id": "INC-RANSOM-TEMPEST",
         "type": "ransomware",
-        "status": "COLLECTING",
+        "status": "COLLECTION_IN_PROGRESS",
         "target_endpoints": ["LAPTOP-CEO01", "INTRANET-SRV01", "FILESERVER-03"],
         "collection_progress": 65,
         "collection_phase": "Collecting volatile data",
@@ -80,7 +80,7 @@ _ACTIVE_INCIDENTS = [
     {
         "id": "INC-BREACH-TIDE",
         "type": "data_breach",
-        "status": "ANALYZING",
+        "status": "COLLECTION_COMPLETE",
         "target_endpoints": ["MAILSERVER-02", "SHAREPOINT-01"],
         "collection_progress": 100,
         "collection_phase": "Processing pipeline",
@@ -98,7 +98,7 @@ _ACTIVE_INCIDENTS = [
     {
         "id": "INC-MALWARE-STORM",
         "type": "malware",
-        "status": "COLLECTING",
+        "status": "COLLECTION_IN_PROGRESS",
         "target_endpoints": ["LAPTOP-HR03", "WORKSTATION-03"],
         "collection_progress": 40,
         "collection_phase": "Collecting logs",
@@ -337,10 +337,10 @@ async def seed_all(clean: bool = False) -> None:
     print(f"  New collectors : {len(_NEW_COLLECTORS)}  (GAMMA=ONLINE, DELTA=DEGRADED, ECHO=OFFLINE)")
     print(f"  New incidents  : {len(_ACTIVE_INCIDENTS) + 1}")
     print(f"    INC-APT-NIGHTFALL       COLLECTION_COMPLETE  (super timeline built)")
-    print(f"    INC-RANSOM-TEMPEST      COLLECTING           65%")
-    print(f"    INC-BREACH-TIDE         ANALYZING            100%")
+    print(f"    INC-RANSOM-TEMPEST      COLLECTION_IN_PROGRESS 65%")
+    print(f"    INC-BREACH-TIDE         COLLECTION_COMPLETE  100%")
     print(f"    INC-INSIDER-FROST       PENDING              0%")
-    print(f"    INC-MALWARE-STORM       COLLECTING           40%")
+    print(f"    INC-MALWARE-STORM       COLLECTION_IN_PROGRESS 40%")
     print(f"    INC-APT-AURORA          CLOSED")
 
 

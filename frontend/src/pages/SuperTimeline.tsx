@@ -65,6 +65,7 @@ export default function SuperTimeline() {
     });
 
     const [selectedEvent, setSelectedEvent] = useState<Record<string, unknown> | null>(null);
+    const [isEventDetailCollapsed, setIsEventDetailCollapsed] = useState(false);
     const [compareEvents, setCompareEvents] = useState<Record<string, unknown>[] | null>(null);
     const [hideLmGraph, setHideLmGraph] = useState(false);
     const [focusedRowIndex, setFocusedRowIndex] = useState(-1);
@@ -313,7 +314,7 @@ export default function SuperTimeline() {
         const s = new Set<Record<string, unknown>>();
         // LM detection logic here if needed for visual cues
         return s;
-    }, [lmDetections, timelineData?.data]);
+    }, []);
 
     const activeFilterCount = useMemo(() => 
         (debouncedSearch ? 1 : 0) + (dateFilterActive ? 1 : 0) + (allHostsActive ? 0 : 1) + (allSourcesActive ? 0 : 1),
@@ -485,7 +486,7 @@ export default function SuperTimeline() {
                         <div className="flex-1 flex min-h-0 relative">
                             <div className={cn(
                                 "flex-1 flex flex-col min-w-0 transition-all duration-300",
-                                (selectedEvent || compareEvents) ? "mr-[400px]" : "mr-0"
+                                compareEvents ? "mr-[400px]" : selectedEvent ? (isEventDetailCollapsed ? "mr-12" : "mr-[500px]") : "mr-0"
                             )}>
                                 {!showBookmarks && viewMode === "table" && timelineData && (
                                     <div className="px-6 py-2 bg-background/20 border-b border-border/40">
@@ -527,6 +528,7 @@ export default function SuperTimeline() {
                                                         else setCompareEvents([...compareEvents, row]);
                                                     } else {
                                                         setSelectedEvent(row);
+                                                        setIsEventDetailCollapsed(false);
                                                         setFocusedRowIndex(i);
                                                     }
                                                 } }
@@ -561,7 +563,12 @@ export default function SuperTimeline() {
                 <EventDetailPanel 
                     event={selectedEvent}
                     knownHosts={timelineData?.hosts ?? []}
-                    onClose={() => setSelectedEvent(null)}
+                    onClose={() => {
+                        setSelectedEvent(null);
+                        setIsEventDetailCollapsed(false);
+                    }}
+                    isCollapsed={isEventDetailCollapsed}
+                    onToggleCollapsed={() => setIsEventDetailCollapsed((collapsed) => !collapsed)}
                     onFilterSearch={(q) => { setSearchInput(q); setPage(1); }}
                     incidentId={incidentId ?? ""}
                     isBookmarked={!!bookmarks.find(b => b.eventHash === (eventHashCache.get(selectedEvent) ?? hashEvent(selectedEvent)))}

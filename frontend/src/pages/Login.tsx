@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { WarningBanner } from "@/components/WarningBanner";
 import { FormLabel } from "@/components/common/FormLabel";
 import { InputWithIcon } from "@/components/common/InputWithIcon";
-import { Shield, Lock, User, Terminal, Cpu, Radio, Radar, Server, AlertCircle, Database } from "lucide-react";
+import { Shield, Lock, User, Terminal, Cpu, Radio, Radar, Server, AlertCircle, Database, Eye, EyeOff } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Dialog,
@@ -14,6 +14,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { apiGet, apiPost } from "@/lib/api";
+import { clearStoredAuth, setStoredAuth } from "@/lib/auth";
 
 const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
@@ -45,15 +47,6 @@ type SequenceStep = {
   jitter?: number;
 };
 
-type DiagnosticsResponse = {
-  db_status?: string;
-  server_time?: string | null;
-  backend_version?: string | null;
-  client_ip?: string | null;
-  collectors_online?: number | null;
-  collectors_total?: number | null;
-};
-
 type DiagnosticsState = {
   dbStatus: DbStatus;
   handshakeLatencyMs: number | null;
@@ -61,6 +54,14 @@ type DiagnosticsState = {
   backendVersion: string | null;
   collectorsOnline: number | null;
   collectorsTotal: number | null;
+};
+
+type ConnectionContext = {
+  client_ip?: string | null;
+  ip_version?: number | null;
+  ip_scope?: "public" | "private" | "unknown";
+  secure_transport?: boolean;
+  server_time?: string | null;
 };
 
 type ConnectionInfo = {
@@ -190,22 +191,27 @@ const formatServerTimestamp = (iso: string | null): string => {
   return date.toLocaleTimeString();
 };
 
-const decodeJwt = (token: string): Record<string, unknown> | null => {
-  try {
-    const [, payload] = token.split(".");
-    if (!payload) return null;
-    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
-    const decoded = atob(normalized);
-    return JSON.parse(decoded);
-  } catch {
-    return null;
-  }
+const maskIpAddress = (ip: string | null | undefined): string => {
+  if (!ip) return "resolving...";
+  if (ip.includes(":")) return `${ip.slice(0, 5)}:••••:••••`;
+  const parts = ip.split(".");
+  return parts.length === 4 ? `${parts[0]}.${parts[1]}.•••.•••` : "protected";
 };
 
-const computeTokenTTLMinutes = (token: string): number | null => {
-  const payload = decodeJwt(token);
-  if (!payload || typeof payload.exp !== "number") return null;
-  const diff = payload.exp * 1000 - Date.now();
+const getBrowserLabel = (): string => {
+  const ua = navigator.userAgent;
+  if (/Edg\//.test(ua)) return "Microsoft Edge";
+  if (/Firefox\//.test(ua)) return "Firefox";
+  if (/Chrome\//.test(ua)) return "Chrome";
+  if (/Safari\//.test(ua)) return "Safari";
+  return "Unknown browser";
+};
+
+const getTimezoneLabel = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || "Unknown";
+
+const computeSessionTTLMinutes = (expiresAt?: string): number | null => {
+  if (!expiresAt) return null;
+  const diff = Date.parse(expiresAt) - Date.now();
   if (diff <= 0) return null;
   return Math.round(diff / 60000);
 };
@@ -352,6 +358,8 @@ export default function Login() {
     username: string;
     role: string;
     clientIp: string | null;
+    ipVersion: number | null;
+    secureTransport: boolean;
     tokenTTLMinutes: number | null;
     redirectTo: string;
   } | null>(null);
@@ -380,6 +388,8 @@ export default function Login() {
   const [connectionLabel, setConnectionLabel] = useState(formatConnectionLabel(connectionInfoRef.current));
   const connectionLabelRef = useRef(connectionLabel);
   const [clientIp, setClientIp] = useState<string | null>(null);
+  const [connectionContext, setConnectionContext] = useState<ConnectionContext | null>(null);
+  const [revealPublicIp, setRevealPublicIp] = useState(false);
 
   const bootContextRef = useRef<SequenceContext>({
     username: "",
@@ -448,6 +458,32 @@ export default function Login() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     setClientIp(null);
+  }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 1500);
+
+    void fetch(`${API_BASE_URL}/status/connection-context`, {
+      credentials: "include",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const context = await response.json() as ConnectionContext;
+        if (!isMountedRef.current) return;
+        setConnectionContext(context);
+        if (context.client_ip) setClientIp(context.client_ip);
+      })
+      .catch(() => {
+        // Connection context is optional and must never delay authentication.
+      })
+      .finally(() => window.clearTimeout(timeout));
+
+    return () => {
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
   }, []);
 
   const normalizeDbStatus = (status?: string | null): DbStatus => {
@@ -597,9 +633,9 @@ export default function Login() {
         username: "",
         role: "",
         tokenTTLMinutes: null,
-        clientIp,
+        clientIp: bootContextRef.current.clientIp,
         connectionLabel: connectionLabelRef.current,
-        logoutReason,
+        logoutReason: bootContextRef.current.logoutReason,
       };
       await playSequence(
         bootSteps,
@@ -694,50 +730,40 @@ export default function Login() {
       await runPreAuth();
 
       try {
-        const { apiPost, apiGet } = await import("@/lib/api");
-        const response = await apiPost<{ access_token: string; username?: string; role?: CurrentUserResponse["role"] }>("/auth/login", {
+        const response = await apiPost<{
+          username?: string;
+          role?: CurrentUserResponse["role"];
+          expires_at?: string;
+          client_ip?: string | null;
+        }>("/auth/login", {
           username,
           password,
         });
 
-        // Store token immediately so all subsequent authenticated requests have credentials
-        localStorage.setItem(
-          "dfir_auth",
-          JSON.stringify({
-            username: response.username ?? username,
-            role: response.role ?? "",
-            token: response.access_token,
-          })
-        );
+        if (!response.username || !response.role || !response.expires_at) {
+          throw new Error(JSON.stringify({ detail: "Invalid login response", status: 502 }));
+        }
+        // The credential itself is HttpOnly and never exposed to JavaScript.
+        setStoredAuth({ username: response.username, role: response.role, expiresAt: response.expires_at });
 
-        if (!clientIp) {
-          try {
-            const diag = await apiGet<DiagnosticsResponse>("/status/diagnostics");
-            if (diag.client_ip) {
-              setClientIp(diag.client_ip);
-              authContextRef.current.clientIp = diag.client_ip;
-            }
-          } catch {
-            // diagnostics fetch during login is optional
-          }
+        if (response.client_ip) {
+          setClientIp(response.client_ip);
+          authContextRef.current.clientIp = response.client_ip;
+          setConnectionContext((current) => ({
+            ...current,
+            client_ip: response.client_ip,
+          }));
         }
 
-        const ttl = computeTokenTTLMinutes(response.access_token);
+        const ttl = computeSessionTTLMinutes(response.expires_at);
         authContextRef.current.tokenTTLMinutes = ttl;
 
         await completeSequence(successAuthSteps);
 
         try {
           const me = await apiGet<CurrentUserResponse>("/users/me");
-          // Update with canonical user data from the server
-          localStorage.setItem(
-            "dfir_auth",
-            JSON.stringify({
-              username: me.username,
-              role: me.role,
-              token: response.access_token,
-            })
-          );
+          // Update the non-sensitive display metadata with canonical user data.
+          setStoredAuth({ username: me.username, role: me.role, expiresAt: response.expires_at });
         } catch {
           // fallback to token-provided role already stored above
         }
@@ -753,6 +779,8 @@ export default function Login() {
             username: response.username ?? username,
             role: response.role ?? authContextRef.current.role ?? "",
             clientIp: authContextRef.current.clientIp,
+            ipVersion: connectionContext?.ip_version ?? null,
+            secureTransport: connectionContext?.secure_transport ?? window.location.protocol === "https:",
             tokenTTLMinutes: authContextRef.current.tokenTTLMinutes,
             redirectTo,
           });
@@ -760,7 +788,7 @@ export default function Login() {
           setLoginSuccess(true);
         }
       } catch (error) {
-        localStorage.removeItem("dfir_auth");
+        clearStoredAuth();
         const parsed = parseErrorMessage(error);
         if (parsed.clientIp) {
           authContextRef.current.clientIp = parsed.clientIp;
@@ -836,8 +864,20 @@ export default function Login() {
                   <div className={`font-bold uppercase ${roleColor}`}>{loginSuccessData.role}</div>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-muted-foreground text-xs uppercase tracking-wider">CLIENT IP</span>
-                  <div className="text-foreground">{loginSuccessData.clientIp ?? "—"}</div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-muted-foreground text-xs uppercase tracking-wider">VISITOR IP</span>
+                    <button
+                      type="button"
+                      onClick={() => setRevealPublicIp((visible) => !visible)}
+                      className="text-primary hover:text-primary/80"
+                      aria-label={revealPublicIp ? "Mask public IP" : "Reveal public IP"}
+                    >
+                      {revealPublicIp ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    </button>
+                  </div>
+                  <div className="text-foreground">
+                    {revealPublicIp ? loginSuccessData.clientIp ?? "—" : maskIpAddress(loginSuccessData.clientIp)}
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <span className="text-muted-foreground text-xs uppercase tracking-wider">SESSION TTL</span>
@@ -847,7 +887,20 @@ export default function Login() {
                 </div>
               </div>
               <div className="pt-2 border-t border-border space-y-1">
-                <span className="text-muted-foreground text-xs uppercase tracking-wider">AUTH TIMESTAMP</span>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <span className="text-muted-foreground uppercase tracking-wider">TRANSPORT</span>
+                    <div className="text-foreground mt-1">
+                      {loginSuccessData.secureTransport ? "HTTPS VERIFIED" : "UNVERIFIED"}
+                      {loginSuccessData.ipVersion ? ` · IPv${loginSuccessData.ipVersion}` : ""}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground uppercase tracking-wider">CLIENT PROFILE</span>
+                    <div className="text-foreground mt-1 truncate">{getBrowserLabel()}</div>
+                  </div>
+                </div>
+                <span className="text-muted-foreground text-xs uppercase tracking-wider block mt-3">AUTH TIMESTAMP</span>
                 <div className="text-foreground text-xs">{new Date().toISOString()}</div>
               </div>
             </div>
@@ -992,6 +1045,29 @@ export default function Login() {
                   <Terminal className="w-4 h-4 text-primary" />
                   <span className="text-muted-foreground">BUILD:</span>
                   <span className="text-primary">{diagnostics.backendVersion ?? "Detecting..."}</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4 border-t border-border/60 pt-3 font-mono text-xs">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Radar className="w-4 h-4 text-primary shrink-0" />
+                  <span className="text-muted-foreground">VISITOR IP:</span>
+                  <span className="text-primary truncate">
+                    {maskIpAddress(connectionContext?.client_ip)}
+                    {connectionContext?.ip_scope === "private" ? " (PRIVATE/NAT)" : ""}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 min-w-0">
+                  <Lock className="w-4 h-4 text-primary shrink-0" />
+                  <span className="text-muted-foreground">LINK:</span>
+                  <span className="text-primary truncate">
+                    {connectionContext ? (connectionContext.secure_transport ? "HTTPS VERIFIED" : "UNVERIFIED") : "DETECTING..."}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 min-w-0">
+                  <User className="w-4 h-4 text-primary shrink-0" />
+                  <span className="text-muted-foreground">CLIENT:</span>
+                  <span className="text-primary truncate">{getBrowserLabel()} · {getTimezoneLabel()}</span>
                 </div>
               </div>
 
@@ -1148,10 +1224,11 @@ export default function Login() {
 
                 {/* Username */}
                 <div className="space-y-2">
-                  <FormLabel>
+                  <FormLabel htmlFor="login-username">
                     Username
                   </FormLabel>
                   <InputWithIcon
+                    id="login-username"
                     icon={<User className="w-4 h-4" />}
                     type="text"
                     value={username}
@@ -1169,10 +1246,11 @@ export default function Login() {
 
                 {/* Password */}
                 <div className="space-y-2">
-                  <FormLabel>
+                  <FormLabel htmlFor="login-password">
                     Password
                   </FormLabel>
                   <InputWithIcon
+                    id="login-password"
                     icon={<Lock className="w-4 h-4" />}
                     type="password"
                     value={password}

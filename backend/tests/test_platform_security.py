@@ -11,11 +11,6 @@ from fastapi import HTTPException
 
 # ── Agent command endpoint authentication (P0) ──────────────────────────────
 
-def _set_agent_secret(monkeypatch, value: str) -> None:
-    from app.core.config import settings
-    monkeypatch.setattr(settings, "AGENT_SHARED_SECRET", value)
-
-
 def _set_agent_token(monkeypatch, value: str) -> None:
     from app.api.v1.endpoints.agents import _token_digest
     from app.core.config import settings
@@ -56,19 +51,24 @@ async def test_poll_accepts_valid_token(monkeypatch):
 
 async def test_result_rejects_missing_token(monkeypatch):
     from app.api.v1.endpoints.agent_commands import post_command_result
-    _set_agent_secret(monkeypatch, "unit-test-secret")
+    _set_agent_token(monkeypatch, "unit-test-agent-token")
     with pytest.raises(HTTPException) as exc:
         await post_command_result("CMD-X", {"output": "x"}, agent_token=None)
     assert exc.value.status_code == 401
 
 
 async def test_result_accepts_valid_token_no_subscriber(monkeypatch):
-    from app.api.v1.endpoints.agent_commands import post_command_result
-    _set_agent_secret(monkeypatch, "unit-test-secret")
-    result = await post_command_result(
-        "CMD-NOSUB", {"output": "x", "exit_code": 0}, agent_token="unit-test-secret"
-    )
-    assert result == {"status": "no_subscriber"}
+    from app.api.v1.endpoints.agent_commands import _command_agents, post_command_result
+
+    _set_agent_token(monkeypatch, "unit-test-agent-token")
+    _command_agents["CMD-NOSUB"] = "AGT-TEST"
+    try:
+        result = await post_command_result(
+            "CMD-NOSUB", {"output": "x", "exit_code": 0}, agent_token="unit-test-agent-token", db=None
+        )
+        assert result == {"status": "no_subscriber"}
+    finally:
+        _command_agents.pop("CMD-NOSUB", None)
 
 
 # ── AI endpoint incident_id validation (P0) ─────────────────────────────────

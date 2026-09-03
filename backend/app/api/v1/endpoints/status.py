@@ -1,14 +1,16 @@
 from datetime import datetime, timezone
+import ipaddress
 import shutil
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.deps import get_db, require_roles
+from app.core.request_context import get_client_ip, is_secure_transport
 from app.models.collector import Collector
-from app.schemas.status import DiagnosticsResponse
+from app.schemas.status import ConnectionContextResponse, DiagnosticsResponse
 from app.services.system_settings_service import get_runtime_settings
 
 router = APIRouter()
@@ -20,6 +22,27 @@ async def health_check() -> dict:
     return {"status": "ok"}
 
 
+@router.get("/connection-context", response_model=ConnectionContextResponse)
+async def get_connection_context(request: Request, response: Response) -> ConnectionContextResponse:
+    """Expose only visitor metadata required by the unauthenticated login UI."""
+    client_ip = get_client_ip(request)
+    try:
+        address = ipaddress.ip_address(client_ip)
+        ip_version = address.version
+        ip_scope = "public" if address.is_global else "private"
+    except ValueError:
+        ip_version = None
+        ip_scope = "unknown"
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return ConnectionContextResponse(
+        client_ip=client_ip if client_ip != "unknown" else None,
+        ip_version=ip_version,
+        ip_scope=ip_scope,
+        secure_transport=is_secure_transport(request),
+        server_time=datetime.now(timezone.utc),
+    )
+
+
 @router.get("/diagnostics", response_model=DiagnosticsResponse, dependencies=[Depends(require_roles("admin", "operator"))])
 async def get_diagnostics(request: Request, db: AsyncSession = Depends(get_db)) -> DiagnosticsResponse:
     db_status = "unknown"
@@ -29,7 +52,7 @@ async def get_diagnostics(request: Request, db: AsyncSession = Depends(get_db)) 
     except Exception:
         db_status = "error"
 
-    client_ip = request.client.host if request.client else None
+    client_ip = get_client_ip(request)
 
     collectors_total = 0
     collectors_online = 0

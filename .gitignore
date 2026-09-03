@@ -59,6 +59,10 @@ lerna-debug.log*
 .dockerignore
 *.log
 
+# TLS material is supplied at runtime through Docker secrets.  Never commit
+# certificates or private keys, including local self-signed development keys.
+nginx/certs/*.pem
+
 # Database
 *.db
 *.sqlite
@@ -83,6 +87,7 @@ logs/
 tmp/
 temp/
 *.tmp
+/backups/
 
 # Backup files
 *.bak
@@ -90,8 +95,18 @@ temp/
  
  # Local frontend artifacts
  frontend/Dockerfile.dev
- frontend/src/App.test.tsx
- frontend/test.html
+frontend/src/App.test.tsx
+frontend/test.html
+# The Python build-directory rule above is intentionally broad, but frontend
+# source utilities are application code and must remain versioned.
+!frontend/src/lib/
+!frontend/src/lib/*.ts
+!frontend/src/lib/*.tsx
+# TLS certificates — never commit private keys
+nginx/certs/*.pem
+nginx/certs/*.key
+nginx/certs/*.crt
+
 # Added by code-review-graph
 .code-review-graph/
 .codegraph/

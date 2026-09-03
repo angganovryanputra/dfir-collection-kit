@@ -19,17 +19,6 @@ const getBaseUrl = () => {
   return envUrl?.trim() || DEFAULT_BASE_URL;
 };
 
-const getAuthToken = () => {
-  const raw = localStorage.getItem("dfir_auth");
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as { token?: string };
-    return parsed.token ?? null;
-  } catch {
-    return null;
-  }
-};
-
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 const request = async <T>(
@@ -41,8 +30,6 @@ const request = async <T>(
   const baseUrl = getBaseUrl();
   const url = `${baseUrl}${path}`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const token = getAuthToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
 
   const skipTimeout = NO_TIMEOUT_PATHS.some((p) => path.includes(p));
   const timeoutMs = skipTimeout ? 0 : METHOD_TIMEOUT_MS[method];
@@ -71,6 +58,7 @@ const request = async <T>(
       const response = await fetch(url, {
         method,
         headers,
+        credentials: "include",
         body: body ? JSON.stringify(body) : undefined,
         signal: combinedSignal,
       });

@@ -22,6 +22,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { apiPost } from "@/lib/api";
+import { clearStoredAuth, getStoredRole } from "@/lib/auth";
 
 interface NavItem {
   label: string;
@@ -81,6 +82,7 @@ interface AppSidebarProps {
   activeIncidents?: number;
   onlineCollectors?: number;
   totalCollectors?: number;
+  activeIncidentId?: string;
   isCollapsed: boolean;
   onCollapsedChange: (next: boolean) => void;
 }
@@ -89,28 +91,20 @@ export function AppSidebar({
   activeIncidents = 0,
   onlineCollectors = 0,
   totalCollectors = 0,
+  activeIncidentId,
   isCollapsed,
   onCollapsedChange,
 }: AppSidebarProps) {
   const navigate = useNavigate();
   const location = useLocation();
-  const authRole = (() => {
-    const raw = localStorage.getItem("dfir_auth");
-    if (!raw) return null;
-    try {
-      const parsed = JSON.parse(raw) as { role?: string };
-      return parsed.role ?? null;
-    } catch {
-      return null;
-    }
-  })();
+  const authRole = getStoredRole();
   const isAdmin = authRole === "admin";
 
   const handleLogout = () => {
     void apiPost("/auth/logout", {}).catch(() => {
       // ignore logout telemetry failures
     });
-    localStorage.removeItem("dfir_auth");
+    clearStoredAuth();
     localStorage.removeItem("dfir_logout_reason");
     localStorage.setItem(
       "dfir_logout_reason",
@@ -123,13 +117,16 @@ export function AppSidebar({
   };
 
   const NavButton = ({ item }: { item: NavItem }) => {
+    const targetPath = item.path === "/evidence" && activeIncidentId
+      ? `/evidence/${activeIncidentId}`
+      : item.path;
     const isActive =
-      location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
+      location.pathname === targetPath || location.pathname.startsWith(`${targetPath}/`);
     const Icon = item.icon;
 
     return (
       <button
-        onClick={() => navigate(item.path)}
+        onClick={() => navigate(targetPath)}
         className={cn(
           "w-full flex items-center gap-3 px-3 py-2.5 font-mono text-xs uppercase tracking-wider transition-all",
           isActive

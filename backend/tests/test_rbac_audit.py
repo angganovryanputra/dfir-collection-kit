@@ -38,8 +38,12 @@ async def test_login_success_includes_role_and_audit(client, db_session):
     assert payload["role"] == "admin"
     assert payload["user_id"] == user.id
     assert payload["expires_at"]
+    assert payload["access_token"] is None
 
-    claims = decode_access_token(payload["access_token"])
+    session_cookie = response.cookies.get("dfir_session")
+    assert session_cookie
+    assert "HttpOnly" in response.headers["set-cookie"]
+    claims = decode_access_token(session_cookie)
     assert claims.get("role") == "admin"
     assert claims.get("user_id") == user.id
     assert claims.get("username") == "ADMIN"
@@ -77,11 +81,8 @@ async def test_viewer_denied_for_write_endpoint(client, db_session):
         json={"username": "VIEWER", "password": "secret"},
     )
     assert login.status_code == 200
-    token = login.json()["access_token"]
-
     response = await client.post(
         "/api/v1/incidents",
-        headers={"Authorization": f"Bearer {token}"},
         json={
             "id": "INC-TEST-001",
             "type": "RANSOMWARE",
@@ -108,11 +109,8 @@ async def test_incident_creation_records_audit(client, db_session):
         json={"username": "OPERATOR", "password": "secret"},
     )
     assert login.status_code == 200
-    token = login.json()["access_token"]
-
     response = await client.post(
         "/api/v1/incidents",
-        headers={"Authorization": f"Bearer {token}"},
         json={
             "id": "INC-TEST-002",
             "type": "RANSOMWARE",

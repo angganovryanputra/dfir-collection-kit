@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -23,7 +24,7 @@ from app.db.session import AsyncSessionLocal
 from app.models.analytics import AttackChain, IOCIndicator
 from app.models.collector import Collector
 from app.models.device import Device
-from app.models.evidence import EvidenceFolder
+from app.models.evidence import EvidenceFolder, EvidenceItem
 from app.models.incident import Incident
 from app.models.job import Job
 from app.models.platform_features import (
@@ -142,6 +143,13 @@ _EVIDENCE_FOLDERS = [
         [312, 289, 347, 198],
         ["1.2 GB", "980 MB", "1.5 GB", "650 MB"],
     )
+]
+
+# Harmless fixtures make the demo evidence detail and signed-export workflow
+# executable without bundling endpoint data or malware.
+_DEMO_EVIDENCE = [
+    {"id": "demo-evidence-manifest", "name": "demo-collection-manifest.json", "type": "MANIFEST", "content": {"fixture": True, "purpose": "DFIR Collection Kit demo export validation", "source_host": "WORKSTATION-01"}},
+    {"id": "demo-evidence-readme", "name": "README-DEMO-EVIDENCE.txt", "type": "TEXT", "content": "Synthetic DFIR demo artifact. No endpoint data or malware is included.\n"},
 ]
 
 # ---------------------------------------------------------------------------
@@ -500,8 +508,9 @@ async def seed_all(base_path: str | Path | None = None) -> None:
         else os.environ.get("EVIDENCE_STORAGE_PATH", "/vault/evidence")
     )
 
+    demo_evidence = _write_demo_evidence_files(evidence_root)
     async with AsyncSessionLocal() as db:
-        await _seed_db(db, evidence_root)
+        await _seed_db(db, evidence_root, demo_evidence)
 
     _write_jsonl_files(evidence_root)
 
@@ -527,7 +536,7 @@ async def clean_all() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def _seed_db(db, evidence_root: Path) -> None:
+async def _seed_db(db, evidence_root: Path, demo_evidence: list[dict[str, str]]) -> None:
     started = datetime.now(timezone.utc)
 
     # Incident
@@ -612,6 +621,21 @@ async def _seed_db(db, evidence_root: Path) -> None:
             ))
             await db.flush()
             print(f"[demo] Created EvidenceFolder {spec['id']} ({spec['files_count']} files)")
+
+    for spec in demo_evidence:
+        if not await db.get(EvidenceItem, spec["id"]):
+            db.add(EvidenceItem(
+                id=spec["id"],
+                incident_id=DEMO_INCIDENT_ID,
+                name=spec["name"],
+                type=spec["type"],
+                size=spec["size"],
+                status="HASH_VERIFIED",
+                hash=spec["hash"],
+                collected_at=_NOW,
+            ))
+            await db.flush()
+            print(f"[demo] Created EvidenceItem {spec['id']}")
 
     # Extra observer devices
     for spec in _EXTRA_DEVICES:
@@ -708,6 +732,12 @@ async def _seed_db(db, evidence_root: Path) -> None:
 async def _clean_db(db) -> None:
     print(f"[demo] Cleaning demo data for incident {DEMO_INCIDENT_ID} …")
 
+    for spec in _DEMO_EVIDENCE:
+        obj = await db.get(EvidenceItem, spec["id"])
+        if obj:
+            await db.delete(obj)
+            print(f"  deleted EvidenceItem {spec['id']}")
+
     for spec in _EVIDENCE_FOLDERS:
         obj = await db.get(EvidenceFolder, spec["id"])
         if obj:
@@ -790,6 +820,31 @@ def _write_jsonl_files(evidence_root: Path) -> None:
             for event in events:
                 fh.write(json.dumps(event, ensure_ascii=False) + "\n")
         print(f"[demo] Wrote {len(events)} events → {out_path}")
+
+
+def _write_demo_evidence_files(evidence_root: Path) -> list[dict[str, str]]:
+    """Write synthetic export fixtures and return their verified metadata."""
+    demo_dir = evidence_root / DEMO_INCIDENT_ID / "demo"
+    demo_dir.mkdir(parents=True, exist_ok=True)
+    metadata: list[dict[str, str]] = []
+    for spec in _DEMO_EVIDENCE:
+        raw_content = spec["content"]
+        content = (
+            json.dumps(raw_content, indent=2, sort_keys=True).encode("utf-8")
+            if isinstance(raw_content, dict)
+            else str(raw_content).encode("utf-8")
+        )
+        output_path = demo_dir / str(spec["name"])
+        if not output_path.exists() or output_path.read_bytes() != content:
+            output_path.write_bytes(content)
+        metadata.append({
+            "id": str(spec["id"]),
+            "name": str(spec["name"]),
+            "type": str(spec["type"]),
+            "size": f"{len(content)} B",
+            "hash": hashlib.sha256(content).hexdigest(),
+        })
+    return metadata
 
 
 # ---------------------------------------------------------------------------

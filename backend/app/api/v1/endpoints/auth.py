@@ -2,7 +2,7 @@ import time
 from collections import defaultdict
 from datetime import timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Simple in-memory per-IP rate limiter (GIL-safe for single-process deployments)
@@ -40,7 +40,9 @@ def _check_ip_rate_limit(client_ip: str) -> None:
 
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.core.deps import get_current_user, get_db
+from app.core.config import settings
+from app.core.deps import get_current_user, get_db, get_request_token
+from app.core.request_context import get_client_ip
 from app.core.security import create_access_token, verify_password, revoke_token, decode_access_token
 
 _bearer = HTTPBearer(auto_error=False)
@@ -59,12 +61,11 @@ router = APIRouter()
 async def login(
     payload: LoginRequest,
     request: Request,
+    response: Response,
     db: AsyncSession = Depends(get_db),
 ) -> Token:
     runtime_settings = await get_runtime_settings(db)
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    forwarded_ip = forwarded.split(",")[0].strip() if forwarded else ""
-    client_ip = forwarded_ip or (request.client.host if request.client else "unknown")
+    client_ip = get_client_ip(request)
     _check_ip_rate_limit(client_ip)
     user = await get_user_by_username(db, payload.username)
     normalized_username = payload.username.strip().lower()
@@ -173,32 +174,52 @@ async def login(
         expires_delta=timedelta(minutes=runtime_settings.session_timeout_min),
         claims={"user_id": user.id, "role": user.role, "username": user.username},
     )
+    response.set_cookie(
+        key=settings.AUTH_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=settings.AUTH_COOKIE_SECURE,
+        samesite="strict",
+        max_age=max(1, int((expires_at.timestamp() - time.time()))),
+        path="/",
+    )
     return Token(
-        access_token=token,
-        token_type="bearer",
+        token_type="cookie",
         user_id=user.id,
         username=user.username,
         role=RoleEnum(user.role),
         expires_at=expires_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        client_ip=client_ip,
     )
 
 
 @router.post("/logout", status_code=204)
 async def logout(
+    request: Request,
+    response: Response,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     # Revoke the presented token so it cannot be reused after logout
-    if credentials:
+    token = get_request_token(request, credentials)
+    if token:
         try:
-            payload = decode_access_token(credentials.credentials)
+            payload = decode_access_token(token)
             jti = payload.get("jti")
             exp = payload.get("exp", 0)
             if jti:
                 revoke_token(jti, float(exp))
         except Exception:
             pass  # best-effort — don't fail the logout if revocation fails
+
+    response.delete_cookie(
+        key=settings.AUTH_COOKIE_NAME,
+        httponly=True,
+        secure=settings.AUTH_COOKIE_SECURE,
+        samesite="strict",
+        path="/",
+    )
 
     await safe_record_event(
         db,

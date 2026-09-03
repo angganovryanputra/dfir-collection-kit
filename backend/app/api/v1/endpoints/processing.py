@@ -159,7 +159,7 @@ async def trigger_processing_for_incident(
 
     Convenience endpoint: frontend doesn't need to look up the evidence job_id separately.
     """
-    from app.crud.job import list_jobs_for_incident
+    from app.crud.job import is_successful_job_status, list_jobs_for_incident
 
     existing = await get_latest_processing_job_by_incident_id(db, incident_id)
     if existing and existing.status == "RUNNING":
@@ -176,9 +176,7 @@ async def trigger_processing_for_incident(
         )
 
     jobs = await list_jobs_for_incident(db, incident_id)
-    completed_job = next(
-        (j for j in jobs if j.status in ("completed", "COMPLETED")), None
-    )
+    completed_job = next((j for j in jobs if is_successful_job_status(j.status)), None)
     if not completed_job:
         raise HTTPException(
             status_code=422,

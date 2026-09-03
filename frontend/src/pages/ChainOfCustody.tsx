@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { getStoredAuth } from "@/lib/auth";
 import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Button } from "@/components/ui/button";
@@ -76,9 +75,8 @@ export default function ChainOfCustody() {
       const base = (baseUrl?.trim() || "/api/v1").replace(/\/$/, "");
       const params = selectedIncident ? `?incident_id=${encodeURIComponent(selectedIncident)}` : "";
       const url = `${base}/chain-of-custody/export${params}`;
-      const token = getStoredAuth()?.token ?? null;
       const response = await fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+        credentials: "include",
       });
       if (!response.ok) {
         const message = await response.text();

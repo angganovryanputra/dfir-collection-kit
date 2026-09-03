@@ -1,5 +1,5 @@
 import { ReactNode, useState, useEffect, useMemo, memo } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { WarningBanner } from "@/components/WarningBanner";
@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
 import { apiGet } from "@/lib/api";
+import { getStoredAuth } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
 interface IncidentResponse {
@@ -140,9 +141,24 @@ export function AppLayout({
   headerActions,
 }: AppLayoutProps) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [open, setOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [currentUser, setCurrentUser] = useState<{ username: string; role: string } | null>(null);
+  const [selectedIncidentId, setSelectedIncidentId] = useState(
+    () => sessionStorage.getItem("dfir_active_incident_id") ?? ""
+  );
+
+  const incidentIdFromRoute = useMemo(() => {
+    const match = location.pathname.match(/^\/(?:incidents|evidence)\/([^/]+)/);
+    return match?.[1] ?? null;
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!incidentIdFromRoute) return;
+    setSelectedIncidentId(incidentIdFromRoute);
+    sessionStorage.setItem("dfir_active_incident_id", incidentIdFromRoute);
+  }, [incidentIdFromRoute]);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -173,14 +189,9 @@ export function AppLayout({
   const collectors = useMemo(() => collectorsRaw.map(mapCollector), [collectorsRaw]);
 
   useEffect(() => {
-    const raw = localStorage.getItem("dfir_auth");
-    if (raw) {
-      try {
-        const parsed = JSON.parse(raw) as { username?: string; role?: string };
-        if (parsed.username && parsed.role) {
-          setCurrentUser({ username: parsed.username, role: parsed.role });
-        }
-      } catch { /* ignore */ }
+    const session = getStoredAuth();
+    if (session) {
+      setCurrentUser({ username: session.username, role: session.role });
     }
     apiGet<{ username: string; role: string }>("/users/me")
       .then((data) => setCurrentUser({ username: data.username, role: data.role }))
@@ -213,6 +224,17 @@ export function AppLayout({
     command();
   };
 
+  const activeIncidentId = incidentIdFromRoute ?? selectedIncidentId;
+  const selectActiveIncident = (nextIncidentId: string) => {
+    setSelectedIncidentId(nextIncidentId);
+    if (nextIncidentId) {
+      sessionStorage.setItem("dfir_active_incident_id", nextIncidentId);
+      navigate(`/incidents/${nextIncidentId}`);
+    } else {
+      sessionStorage.removeItem("dfir_active_incident_id");
+    }
+  };
+
   return (
     <EvidenceProvider>
       <div className="min-h-screen bg-background flex relative">
@@ -226,7 +248,7 @@ export function AppLayout({
                 <Activity className="mr-2 h-4 w-4" />
                 <span>Incident Dashboard</span>
               </CommandItem>
-              <CommandItem onSelect={() => runCommand(() => navigate("/evidence"))}>
+              <CommandItem onSelect={() => runCommand(() => navigate(activeIncidentId ? `/evidence/${activeIncidentId}` : "/evidence"))}>
                 <FolderOpen className="mr-2 h-4 w-4" />
                 <span>Evidence Vault</span>
               </CommandItem>
@@ -270,6 +292,7 @@ export function AppLayout({
           activeIncidents={activeIncidents}
           onlineCollectors={onlineCollectors}
           totalCollectors={collectors.length}
+          activeIncidentId={activeIncidentId || undefined}
           isCollapsed={isSidebarCollapsed}
           onCollapsedChange={setIsSidebarCollapsed}
         />
@@ -296,6 +319,24 @@ export function AppLayout({
                   )}
                 </div>
                 <SystemHeartbeat />
+                {incidents.length > 0 && (
+                  <label className="hidden xl:flex items-center gap-2 border-l border-border pl-4 font-mono text-[9px] text-muted-foreground uppercase tracking-wider">
+                    <span>Case</span>
+                    <select
+                      aria-label="Active incident"
+                      value={activeIncidentId}
+                      onChange={(event) => selectActiveIncident(event.target.value)}
+                      className="max-w-44 bg-secondary/50 border border-border rounded-sm px-2 py-1 text-[10px] text-foreground outline-none focus-visible:ring-1 focus-visible:ring-primary"
+                    >
+                      <option value="">SELECT CASE</option>
+                      {incidents.map((incident) => (
+                        <option key={incident.id} value={incident.id}>
+                          {incident.id} · {incident.type.replace(/_/g, " ")}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               </div>
               <div className="flex items-center gap-4">
                 <div className="hidden lg:flex items-center gap-1.5 px-2 py-1 border border-border bg-secondary/50 rounded-sm text-[10px] text-muted-foreground font-mono">

@@ -1,8 +1,58 @@
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.incident import Incident
 from app.models.job import Job
 from app.schemas.job import JobCreate
+
+
+# Status values are written by agents, S3 ingestion, and demo fixtures.  Keep
+# their accepted terminal forms in one place so a completed acquisition cannot
+# be mistaken for an active job by a later workflow stage.
+SUCCESSFUL_JOB_STATUSES = frozenset({"complete", "completed", "done"})
+FAILED_JOB_STATUSES = frozenset({"failed", "cancelled", "canceled", "error"})
+TERMINAL_JOB_STATUSES = SUCCESSFUL_JOB_STATUSES | FAILED_JOB_STATUSES
+
+
+def normalized_job_status(status: str | None) -> str:
+    return (status or "").strip().lower()
+
+
+def is_successful_job_status(status: str | None) -> bool:
+    return normalized_job_status(status) in SUCCESSFUL_JOB_STATUSES
+
+
+def is_terminal_job_status(status: str | None) -> bool:
+    return normalized_job_status(status) in TERMINAL_JOB_STATUSES
+
+
+async def sync_incident_collection_status(db: AsyncSession, incident_id: str) -> Incident | None:
+    """Apply the aggregate collection state after a terminal job update.
+
+    An incident represents all selected targets.  It becomes complete only
+    when every job completed successfully; any terminal failure makes the
+    collection retryable only after all outstanding jobs have settled.
+    """
+    incident = await db.get(Incident, incident_id)
+    if not incident or incident.status == "CLOSED":
+        return incident
+
+    jobs = await list_jobs_for_incident(db, incident_id)
+    if not jobs:
+        return incident
+
+    if all(is_terminal_job_status(job.status) for job in jobs):
+        if all(is_successful_job_status(job.status) for job in jobs):
+            incident.status = "COLLECTION_COMPLETE"
+            incident.collection_progress = 100
+            incident.collection_phase = "uploading"
+        else:
+            incident.status = "COLLECTION_FAILED"
+    else:
+        incident.status = "COLLECTION_IN_PROGRESS"
+        incident.collection_phase = "collecting"
+    await db.flush()
+    return incident
 
 
 async def create_job(db: AsyncSession, payload: JobCreate, modules: list[dict], output_path: str) -> Job:
@@ -62,7 +112,7 @@ async def update_job_status(db: AsyncSession, job_id: str, status: str, message:
 async def count_active_jobs(db: AsyncSession) -> int:
     result = await db.execute(
         select(func.count()).select_from(Job).where(
-            Job.status.not_in(["complete", "failed", "cancelled"])
+            func.lower(Job.status).not_in(TERMINAL_JOB_STATUSES)
         )
     )
     return int(result.scalar_one())

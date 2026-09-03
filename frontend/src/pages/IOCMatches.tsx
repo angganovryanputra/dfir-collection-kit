@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/dialog";
 import { ChevronLeft, ShieldAlert, Globe, Hash, Wifi, HelpCircle, AlertTriangle, Upload, Loader2, CheckCircle2 } from "lucide-react";
 import { apiGet } from "@/lib/api";
-import { getStoredAuth } from "@/lib/auth";
 
 interface IOCMatch {
     id: string;
@@ -76,13 +75,12 @@ export default function IOCMatches() {
         setImportResult(null);
         setImportError(null);
         try {
-            const auth = getStoredAuth();
             const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "/api/v1";
             const formData = new FormData();
             formData.append("file", importFile);
             const resp = await fetch(`${baseUrl}/processing/ioc/indicators/bulk`, {
                 method: "POST",
-                headers: { Authorization: `Bearer ${auth?.token ?? ""}` },
+                credentials: "include",
                 body: formData,
             });
             if (!resp.ok) {

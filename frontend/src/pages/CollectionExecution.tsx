@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { useAdaptivePolling } from "@/lib/useAdaptivePolling";
 import { Button } from "@/components/ui/button";
@@ -102,6 +102,20 @@ type EvidenceItemResponse = {
   collected_at: string;
 };
 
+type CollectionLocationState = {
+  selectedModuleIds?: string[];
+  osOverride?: string;
+};
+
+type CollectRequest = {
+  module_ids: string[];
+  os_override?: string;
+};
+
+type JobSummary = {
+  id: string;
+};
+
 const PHASES: { id: string; name: string }[] = [
   { id: "collecting", name: "Acquisition" },
   { id: "parsing", name: "Local Analysis" },
@@ -118,9 +132,10 @@ export default function CollectionExecution() {
   const navigate = useNavigate();
   const { id: incidentId } = useParams<{ id: string }>();
   const location = useLocation();
-  const locationState = location.state as any;
+  const locationState = location.state as CollectionLocationState | null;
 
-  const selectedModuleIds = locationState?.selectedModuleIds || [];
+  const selectedModuleIds = useMemo(() => locationState?.selectedModuleIds ?? [], [locationState]);
+  const osOverride = locationState?.osOverride;
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [phases, setPhases] = useState<CollectionPhase[]>(
     PHASES.map(({ id, name }) => ({ id, name, status: "pending" }))
@@ -179,22 +194,22 @@ export default function CollectionExecution() {
            return;
         }
 
-        const collectBody: any = { 
+        const collectBody: CollectRequest = {
           module_ids: selectedModuleIds,
-          os_override: locationState?.osOverride
+          ...(osOverride ? { os_override: osOverride } : {}),
         };
         await apiPost(`/incidents/${incidentId}/collect`, collectBody);
         startedRef.current = true;
         startedAtRef.current = Date.now();
         setPollingEnabled(true);
-      } catch (err: any) {
-        setErrorMessage(err.message || "Activation failure.");
+      } catch (err) {
+        setErrorMessage(err instanceof Error ? err.message : "Activation failure.");
       } finally {
         setIsStarting(false);
       }
     };
     startCollection();
-  }, [incidentId, isViewer, selectedModuleIds, locationState?.osOverride]);
+  }, [incidentId, isViewer, selectedModuleIds, osOverride]);
 
   const handlePoll = useCallback(async (): Promise<string | null> => {
     if (!incidentId || !startedRef.current) return null;
@@ -253,7 +268,7 @@ export default function CollectionExecution() {
     if (!incidentId || isViewer) return;
     setIsAborting(true);
     try {
-      const activeJobs = await apiGet<any[]>(`/jobs/incident/${incidentId}`);
+      const activeJobs = await apiGet<JobSummary[]>(`/jobs/incident/${incidentId}`);
       await Promise.allSettled(activeJobs.map(j => apiPost(`/jobs/${j.id}/cancel`, {})));
       setPollingEnabled(false);
       setErrorMessage("Sequence aborted by analyst.");

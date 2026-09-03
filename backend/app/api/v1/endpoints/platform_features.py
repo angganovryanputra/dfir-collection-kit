@@ -30,6 +30,7 @@ from app.models.platform_features import (
     ThreatHuntQuery,
 )
 from app.models.user import User
+from app.services.audit_log_service import safe_record_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -784,6 +785,23 @@ async def create_legal_hold(
         **payload.model_dump(),
     )
     db.add(hold)
+    await safe_record_event(
+        db,
+        event_type="legal_hold_created",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="platform_features",
+        action="create",
+        target_type="legal_hold",
+        target_id=hold.id,
+        status="active",
+        message="Legal hold created",
+        metadata={
+            "incident_id": incident_id,
+            "custodian": payload.custodian,
+            "retention_days": payload.retention_days,
+        },
+    )
     await db.commit()
     await db.refresh(hold)
     return LegalHoldOut.model_validate(hold)
@@ -797,7 +815,7 @@ async def release_legal_hold(
     incident_id: str,
     hold_id: str,
     db: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     result = await db.execute(
         select(LegalHold).where(LegalHold.id == hold_id, LegalHold.incident_id == incident_id)
@@ -809,6 +827,19 @@ async def release_legal_hold(
         raise HTTPException(status_code=409, detail=f"Hold is already {hold.status}")
     hold.status = "RELEASED"
     hold.released_at = datetime.now(timezone.utc)
+    await safe_record_event(
+        db,
+        event_type="legal_hold_released",
+        actor_type="user",
+        actor_id=current_user.id,
+        source="platform_features",
+        action="release",
+        target_type="legal_hold",
+        target_id=hold.id,
+        status="released",
+        message="Legal hold released",
+        metadata={"incident_id": incident_id, "custodian": hold.custodian},
+    )
     await db.commit()
     return {"id": hold_id, "status": "RELEASED"}
 

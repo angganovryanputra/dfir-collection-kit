@@ -198,6 +198,14 @@ cd dfir-collection-kit
 make setup
 ```
 
+On Windows without Git Bash/WSL, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/setup-docker.ps1 -DemoData
+docker compose up -d --build
+powershell -ExecutionPolicy Bypass -File scripts/docker-smoke-test.ps1
+```
+
 This single command:
 1. Generates cryptographically secure secrets and stores them in `.env`
 2. Generates a self-signed TLS certificate
@@ -212,9 +220,9 @@ After setup completes, the admin password will be printed to the terminal. The p
 
 | Service | URL |
 |---------|-----|
-| Frontend | http://localhost:5173 |
-| Backend API | http://localhost:8000 |
-| Interactive API Docs | http://localhost:8000/docs |
+| Application | https://localhost |
+| Backend API | https://localhost/api/v1 |
+| Interactive API Docs | https://localhost/api/v1/docs |
 
 ---
 
@@ -544,6 +552,13 @@ npm run dev            # Dev server at :5173
 npm run build          # Production build
 npm run lint           # ESLint
 ```
+
+### Docker development and safe updates
+
+For live reload inside Docker and a data-preserving update workflow, see
+[docs/DOCKER_WORKFLOWS.md](docs/DOCKER_WORKFLOWS.md). The development override
+uses FastAPI reload and Vite HMR while production continues to use the hardened
+HTTPS reverse proxy.
 
 ### Agent (Go)
 

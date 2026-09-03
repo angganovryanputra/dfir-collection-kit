@@ -305,6 +305,37 @@ export default function IncidentHub() {
         }
     };
 
+    const workflowStages = [
+        {
+            label: "Collect",
+            detail: collectionDone ? "COMPLETE" : incident?.status === "COLLECTION_IN_PROGRESS" ? "IN PROGRESS" : "SETUP REQUIRED",
+            state: collectionDone ? "done" : incident?.status === "COLLECTION_IN_PROGRESS" ? "active" : "ready",
+            onClick: () => navigate(
+                incident?.status === "COLLECTION_IN_PROGRESS"
+                    ? `/incidents/${incidentId}/collect`
+                    : `/incidents/${incidentId}/setup`
+            ),
+        },
+        {
+            label: "Process",
+            detail: procDone ? "COMPLETE" : procActive ? "IN PROGRESS" : collectionDone ? "READY" : "WAITING FOR COLLECTION",
+            state: procDone ? "done" : procActive ? "active" : collectionDone ? "ready" : "blocked",
+            onClick: !procJob && collectionDone ? handleStartProcessing : () => navigate(`/incidents/${incidentId}/processing`),
+        },
+        {
+            label: "Timeline",
+            detail: stDone ? "COMPLETE" : stActive ? "BUILDING" : procDone ? "READY" : "WAITING FOR PROCESSING",
+            state: stDone ? "done" : stActive ? "active" : procDone ? "ready" : "blocked",
+            onClick: () => navigate(`/incidents/${incidentId}/super-timeline`),
+        },
+        {
+            label: "Report",
+            detail: procDone ? "READY TO GENERATE" : "WAITING FOR PROCESSING",
+            state: procDone ? "ready" : "blocked",
+            onClick: () => navigate(`/incidents/${incidentId}/report`),
+        },
+    ] as const;
+
     if (incLoading) return <AppLayout title="COCKPIT" subtitle="INITIALIZING..."><div className="flex items-center justify-center h-64"><Loader2 className="w-8 h-8 animate-spin text-primary" /></div></AppLayout>;
     if (incError || !incident) return <AppLayout title="COCKPIT" subtitle="ERROR"><div className="p-6"><TacticalPanel title="MODULE LOAD FAILURE" status="offline"><div className="font-mono text-sm text-destructive py-4">Incident {incidentId} context could not be loaded.</div><Button variant="outline" onClick={() => navigate("/dashboard")}><ChevronLeft className="w-4 h-4 mr-2" /> RETURN TO BASE</Button></TacticalPanel></div></AppLayout>;
 
@@ -344,6 +375,42 @@ export default function IncidentHub() {
                         <span>TARGETS: <span className="text-foreground font-bold">{incident.target_endpoints.length}</span></span>
                     </div>
                 </div>
+
+                <nav aria-label="Investigation workflow" className="border-b border-border/40 bg-secondary/10 px-6 py-3 shrink-0 overflow-x-auto">
+                    <ol className="flex min-w-max items-stretch gap-2">
+                        {workflowStages.map((stage, index) => {
+                            const isBlocked = stage.state === "blocked";
+                            const isDone = stage.state === "done";
+                            const isActive = stage.state === "active";
+                            return (
+                                <li key={stage.label} className="flex items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={stage.onClick}
+                                        disabled={isBlocked}
+                                        aria-current={isActive ? "step" : undefined}
+                                        className={cn(
+                                            "min-w-36 rounded-sm border px-3 py-2 text-left font-mono transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary",
+                                            isDone && "border-green-500/40 bg-green-500/10 text-green-300",
+                                            isActive && "border-primary/60 bg-primary/10 text-primary",
+                                            stage.state === "ready" && "border-primary/30 bg-card text-foreground hover:bg-primary/10",
+                                            isBlocked && "cursor-not-allowed border-border/50 bg-card/40 text-muted-foreground/60",
+                                        )}
+                                    >
+                                        <span className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest">
+                                            <span className={cn("flex h-4 w-4 items-center justify-center rounded-full border text-[9px]", isDone && "border-green-400 bg-green-500/20", isActive && "border-primary animate-pulse", !isDone && !isActive && "border-current/40")}>
+                                                {isDone ? <CheckCircle2 className="h-3 w-3" /> : index + 1}
+                                            </span>
+                                            {stage.label}
+                                        </span>
+                                        <span className="mt-1 block text-[8px] uppercase tracking-wider opacity-75">{stage.detail}</span>
+                                    </button>
+                                    {index < workflowStages.length - 1 && <span aria-hidden="true" className="h-px w-5 bg-border/70" />}
+                                </li>
+                            );
+                        })}
+                    </ol>
+                </nav>
 
                 <div className="p-6 space-y-6 overflow-auto custom-scrollbar">
                     {/* ── Status HUD ── */}

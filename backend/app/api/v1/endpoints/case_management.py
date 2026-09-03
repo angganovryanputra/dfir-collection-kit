@@ -16,11 +16,31 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, get_db
+from app.core.deps import get_current_user, get_db, require_roles
 from app.models.user import User
+from app.services.audit_log_service import safe_record_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+async def _record_export_request(
+    db: AsyncSession, user: User, incident_id: str, destination: str
+) -> None:
+    """Record the disclosure request before contacting an external system."""
+    await safe_record_event(
+        db,
+        event_type="case_export_requested",
+        actor_type="user",
+        actor_id=user.id,
+        source="backend",
+        action="export case",
+        target_type="incident",
+        target_id=incident_id,
+        status="requested",
+        message=f"Case export requested for {destination}",
+        metadata={"destination": destination},
+    )
 
 
 class ExportResult(BaseModel):
@@ -54,12 +74,17 @@ async def _incident_summary(incident_id: str, db: AsyncSession) -> dict[str, Any
     }
 
 
-@router.post("/export/thehive/{incident_id}", response_model=ExportResult)
+@router.post(
+    "/export/thehive/{incident_id}",
+    response_model=ExportResult,
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
 async def export_to_thehive(
     incident_id: str,
     db: AsyncSession = Depends(get_db),
-    _cu: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ExportResult:
+    await _record_export_request(db, current_user, incident_id, "thehive")
     url = os.getenv("THEHIVE_URL", "")
     key = os.getenv("THEHIVE_API_KEY", "")
     if not url or not key:
@@ -96,12 +121,17 @@ async def export_to_thehive(
         return ExportResult(service="thehive", success=False, error=str(exc)[:200])
 
 
-@router.post("/export/jira/{incident_id}", response_model=ExportResult)
+@router.post(
+    "/export/jira/{incident_id}",
+    response_model=ExportResult,
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
 async def export_to_jira(
     incident_id: str,
     db: AsyncSession = Depends(get_db),
-    _cu: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ExportResult:
+    await _record_export_request(db, current_user, incident_id, "jira")
     jira_url = os.getenv("JIRA_URL", "")
     jira_email = os.getenv("JIRA_EMAIL", "")
     jira_token = os.getenv("JIRA_API_TOKEN", "")
@@ -145,12 +175,17 @@ async def export_to_jira(
         return ExportResult(service="jira", success=False, error=str(exc)[:200])
 
 
-@router.post("/notify/slack/{incident_id}", response_model=ExportResult)
+@router.post(
+    "/notify/slack/{incident_id}",
+    response_model=ExportResult,
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
 async def notify_slack(
     incident_id: str,
     db: AsyncSession = Depends(get_db),
-    _cu: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ) -> ExportResult:
+    await _record_export_request(db, current_user, incident_id, "slack")
     webhook = os.getenv("SLACK_WEBHOOK_URL", "")
     if not webhook:
         return ExportResult(service="slack", success=False, error="SLACK_WEBHOOK_URL not configured")
@@ -184,16 +219,19 @@ async def notify_slack(
         return ExportResult(service="slack", success=False, error=str(exc)[:200])
 
 
-@router.post("/export/all/{incident_id}", response_model=list[ExportResult])
+@router.post(
+    "/export/all/{incident_id}",
+    response_model=list[ExportResult],
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
 async def export_all(
     incident_id: str,
     db: AsyncSession = Depends(get_db),
     cu: User = Depends(get_current_user),
 ) -> list[ExportResult]:
-    """Push to all configured case management services simultaneously."""
-    import asyncio as _aio
-    return list(await _aio.gather(
-        export_to_thehive(incident_id, db, cu),
-        export_to_jira(incident_id, db, cu),
-        notify_slack(incident_id, db, cu),
-    ))
+    """Push to all configured services without sharing a DB session concurrently."""
+    return [
+        await export_to_thehive(incident_id, db, cu),
+        await export_to_jira(incident_id, db, cu),
+        await notify_slack(incident_id, db, cu),
+    ]

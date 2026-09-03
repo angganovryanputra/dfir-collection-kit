@@ -3,6 +3,16 @@ from datetime import datetime
 from pydantic import BaseModel
 
 
+class ConnectionContextResponse(BaseModel):
+    """Minimal, non-sensitive details available before authentication."""
+
+    client_ip: str | None = None
+    ip_version: int | None = None
+    ip_scope: str = "unknown"
+    secure_transport: bool
+    server_time: datetime
+
+
 class DiagnosticsResponse(BaseModel):
     db_status: str
     server_time: datetime

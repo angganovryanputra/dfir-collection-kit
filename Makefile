@@ -7,10 +7,10 @@ DIST_DIR    := $(AGENT_DIR)/dist
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup up down restart logs logs-backend logs-celery status \
+.PHONY: help setup up down restart rebuild logs logs-backend logs-celery status \
         reset reset-volumes migrate seed seed-demo \
         agent-windows agent-linux agent-linux-arm64 agent-all \
-        agent-config backup-db test-backend shell-backend
+        agent-config backup-db test-backend shell-backend dev-up dev-down dev-logs
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
@@ -38,6 +38,15 @@ restart: ## Restart all services
 
 rebuild: ## Rebuild and restart all services (after code changes)
 	$(COMPOSE) up -d --build
+
+dev-up: ## Start development stack (FastAPI reload + Vite HMR)
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml up --build
+
+dev-down: ## Stop development stack without removing data volumes
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml down
+
+dev-logs: ## Tail development stack logs
+	$(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml logs -f
 
 logs: ## Tail logs from all services (Ctrl+C to exit)
 	$(COMPOSE) logs -f

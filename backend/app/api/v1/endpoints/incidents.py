@@ -143,6 +143,32 @@ async def start_collection_endpoint(
     if incident.status == "CLOSED":
         raise HTTPException(status_code=409, detail="Cannot start collection on a closed incident")
 
+    if incident.status == "COLLECTION_COMPLETE":
+        raise HTTPException(
+            status_code=409,
+            detail="Collection is already complete; create a new incident to collect again",
+        )
+
+    if incident.status == "COLLECTION_FAILED":
+        raise HTTPException(
+            status_code=409,
+            detail="Collection has failed; use the retry endpoint for failed jobs before starting again",
+        )
+
+    if incident.status == "COLLECTION_IN_PROGRESS":
+        existing_jobs = await list_jobs_for_incident(db, incident_id)
+        if existing_jobs:
+            # The collection screen is safe to refresh or revisit.  Do not
+            # reset logs or write a duplicate chain-of-custody entry while
+            # acquisition jobs are already assigned to agents.
+            return CollectionStartResponse(
+                incident_id=incident.id,
+                status="in_progress",
+                progress=incident.collection_progress,
+                phase=incident.collection_phase or PHASE_STEPS[0][0],
+                job_ids=[job.id for job in existing_jobs],
+            )
+
     if incident.status != "COLLECTION_IN_PROGRESS":
         updated = await update_incident(
             db,
@@ -218,22 +244,26 @@ async def start_collection_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Append enabled custom user-authored modules for this OS
+    # Snapshot enabled custom modules into every job.  A job must retain the
+    # exact module definition selected at dispatch time even if an admin edits
+    # the catalog later.  The per-device loop below uses the same snapshot so
+    # custom modules are not accidentally omitted for real agents.
+    custom_modules_by_os: dict[str, list[dict]] = {}
     try:
         from app.models.platform_features import CustomModule
         custom_result = await db.execute(
             select(CustomModule).where(
-                CustomModule.os == (os_name or "windows"),
                 CustomModule.enabled == True,  # noqa: E712
             )
         )
         for cm in custom_result.scalars():
-            modules.append({
+            custom_modules_by_os.setdefault(cm.os, []).append({
                 "module_id": cm.id,
                 "output_relpath": cm.output_relpath,
                 "params": {},
                 "command": cm.command,
             })
+        modules.extend(custom_modules_by_os.get(os_name or "windows", []))
     except Exception as _cex:
         logger.debug("Custom module fetch failed (non-fatal): %s", _cex)
 
@@ -284,6 +314,12 @@ async def start_collection_endpoint(
                     dev_modules = build_modules(os_name=dev_os)
             except ValueError:
                 dev_modules = modules
+
+            # `dev_modules` is rebuilt for mixed-OS incidents.  Add the
+            # matching custom snapshot here as well; previously it was only
+            # present in the unused fallback list.
+            if dev_modules is not modules:
+                dev_modules.extend(custom_modules_by_os.get(dev_os or "windows", []))
 
             safe_host = _safe_hostname(device.hostname)
             # Append 6-char device ID suffix to prevent collision when two hostnames

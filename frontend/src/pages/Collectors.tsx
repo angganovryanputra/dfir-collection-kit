@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
-import { StatusIndicator } from "@/components/StatusIndicator";
+import { StatusIndicator, type StatusIndicatorStatus } from "@/components/StatusIndicator";
 import { Button } from "@/components/ui/button";
 import {
   Server,
@@ -47,7 +47,7 @@ const CollectorRow = memo(({
   };
 
   const upperStatus = collector.status.toUpperCase();
-  const statusType = upperStatus === "ONLINE" ? "online" : upperStatus === "BUSY" ? "pending" : "offline";
+  const statusType: StatusIndicatorStatus = upperStatus === "ONLINE" ? "online" : upperStatus === "BUSY" ? "pending" : "offline";
   const isActive = upperStatus === "ONLINE" || upperStatus === "BUSY";
 
   return (
@@ -60,7 +60,7 @@ const CollectorRow = memo(({
       </div>
       <div className="col-span-4 font-mono text-xs text-muted-foreground truncate">{collector.endpoint}</div>
       <div className="col-span-2">
-        <StatusIndicator status={statusType as any} label={upperStatus} size="sm" />
+        <StatusIndicator status={statusType} label={upperStatus} size="sm" />
       </div>
       <div className="col-span-2 font-mono text-xs text-muted-foreground">
         {fmtHeartbeat(collector.last_heartbeat)}

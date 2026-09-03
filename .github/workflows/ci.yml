@@ -13,7 +13,7 @@ concurrency:
 env:
   PYTHON_VERSION: "3.12"
   GO_VERSION: "1.23"
-  NODE_VERSION: "20"
+  NODE_VERSION: "22"
 
 jobs:
   # ─────────────────────────────────────────────────────────────────────────────
@@ -228,6 +228,9 @@ jobs:
       - name: Run ESLint
         run: npm run lint
 
+      - name: Run frontend unit tests
+        run: npm run test
+
       - name: Type check
         run: npx tsc --noEmit
 
@@ -299,6 +302,7 @@ jobs:
           echo "POSTGRES_PASSWORD=test_password" >> .env
           echo "REDIS_PASSWORD=test_redis_pass" >> .env
           echo "DFIR_DEFAULT_ADMIN_PASSWORD=test_admin_pass" >> .env
+          echo "SEED_DEMO_DATA=true" >> .env
           
           docker compose up -d --build
           
@@ -325,6 +329,23 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"username":"admin","password":"test_admin_pass"}' || exit 1
           echo "Login endpoint works"
+
+      - name: Set up Node.js for browser workflow
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Run Evidence Vault browser workflow
+        working-directory: frontend
+        env:
+          E2E_ADMIN_PASSWORD: test_admin_pass
+          E2E_BASE_URL: https://localhost
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+          npm run test:e2e -- --project=chromium
 
       - name: Cleanup
         if: always()

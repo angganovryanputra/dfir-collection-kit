@@ -464,7 +464,7 @@ async def list_incident_evidence(
     _: User = Depends(get_current_user),
 ) -> list[EvidenceItemOut]:
     safe_incident_id = _validate_identifier(incident_id, "incident_id")
-    items = await list_items(db, safe_incident_id)
+    items, _ = await list_items(db, safe_incident_id)
     return [EvidenceItemOut.model_validate(item) for item in items]
 
 from pydantic import BaseModel

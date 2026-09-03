@@ -240,7 +240,11 @@ async def google_oauth_disconnect(
 
 # ── Event Annotation ──────────────────────────────────────────────────────────
 
-@router.post("/annotate", response_model=list[AnnotatedEvent])
+@router.post(
+    "/annotate",
+    response_model=list[AnnotatedEvent],
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
 async def annotate_events(
     payload: AnnotateRequest,
     _: User = Depends(get_current_user),
@@ -289,7 +293,10 @@ async def annotate_events(
 
 # ── Executive Summary ─────────────────────────────────────────────────────────
 
-@router.post("/summary/{incident_id}")
+@router.post(
+    "/summary/{incident_id}",
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
 async def generate_summary(
     incident_id: str,
     current_user: User = Depends(get_current_user),
@@ -362,7 +369,10 @@ class NLQueryRequest(BaseModel):
     context_limit: int = 25
 
 
-@router.post("/query")
+@router.post(
+    "/query",
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
 async def nl_query(
     payload: NLQueryRequest,
     _: User = Depends(get_current_user),

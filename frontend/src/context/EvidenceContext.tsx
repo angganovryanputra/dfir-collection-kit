@@ -6,7 +6,7 @@ export type EvidenceItem = {
     title: string;
     content: string;
     timestamp: string;
-    metadata: Record<string, any>;
+    metadata: Record<string, unknown>;
     pinnedAt: string;
 };
 

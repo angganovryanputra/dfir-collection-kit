@@ -1,7 +1,9 @@
 import { cn } from "@/lib/utils";
 
+export type StatusIndicatorStatus = "online" | "offline" | "pending" | "locked" | "verified" | "active";
+
 interface StatusIndicatorProps {
-  status: "online" | "offline" | "pending" | "locked" | "verified" | "active";
+  status: StatusIndicatorStatus;
   label?: string;
   size?: "sm" | "md" | "lg";
   pulse?: boolean;

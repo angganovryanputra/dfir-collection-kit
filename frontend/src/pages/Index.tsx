@@ -1,13 +1,12 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { isSessionValid } from "@/lib/auth";
 
 const Index = () => {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const auth = localStorage.getItem("dfir_auth");
-
-    if (auth) {
+    if (isSessionValid()) {
       window.location.href = "/dashboard";
     } else {
       window.location.href = "/login";

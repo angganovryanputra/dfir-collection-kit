@@ -40,7 +40,7 @@ import {
   Terminal,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost } from "@/lib/api";
-import { getStoredAuth, getStoredRole } from "@/lib/auth";
+import { getStoredRole } from "@/lib/auth";
 
 interface Device {
   id: string;
@@ -156,11 +156,10 @@ export default function Devices() {
     setIsDownloadingAgent((prev) => ({ ...prev, [key]: true }));
     setAgentDownloadError(null);
     try {
-      const auth = getStoredAuth();
       const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "/api/v1";
       const url = `${baseUrl}/agent-binary/download?os=${encodeURIComponent(os)}&arch=${encodeURIComponent(arch)}`;
       const resp = await fetch(url, {
-        headers: { Authorization: `Bearer ${auth?.token ?? ""}` },
+        credentials: "include",
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const blob = await resp.blob();

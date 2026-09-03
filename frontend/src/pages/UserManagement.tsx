@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { getStoredAuth } from "@/lib/auth";
 
 interface UserOut {
   id: string;
@@ -47,16 +48,7 @@ const ROLE_CHIP: Record<string, string> = {
 
 export default function UserManagement() {
   const queryClient = useQueryClient();
-  const selfUsername: string = (() => {
-    try {
-      return (
-        (JSON.parse(localStorage.getItem("dfir_auth") ?? "{}") as { username?: string })
-          .username ?? ""
-      );
-    } catch {
-      return "";
-    }
-  })();
+  const selfUsername = getStoredAuth()?.username ?? "";
 
   // List query
   const {

@@ -21,6 +21,9 @@ import { apiGet, apiPost, apiPatch, apiDelete } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
 import { useToast } from "@/components/ui/use-toast";
 
+type HypothesisConfidence = "LOW" | "MEDIUM" | "HIGH";
+type HypothesisStatus = "OPEN" | "CONFIRMED" | "REFUTED";
+
 type Hypothesis = {
   id: string;
   incident_id: string;
@@ -28,13 +31,29 @@ type Hypothesis = {
   description: string | null;
   tactic: string | null;
   technique_id: string | null;
-  confidence: "LOW" | "MEDIUM" | "HIGH";
-  status: "OPEN" | "CONFIRMED" | "REFUTED";
+  confidence: HypothesisConfidence;
+  status: HypothesisStatus;
   evidence_refs: string[];
   created_by: string;
   created_at: string;
   updated_at: string;
 };
+
+type HypothesisForm = {
+  title: string;
+  description: string;
+  tactic: string;
+  technique_id: string;
+  confidence: HypothesisConfidence;
+  status: HypothesisStatus;
+  evidence_refs: string;
+};
+
+const isHypothesisConfidence = (value: string): value is HypothesisConfidence =>
+  value === "LOW" || value === "MEDIUM" || value === "HIGH";
+
+const isHypothesisStatus = (value: string): value is HypothesisStatus =>
+  value === "OPEN" || value === "CONFIRMED" || value === "REFUTED";
 
 const MITRE_TACTICS = [
   "Initial Access", "Execution", "Persistence", "Privilege Escalation",
@@ -59,7 +78,7 @@ export default function HypothesisBuilder() {
 
   const [showForm, setShowForm] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<HypothesisForm>({
     title: "",
     description: "",
     tactic: "",
@@ -210,7 +229,11 @@ export default function HypothesisBuilder() {
                   <Label className="text-xs uppercase text-muted-foreground">Confidence</Label>
                   <Select 
                     value={form.confidence} 
-                    onValueChange={(val: any) => setForm(f => ({ ...f, confidence: val }))}
+                    onValueChange={(value) => {
+                      if (isHypothesisConfidence(value)) {
+                        setForm((current) => ({ ...current, confidence: value }));
+                      }
+                    }}
                   >
                     <SelectTrigger className="h-9">
                       <SelectValue />
@@ -226,7 +249,11 @@ export default function HypothesisBuilder() {
                   <Label className="text-xs uppercase text-muted-foreground">Status</Label>
                   <Select 
                     value={form.status} 
-                    onValueChange={(val: any) => setForm(f => ({ ...f, status: val }))}
+                    onValueChange={(value) => {
+                      if (isHypothesisStatus(value)) {
+                        setForm((current) => ({ ...current, status: value }));
+                      }
+                    }}
                   >
                     <SelectTrigger className="h-9">
                       <SelectValue />

@@ -33,7 +33,15 @@ from app.crud.collection_log import create_log_entries, get_last_sequence
 from app.crud.device import create_device, get_device, update_device
 from app.crud.evidence import create_folder, create_item
 from app.crud.incident import get_incident, update_incident
-from app.crud.job import create_job, get_job, get_next_job_for_agent, update_job_status
+from app.crud.job import (
+    create_job,
+    get_job,
+    get_next_job_for_agent,
+    is_terminal_job_status,
+    normalized_job_status,
+    sync_incident_collection_status,
+    update_job_status,
+)
 from app.models.user import User
 from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
 from app.schemas.device import DeviceCreate, DeviceOut, DeviceUpdate
@@ -292,20 +300,17 @@ async def update_job_status_endpoint(
         if payload.progress is not None:
             incident_update["collection_progress"] = payload.progress
         status_upper = payload.status.upper()
-        if status_upper in {"COMPLETE", "COMPLETED", "COLLECTION_COMPLETE"}:
-            incident_update["status"] = "COLLECTION_COMPLETE"
-            incident_update["collection_phase"] = "uploading"
-        elif status_upper in {"FAILED", "ERROR", "CANCELLED", "CANCELED"}:
-            incident_update["status"] = "COLLECTION_FAILED"
-        elif status_upper == "PARSING":
-            incident_update["status"] = "COLLECTION_IN_PROGRESS"
-            incident_update["collection_phase"] = "parsing"
-        else:
-            incident_update["status"] = "COLLECTION_IN_PROGRESS"
-            incident_update["collection_phase"] = "collecting"
-        if incident_update:
-            current_incident = await get_incident(db, job.incident_id)
-            if current_incident and current_incident.status != "CLOSED":
+        current_incident = await get_incident(db, job.incident_id)
+        if current_incident and current_incident.status != "CLOSED":
+            if is_terminal_job_status(payload.status):
+                await sync_incident_collection_status(db, job.incident_id)
+            elif status_upper == "PARSING":
+                incident_update["status"] = "COLLECTION_IN_PROGRESS"
+                incident_update["collection_phase"] = "parsing"
+            else:
+                incident_update["status"] = "COLLECTION_IN_PROGRESS"
+                incident_update["collection_phase"] = "collecting"
+            if incident_update:
                 await update_incident(db, job.incident_id, IncidentUpdate(**incident_update))
 
     status_upper = payload.status.upper() if payload.status else ""
@@ -395,8 +400,10 @@ async def complete_job_upload(
     if not job or job.agent_id != agent_id:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.status in ("completed", "failed"):
-        raise HTTPException(status_code=400, detail=f"Job already {job.status}")
+    if is_terminal_job_status(job.status):
+        raise HTTPException(status_code=409, detail=f"Job is already terminal: {job.status}")
+    if normalized_job_status(job.status) == "processing":
+        raise HTTPException(status_code=409, detail="S3 upload processing is already queued")
 
     from app.services.s3_service import get_s3_service
     from app.worker import process_s3_upload_task
@@ -591,6 +598,7 @@ async def upload_job_evidence(
         metadata={"job_id": job_id},
     )
     await update_job_status(db, job_id, "completed")
+    await sync_incident_collection_status(db, job.incident_id)
     try:
         await create_entry(
             db,

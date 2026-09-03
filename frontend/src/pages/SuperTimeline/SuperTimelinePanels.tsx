@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-    X, Server, Clock, User, Shield, ExternalLink, Bookmark as BookmarkIcon, Check, Copy, Tag, MessageSquare, Target, GitMerge, LayoutGrid
+    X, Server, Clock, User, Shield, ExternalLink, Bookmark as BookmarkIcon, Check, Copy, Tag, MessageSquare, Target, GitMerge, LayoutGrid, ChevronLeft, ChevronRight
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { 
@@ -68,11 +68,13 @@ interface EventDetailPanelProps {
     isBookmarked: boolean;
     onBookmarkToggle: (event: Record<string, unknown>, note: string) => void;
     onNavigateIOC: (value: string, type: string) => void;
+    isCollapsed: boolean;
+    onToggleCollapsed: () => void;
 }
 
 export function EventDetailPanel({
     event, knownHosts, onClose, onFilterSearch, incidentId,
-    isBookmarked, onBookmarkToggle, onNavigateIOC
+    isBookmarked, onBookmarkToggle, onNavigateIOC, isCollapsed, onToggleCollapsed
 }: EventDetailPanelProps) {
     const navigate = useNavigate();
     const [noteInput, setNoteInput] = useState("");
@@ -105,15 +107,46 @@ export function EventDetailPanel({
     };
 
     return (
-        <div className="fixed inset-y-0 right-0 w-[500px] bg-card border-l border-border shadow-2xl z-50 flex flex-col font-mono animate-in slide-in-from-right duration-300">
+        <div className={cn(
+            "fixed inset-y-0 right-0 bg-card border-l border-border shadow-2xl z-50 flex flex-col font-mono animate-in slide-in-from-right duration-300 transition-[width]",
+            isCollapsed ? "w-12" : "w-[500px]"
+        )}>
+            {isCollapsed ? (
+                <div className="flex h-full flex-col items-center gap-3 py-3">
+                    <button
+                        onClick={onToggleCollapsed}
+                        className="rounded-sm p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                        aria-label="Expand event details"
+                        title="Expand event details"
+                    >
+                        <ChevronLeft className="h-5 w-5" />
+                    </button>
+                    <Shield className="h-4 w-4 text-primary" />
+                    <span className="[writing-mode:vertical-rl] rotate-180 text-[9px] font-bold tracking-[0.18em] text-muted-foreground">EVENT DETAILS</span>
+                    <button
+                        onClick={onClose}
+                        className="mt-auto rounded-sm p-2 text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground"
+                        aria-label="Close event details"
+                        title="Close event details"
+                    >
+                        <X className="h-4 w-4" />
+                    </button>
+                </div>
+            ) : (
+                <>
             <div className="flex items-center justify-between p-4 border-b border-border bg-secondary/20">
                 <div className="flex items-center gap-2">
                     <Shield className="w-4 h-4 text-primary" />
                     <span className="text-sm font-bold tracking-tight">EVENT INSPECTOR</span>
                 </div>
-                <button onClick={onClose} className="p-1 hover:bg-secondary rounded-sm transition-colors text-muted-foreground hover:text-foreground">
-                    <X className="w-5 h-5" />
-                </button>
+                <div className="flex items-center gap-1">
+                    <button onClick={onToggleCollapsed} className="p-1 hover:bg-secondary rounded-sm transition-colors text-muted-foreground hover:text-foreground" aria-label="Collapse event details" title="Collapse event details">
+                        <ChevronRight className="w-5 h-5" />
+                    </button>
+                    <button onClick={onClose} className="p-1 hover:bg-secondary rounded-sm transition-colors text-muted-foreground hover:text-foreground" aria-label="Close event details" title="Close event details">
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
             </div>
 
             <div className="flex-1 overflow-auto p-5 space-y-6">
@@ -231,6 +264,8 @@ export function EventDetailPanel({
                     </Button>
                 </div>
             </div>
+                </>
+            )}
         </div>
     );
 }

@@ -10,7 +10,6 @@ import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, Send, Terminal, Wifi, WifiOff, AlertTriangle } from "lucide-react";
-import { getStoredAuth } from "@/lib/auth";
 
 type OutputLine = {
   ts: string;
@@ -23,6 +22,10 @@ const WS_BASE = (() => {
   const proto = loc.protocol === "https:" ? "wss" : "ws";
   return `${proto}://${loc.host}/api/v1/agent-commands/ws`;
 })();
+
+// Read-only triage commands remain fast; commands that can alter evidence or
+// endpoint state require an explicit analyst confirmation before dispatch.
+const HIGH_IMPACT_COMMAND = /\b(rm\s+-[a-z]*r|del\s+|erase\s+|format\b|shutdown\b|reboot\b|restart-computer\b|stop-service\b|kill\s+-9|taskkill\b|reg\s+delete)\b/i;
 
 export default function AgentConsole() {
   const navigate = useNavigate();
@@ -50,12 +53,10 @@ export default function AgentConsole() {
 
   const connect = () => {
     if (wsRef.current) return;
-    const auth = getStoredAuth();
-    if (!auth?.token) { setWsError("Not authenticated"); return; }
     setConnecting(true);
     setWsError(null);
 
-    const ws = new WebSocket(`${WS_BASE}/${agentId}?token=${encodeURIComponent(auth.token)}`);
+    const ws = new WebSocket(`${WS_BASE}/${agentId}`);
 
     ws.onopen = () => {
       setConnected(true);
@@ -102,6 +103,12 @@ export default function AgentConsole() {
   const sendCommand = () => {
     const c = cmd.trim();
     if (!c || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (HIGH_IMPACT_COMMAND.test(c) && !window.confirm(
+      `This command may alter the endpoint or evidence. Send to agent ${agentId}?\n\n${c}`
+    )) {
+      addLine("info", "High-impact command cancelled by analyst.");
+      return;
+    }
     addLine("input", `$ ${c}`);
     historyRef.current = [c, ...historyRef.current.slice(0, 49)];
     histIdxRef.current = -1;
@@ -183,6 +190,10 @@ export default function AgentConsole() {
             </button>
           }
         >
+          <div className="mb-3 flex items-start gap-2 border border-warning/30 bg-warning/5 p-2 font-mono text-[10px] text-muted-foreground">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+            Commands are audited. High-impact commands require confirmation; prefer read-only triage commands.
+          </div>
           <div className="min-h-[400px] max-h-[550px] overflow-y-auto bg-black/50 rounded-sm p-3 font-mono text-xs space-y-0.5">
             {lines.length === 0 && (
               <div className="text-muted-foreground">Connect to an agent then type a command.</div>

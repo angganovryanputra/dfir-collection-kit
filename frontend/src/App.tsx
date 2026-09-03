@@ -96,9 +96,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const valid = isSessionValid();
   const location = useLocation();
 
-  if (!auth?.token || !valid) {
-    // If token exists but is invalid, we don't clear it here (api.ts does on next call),
-    // but we proactively redirect.
+  if (!auth?.username || !valid) {
     return <Navigate to="/login" state={{ from: location.pathname + location.search }} replace />;
   }
   return <>{children}</>;

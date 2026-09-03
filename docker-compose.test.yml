@@ -1,0 +1,37 @@
+# Disposable integration-test stack. It has no production volumes or host ports,
+# so fixtures that clear tables cannot target the application database.
+services:
+  db_test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dfir_test
+      POSTGRES_PASSWORD: dfir_test_password
+      POSTGRES_DB: dfir_test
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dfir_test -d dfir_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  backend_test:
+    build:
+      context: ./backend
+    environment:
+      DFIR_TEST_DATABASE_URL: postgresql+asyncpg://dfir_test:dfir_test_password@db_test:5432/dfir_test
+      DATABASE_URL: postgresql+asyncpg://dfir_test:dfir_test_password@db_test:5432/dfir_test
+      SECRET_KEY: test-secret-key-not-for-production
+      AGENT_SHARED_SECRET: test-agent-secret-not-for-production
+      CELERY_BROKER_URL: redis://localhost:6379/0
+      CELERY_RESULT_BACKEND: redis://localhost:6379/0
+    user: "0:0"
+    volumes:
+      - ./backend/tests:/app/tests:ro
+      - ./backend/pytest.ini:/app/pytest.ini:ro
+    depends_on:
+      db_test:
+        condition: service_healthy
+    command: >-
+      /bin/sh -ec "pip install --no-cache-dir pytest pytest-asyncio pytest-cov httpx &&
+      python -m pytest tests -q"

@@ -10,6 +10,7 @@ Security hardening unit tests:
 """
 import pytest
 import time
+from types import SimpleNamespace
 
 
 # ── JWT Revocation ──────────────────────────────────────────────────────────
@@ -37,6 +38,31 @@ def test_access_token_has_jti():
     payload = decode_access_token(token)
     assert "jti" in payload, "Access token must include jti claim"
     assert len(payload["jti"]) == 32, "jti should be 32-char hex UUID"
+
+
+def test_request_token_prefers_bearer_and_supports_http_only_cookie(monkeypatch):
+    from fastapi.security import HTTPAuthorizationCredentials
+    from app.core.config import settings
+    from app.core.deps import get_request_token
+
+    monkeypatch.setattr(settings, "AUTH_COOKIE_NAME", "dfir_session")
+    request = SimpleNamespace(cookies={"dfir_session": "cookie-token"})
+    assert get_request_token(request, None) == "cookie-token"
+    credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials="header-token")
+    assert get_request_token(request, credentials) == "header-token"
+
+
+def test_websocket_origin_policy_accepts_same_host_and_rejects_unknown(monkeypatch):
+    from app.api.v1.endpoints.agent_commands import _is_allowed_websocket_origin
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "ALLOWED_ORIGINS", "https://console.example.test")
+    same_host = SimpleNamespace(headers={"origin": "https://console.example.test", "host": "console.example.test"})
+    trusted_cross_origin = SimpleNamespace(headers={"origin": "https://console.example.test", "host": "api.example.test"})
+    unknown = SimpleNamespace(headers={"origin": "https://attacker.example", "host": "api.example.test"})
+    assert _is_allowed_websocket_origin(same_host)
+    assert _is_allowed_websocket_origin(trusted_cross_origin)
+    assert not _is_allowed_websocket_origin(unknown)
 
 
 # ── HMAC Webhook Signing ─────────────────────────────────────────────────────
@@ -210,3 +236,15 @@ def test_elastic_index_validation():
     with pytest.raises(ValidationError):
         SIEMExportRequest(target="elastic", incident_id="INC-001",
                           elastic_url="http://es:9200", elastic_index="INVALID INDEX")
+
+
+def test_collection_terminal_statuses_are_normalized_for_all_workflows():
+    from app.crud.job import is_successful_job_status, is_terminal_job_status
+
+    for status in ("complete", "COMPLETED", "done"):
+        assert is_successful_job_status(status)
+        assert is_terminal_job_status(status)
+
+    for status in ("collecting", "assigned", "pending"):
+        assert not is_successful_job_status(status)
+        assert not is_terminal_job_status(status)

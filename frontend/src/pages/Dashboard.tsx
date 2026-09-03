@@ -33,9 +33,13 @@ import { cn } from "@/lib/utils";
 
 // ─── Sound System (Synthesized) ───────────────────────────────────────────
 
+type WebkitAudioWindow = Window & typeof globalThis & {
+  webkitAudioContext?: typeof AudioContext;
+};
+
 const playTacticalPing = () => {
     try {
-        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const AudioContextClass = window.AudioContext || (window as WebkitAudioWindow).webkitAudioContext;
         if (!AudioContextClass) return;
         
         const ctx = new AudioContextClass();
@@ -279,7 +283,7 @@ export default function Dashboard() {
     if (soundEnabled && incidents.some(i => i.status === "COLLECTION_FAILED")) {
         playTacticalPing();
     }
-  }, [incidents.length, soundEnabled]);
+  }, [incidents, soundEnabled]);
 
   const { data: collectors = [], refetch: refetchCollectors, isLoading: isCollLoading } = useQuery<CollectorResponse[], Error, Collector[]>({
     queryKey: ["collectors"],

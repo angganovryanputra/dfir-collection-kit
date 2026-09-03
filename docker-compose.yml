@@ -37,6 +37,32 @@ services:
     networks:
       - dfir-network
 
+  # Named volumes are created as root-owned by Docker.  The application runs
+  # as uid 1000, so initialize ownership before any non-root service starts.
+  volume_init:
+    image: alpine:3.20
+    container_name: dfir-volume-init
+    user: "0:0"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - DAC_OVERRIDE
+    command:
+      - /bin/sh
+      - -ec
+      - >-
+        mkdir -p /vault/evidence /var/celery &&
+        chown -R 1000:1000 /vault/evidence /var/celery &&
+        chmod 0750 /vault/evidence /var/celery
+    volumes:
+      - dfir_evidence:/vault/evidence
+      - dfir_celerybeat:/var/celery
+    restart: "no"
+
   backend:
     build:
       context: ./backend
@@ -82,8 +108,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      volume_init:
+        condition: service_completed_successfully
     volumes:
       - dfir_evidence:/vault/evidence
+      - ./tools/eztools:/opt/eztools:ro
+      - ./tools/hayabusa:/opt/hayabusa:ro
+      - ./tools/chainsaw:/opt/chainsaw:ro
+      - ./tools/yara-rules:/opt/yara-rules:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -f --silent --max-time 4 http://localhost:8000/api/v1/status/health || exit 1"]
       interval: 10s
@@ -129,8 +161,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      volume_init:
+        condition: service_completed_successfully
     volumes:
       - dfir_evidence:/vault/evidence
+      - ./tools/eztools:/opt/eztools:ro
+      - ./tools/hayabusa:/opt/hayabusa:ro
+      - ./tools/chainsaw:/opt/chainsaw:ro
+      - ./tools/yara-rules:/opt/yara-rules:ro
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.worker.celery_app inspect ping --timeout 5 || exit 1"]
       interval: 30s
@@ -165,6 +203,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      volume_init:
+        condition: service_completed_successfully
     volumes:
       - dfir_evidence:/vault/evidence
       - dfir_celerybeat:/var/celery   # persistent beat schedule database
@@ -183,7 +223,8 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-https://localhost/api/v1}
+        # Relative API URLs keep browser traffic on the reverse-proxy origin.
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api/v1}
     container_name: dfir-frontend
     security_opt:
       - no-new-privileges:true
@@ -196,12 +237,12 @@ services:
           memory: 512M
     # Frontend is only reachable via the nginx proxy — no direct host port
     expose:
-      - "80"
+      - "8080"
     depends_on:
       backend:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f --silent --max-time 4 http://0.0.0.0:80/ || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/ || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -231,7 +272,11 @@ services:
       - "0.0.0.0:443:443"
     volumes:
       - ./nginx/nginx-ssl.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./nginx/certs:/etc/nginx/certs:ro
+    secrets:
+      - source: tls_cert
+        target: tls_cert.pem
+      - source: tls_key
+        target: tls_key.pem
     depends_on:
       frontend:
         condition: service_healthy
@@ -259,3 +304,11 @@ volumes:
     driver: local
   dfir_celerybeat:
     driver: local
+
+secrets:
+  # Keep TLS private keys outside the source tree.  Docker Compose mounts these
+  # files read-only at /run/secrets/ and never copies them into an image layer.
+  tls_cert:
+    file: ${SSL_CERT_PATH:?SSL_CERT_PATH must point to a PEM certificate}
+  tls_key:
+    file: ${SSL_KEY_PATH:?SSL_KEY_PATH must point to a PEM private key}

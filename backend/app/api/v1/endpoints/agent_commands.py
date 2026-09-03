@@ -24,12 +24,14 @@ import json
 import logging
 import time
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Header, HTTPException, Query as FastAPIQuery, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.agents import verify_agent_secret
+from app.core.config import settings
 from app.core.deps import get_current_user, get_db
 from app.crud.device import get_device
 from app.models.user import User
@@ -48,6 +50,32 @@ _pending_lock = asyncio.Lock()
 
 # Maximum allowed command timeout (seconds)
 _MAX_TIMEOUT_SEC = 300
+_MAX_COMMAND_CHARS = 4096
+_MAX_OUTPUT_CHARS = 1_000_000
+
+
+def Query(default: object = ..., **kwargs: object):
+    """Keep the legacy token query parameter optional during cookie migration."""
+    return FastAPIQuery(None if default is ... else default, **kwargs)
+
+
+def _is_allowed_websocket_origin(websocket: WebSocket) -> bool:
+    """Allow only the application origin for cookie-authenticated WebSockets."""
+    origin = websocket.headers.get("origin")
+    host = websocket.headers.get("host", "").lower()
+    if not origin or not host:
+        return False
+    try:
+        if urlparse(origin).netloc.lower() == host:
+            return True
+    except ValueError:
+        return False
+    trusted = {
+        value.strip().rstrip("/")
+        for value in settings.ALLOWED_ORIGINS.split(",")
+        if value.strip()
+    }
+    return "*" not in trusted and origin.rstrip("/") in trusted
 
 
 # ── Analyst WebSocket endpoint ────────────────────────────────────────────────
@@ -61,6 +89,16 @@ async def analyst_ws(
     """Stream live command output to an analyst."""
     from app.core.security import decode_access_token, is_token_revoked
     from jwt import InvalidTokenError
+
+    if not _is_allowed_websocket_origin(websocket):
+        await websocket.close(code=4003, reason="Untrusted WebSocket origin")
+        return
+    # Ignore any legacy query-string value.  The browser presents the HttpOnly
+    # cookie automatically for a same-origin WebSocket upgrade.
+    token = websocket.cookies.get(settings.AUTH_COOKIE_NAME)
+    if not token:
+        await websocket.close(code=4001, reason="Missing session")
+        return
 
     try:
         payload = decode_access_token(token)
@@ -93,10 +131,17 @@ async def analyst_ws(
                 await websocket.send_text(json.dumps({"type": "error", "message": "Invalid JSON"}))
                 continue
 
-            cmd = msg.get("cmd", "").strip()
-            timeout_sec = min(int(msg.get("timeout_sec", 30)), _MAX_TIMEOUT_SEC)
+            cmd = str(msg.get("cmd", "")).strip()
+            try:
+                timeout_sec = min(max(1, int(msg.get("timeout_sec", 30))), _MAX_TIMEOUT_SEC)
+            except (TypeError, ValueError):
+                await websocket.send_text(json.dumps({"type": "error", "message": "timeout_sec must be an integer"}))
+                continue
             if not cmd:
                 await websocket.send_text(json.dumps({"type": "error", "message": "cmd is required"}))
+                continue
+            if len(cmd) > _MAX_COMMAND_CHARS:
+                await websocket.send_text(json.dumps({"type": "error", "message": "cmd exceeds 4096 characters"}))
                 continue
 
             command_id = f"CMD-{uuid4().hex[:12].upper()}"
@@ -108,6 +153,7 @@ async def analyst_ws(
                     "cmd": cmd,
                     "timeout_sec": timeout_sec,
                     "created_at": datetime.now(timezone.utc).isoformat(),
+                    "expires_at": time.time() + timeout_sec + 30,
                 })
                 _ws_queues[command_id] = result_queue
                 _command_agents[command_id] = agent_id
@@ -156,6 +202,10 @@ async def analyst_ws(
                         break
             finally:
                 async with _pending_lock:
+                    pending = _pending.get(agent_id, [])
+                    _pending[agent_id] = [entry for entry in pending if entry["command_id"] != command_id]
+                    if not _pending[agent_id]:
+                        _pending.pop(agent_id, None)
                     _ws_queues.pop(command_id, None)
                     _command_agents.pop(command_id, None)
     except WebSocketDisconnect:
@@ -180,9 +230,15 @@ async def poll_for_command(
     verify_agent_secret(agent_token, await get_device(db, agent_id))
     async with _pending_lock:
         queue = _pending.get(agent_id, [])
+        now = time.time()
+        while queue and float(queue[0].get("expires_at", 0)) <= now:
+            queue.pop(0)
         if not queue:
+            _pending.pop(agent_id, None)
             return {}
         entry = queue.pop(0)
+        if not queue:
+            _pending.pop(agent_id, None)
     return {
         "command_id": entry["command_id"],
         "cmd": entry["cmd"],
@@ -198,13 +254,18 @@ async def post_command_result(
     db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Agent posts execution output back to the waiting analyst WebSocket."""
+    # Authenticate before exposing whether a command has an active subscriber.
+    # Unknown/expired commands use the bootstrap credential for backward
+    # compatibility; known commands are bound to their registered device.
+    agent_id = _command_agents.get(command_id)
+    verify_agent_secret(agent_token, await get_device(db, agent_id) if agent_id else None)
     result_queue = _ws_queues.get(command_id)
     if result_queue is None:
         return {"status": "no_subscriber"}
-    agent_id = _command_agents.get(command_id)
-    verify_agent_secret(agent_token, await get_device(db, agent_id) if agent_id else None)
 
-    output = payload.get("output", "")
+    output = str(payload.get("output", ""))
+    if len(output) > _MAX_OUTPUT_CHARS:
+        raise HTTPException(status_code=413, detail="Command output exceeds 1 MB limit")
     exit_code = int(payload.get("exit_code", 0))
     if output:
         await result_queue.put({"type": "output", "chunk": output})

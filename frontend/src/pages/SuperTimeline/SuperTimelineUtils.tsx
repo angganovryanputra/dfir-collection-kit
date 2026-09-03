@@ -100,10 +100,11 @@ export function hashEvent(event: Record<string, unknown>): string {
 }
 
 export function detectIOCs(text: string) {
-    const results: { type: "IPv4" | "MD5" | "SHA1" | "SHA256" | "Domain"; value: string }[] = [];
+    type IOCType = "IPv4" | "MD5" | "SHA1" | "SHA256" | "Domain";
+    const results: { type: IOCType; value: string }[] = [];
     const seen = new Set<string>();
 
-    function add(type: any, value: string) {
+    function add(type: IOCType, value: string) {
         const key = `${type}:${value.toLowerCase()}`;
         if (!seen.has(key)) { seen.add(key); results.push({ type, value }); }
     }

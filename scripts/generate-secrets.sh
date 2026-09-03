@@ -52,6 +52,7 @@ CHAIN_OF_CUSTODY_SIGNING_KEY=${CHAIN_OF_CUSTODY_SIGNING_KEY}
 # ── Auth Settings ─────────────────────────────────────────────────────────────
 REQUIRE_AUTH=true
 ACCESS_TOKEN_EXPIRE_MINUTES=60
+AUTH_COOKIE_SECURE=true
 
 # ── Default User Passwords (change after first login) ─────────────────────────
 DFIR_DEFAULT_ADMIN_PASSWORD=${ADMIN_PASSWORD}
@@ -62,11 +63,12 @@ DFIR_DEFAULT_VIEWER_PASSWORD=${VIEWER_PASSWORD}
 ALLOWED_ORIGINS=https://localhost
 
 # ── Frontend API URL (baked into the frontend build) ─────────────────────────
-VITE_API_BASE_URL=https://localhost/api/v1
+VITE_API_BASE_URL=/api/v1
 
 # ── TLS Certificates ─────────────────────────────────────────────────────────
-# For local dev: run scripts/generate-self-signed-cert.sh
-# For production: replace these with paths to real certificates from your CA or Let's Encrypt
+# These files are mounted as Docker Compose secrets, not copied into an image.
+# For local dev: run scripts/generate-self-signed-cert.sh.
+# For production: use paths managed by your CA, certbot, or secret platform.
 SSL_CERT_PATH=./nginx/certs/cert.pem
 SSL_KEY_PATH=./nginx/certs/key.pem
 
@@ -92,6 +94,4 @@ echo ""
 echo "[NEXT STEP] Generate TLS certificates:"
 echo "  bash scripts/generate-self-signed-cert.sh   # local dev (self-signed)"
 echo ""
-echo "  For production: place real certificates at:"
-echo "    nginx/certs/cert.pem"
-echo "    nginx/certs/key.pem"
+echo "  For production: set SSL_CERT_PATH and SSL_KEY_PATH to CA-managed files."

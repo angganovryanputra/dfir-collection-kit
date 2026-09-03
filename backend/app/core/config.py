@@ -5,6 +5,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://dfir:dfir@localhost:5432/dfir"
     SECRET_KEY: str = "change-me"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
+    # Browser sessions use an HttpOnly cookie so application JavaScript never
+    # receives the bearer credential.  API clients may continue using an
+    # Authorization header.
+    AUTH_COOKIE_NAME: str = "dfir_session"
+    AUTH_COOKIE_SECURE: bool = True
     BACKEND_VERSION: str = "dev"
     ALLOWED_ORIGINS: str = "*"
     EVIDENCE_STORAGE_PATH: str = "/vault/evidence"

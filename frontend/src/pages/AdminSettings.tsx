@@ -48,6 +48,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { apiDelete, apiGet, apiPatch, apiPost, apiPut } from "@/lib/api";
+import { getStoredAuth, getStoredRole, isSessionValid } from "@/lib/auth";
 
 interface User {
   id: string;
@@ -217,11 +218,7 @@ export default function AdminSettings() {
   const [showNewPassword, setShowNewPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const selfUsername: string = (() => {
-    try {
-      return (JSON.parse(localStorage.getItem("dfir_auth") ?? "{}") as { username?: string }).username ?? "";
-    } catch { return ""; }
-  })();
+  const selfUsername = getStoredAuth()?.username ?? "";
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isSavingUser, setIsSavingUser] = useState(false);
   const [isRefreshingCollectors, setIsRefreshingCollectors] = useState(false);
@@ -284,6 +281,10 @@ export default function AdminSettings() {
     queryKey: ["system-settings"],
     queryFn: () => apiGet<SystemSettingsResponse | null>("/settings"),
   });
+
+  const refetchUsers = usersQuery.refetch;
+  const refetchCollectors = collectorsQuery.refetch;
+  const refetchSettings = settingsQuery.refetch;
 
   useEffect(() => {
     if (usersQuery.error || collectorsQuery.error || settingsQuery.error) {
@@ -417,16 +418,21 @@ export default function AdminSettings() {
     }
   }, [aiProvider, aiModel, aiApiKey, aiApiUrl, googleClientId, googleClientSecret, systemSettings]);
 
-  const loadAdminData = async () => {
+  const loadAdminData = useCallback(async () => {
     setErrorMessage(null);
     await Promise.all([
-      usersQuery.refetch(),
-      collectorsQuery.refetch(),
-      settingsQuery.refetch(),
+      refetchUsers(),
+      refetchCollectors(),
+      refetchSettings(),
     ]);
-  };
+  }, [refetchUsers, refetchCollectors, refetchSettings]);
 
-  const buildAuditParams = (extra?: { limit?: number; offset?: number }) => {
+  // Debounce free-text audit filters to avoid firing an API call on every keystroke.
+  const debouncedAuditEventType = useDebounce(auditEventType, 400);
+  const debouncedAuditActorId = useDebounce(auditActorId, 400);
+  const debouncedAuditTargetId = useDebounce(auditTargetId, 400);
+
+  const buildAuditParams = useCallback((extra?: { limit?: number; offset?: number }) => {
     const params = new URLSearchParams();
     params.set("limit", String(extra?.limit ?? auditItemsPerPage));
     params.set("offset", String(extra?.offset ?? (auditPage - 1) * auditItemsPerPage));
@@ -437,9 +443,9 @@ export default function AdminSettings() {
     if (auditDateTo) params.set("date_to", auditDateTo);
     if (auditStatusFilter !== "all") params.set("status", auditStatusFilter);
     return params;
-  };
+  }, [auditItemsPerPage, auditPage, debouncedAuditEventType, debouncedAuditActorId, debouncedAuditTargetId, auditDateFrom, auditDateTo, auditStatusFilter]);
 
-  const loadAuditLogs = async () => {
+  const loadAuditLogs = useCallback(async () => {
     setErrorMessage(null);
     try {
       const response = await apiGet<AuditLogListResponse>(`/audit-logs?${buildAuditParams().toString()}`);
@@ -448,7 +454,7 @@ export default function AdminSettings() {
     } catch {
       setErrorMessage("Unable to load audit log entries.");
     }
-  };
+  }, [buildAuditParams]);
 
   const exportAuditLogs = async () => {
     try {
@@ -470,18 +476,12 @@ export default function AdminSettings() {
     }
   };
 
-  // Debounce free-text audit filters to avoid firing an API call on every keystroke
-  const debouncedAuditEventType = useDebounce(auditEventType, 400);
-  const debouncedAuditActorId = useDebounce(auditActorId, 400);
-  const debouncedAuditTargetId = useDebounce(auditTargetId, 400);
-
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (activeTab !== "audit") return;
-    loadAuditLogs();
-  }, [activeTab, auditPage, auditItemsPerPage, debouncedAuditEventType, debouncedAuditActorId, debouncedAuditTargetId, auditDateFrom, auditDateTo, auditStatusFilter]);
+    void loadAuditLogs();
+  }, [activeTab, loadAuditLogs]);
 
-  const loadIOCIndicators = async () => {
+  const loadIOCIndicators = useCallback(async () => {
     setErrorMessage(null);
     try {
       const params = new URLSearchParams({ limit: "200", offset: "0" });
@@ -492,13 +492,12 @@ export default function AdminSettings() {
     } catch {
       setErrorMessage("Unable to load IOC indicators.");
     }
-  };
+  }, [iocTypeFilter]);
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (activeTab !== "threatintel") return;
-    loadIOCIndicators();
-  }, [activeTab, iocTypeFilter]);
+    void loadIOCIndicators();
+  }, [activeTab, loadIOCIndicators]);
 
   const handleAddIOC = async () => {
     if (!newIoc.value.trim()) {
@@ -535,25 +534,17 @@ export default function AdminSettings() {
     }
   };
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    const raw = localStorage.getItem("dfir_auth");
-    if (!raw) {
+    if (!isSessionValid()) {
       navigate("/login", { replace: true });
       return;
     }
-    try {
-      const parsed = JSON.parse(raw) as { role?: string };
-      if (parsed.role !== "admin") {
-        navigate("/dashboard", { replace: true });
-        return;
-      }
-    } catch {
-      navigate("/login", { replace: true });
+    if (getStoredRole() !== "admin") {
+      navigate("/dashboard", { replace: true });
       return;
     }
     void loadAdminData();
-  }, [navigate]);
+  }, [navigate, loadAdminData]);
 
   const {
     paginatedItems: paginatedUsers,

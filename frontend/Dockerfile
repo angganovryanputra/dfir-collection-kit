@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 WORKDIR /app
 
 # VITE_API_BASE_URL is a build-time variable (replaced at compile time by Vite).
@@ -35,4 +35,4 @@ RUN mkdir -p /var/cache/nginx/client_temp \
     && sed -i 's/^user\s.*;$/# user directive removed for unprivileged run/' /etc/nginx/nginx.conf
 
 USER nginx
-EXPOSE 80
+EXPOSE 8080

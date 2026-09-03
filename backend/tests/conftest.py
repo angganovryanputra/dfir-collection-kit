@@ -30,13 +30,13 @@ async def engine(test_database_url: str):
 
 
 @pytest.fixture
-async def db_session(engine) -> AsyncGenerator[AsyncSession, None]:
+async def db_session(engine, clear_db) -> AsyncGenerator[AsyncSession, None]:
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with sessionmaker() as session:
         yield session
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 async def clear_db(engine) -> AsyncGenerator[None, None]:
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
     async with sessionmaker() as session:
@@ -47,7 +47,7 @@ async def clear_db(engine) -> AsyncGenerator[None, None]:
 
 
 @pytest.fixture
-async def client(engine) -> AsyncGenerator[AsyncClient, None]:
+async def client(engine, clear_db) -> AsyncGenerator[AsyncClient, None]:
     sessionmaker = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
     async def override_get_db():
@@ -61,7 +61,9 @@ async def client(engine) -> AsyncGenerator[AsyncClient, None]:
 
     app.dependency_overrides[get_db] = override_get_db
     async with AsyncClient(
-        transport=ASGITransport(app=app), base_url="http://test", follow_redirects=True
+        # Secure session cookies must be exercised over HTTPS, just as they are
+        # behind the production reverse proxy.
+        transport=ASGITransport(app=app), base_url="https://test", follow_redirects=True
     ) as async_client:
         yield async_client
     app.dependency_overrides.clear()

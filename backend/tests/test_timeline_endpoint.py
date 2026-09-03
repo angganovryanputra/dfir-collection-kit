@@ -58,13 +58,51 @@ def _build_evidence_item(
     )
 
 
-async def _login(client, username: str = "ADMIN") -> str:
+async def _login(client, username: str = "ADMIN") -> None:
     resp = await client.post(
         "/api/v1/auth/login",
         json={"username": username, "password": "secret"},
     )
     assert resp.status_code == 200
-    return resp.json()["access_token"]
+    assert resp.json()["access_token"] is None
+
+
+# ---------------------------------------------------------------------------
+# Evidence listing endpoints
+# ---------------------------------------------------------------------------
+
+class TestEvidenceListing:
+    async def test_paginated_evidence_listing_returns_items_and_total(self, client, db_session):
+        user = _build_user()
+        db_session.add(user)
+        db_session.add(_build_incident("INC-EVIDENCE-LIST"))
+        await db_session.commit()
+        item = _build_evidence_item("INC-EVIDENCE-LIST")
+        db_session.add(item)
+        await db_session.commit()
+        await _login(client)
+
+        response = await client.get("/api/v1/evidence/items?incident_id=INC-EVIDENCE-LIST")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["total"] == 1
+        assert [entry["id"] for entry in body["items"]] == [item.id]
+
+    async def test_legacy_incident_listing_unpacks_paginated_crud_result(self, client, db_session):
+        user = _build_user()
+        db_session.add(user)
+        db_session.add(_build_incident("INC-EVIDENCE-LEGACY"))
+        await db_session.commit()
+        item = _build_evidence_item("INC-EVIDENCE-LEGACY")
+        db_session.add(item)
+        await db_session.commit()
+        await _login(client)
+
+        response = await client.get("/api/v1/evidence/incident/INC-EVIDENCE-LEGACY")
+
+        assert response.status_code == 200
+        assert [entry["id"] for entry in response.json()] == [item.id]
 
 
 # ---------------------------------------------------------------------------
@@ -76,12 +114,9 @@ class TestTimelineEndpoint:
         user = _build_user()
         db_session.add(user)
         await db_session.commit()
-        token = await _login(client)
+        await _login(client)
 
-        resp = await client.get(
-            "/api/v1/evidence/timeline/nonexistent",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        resp = await client.get("/api/v1/evidence/timeline/nonexistent")
         assert resp.status_code == 404
 
     async def test_400_when_not_timeline_type(self, client, db_session):
@@ -94,12 +129,9 @@ class TestTimelineEndpoint:
         item = _build_evidence_item("INC-001", name="test.evtx", etype="RAW")
         db_session.add(item)
         await db_session.commit()
-        token = await _login(client)
+        await _login(client)
 
-        resp = await client.get(
-            f"/api/v1/evidence/timeline/{item.id}",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        resp = await client.get(f"/api/v1/evidence/timeline/{item.id}")
         assert resp.status_code == 400
         assert "not a timeline" in resp.json()["detail"]
 
@@ -114,12 +146,9 @@ class TestProcessingStatus:
         user = _build_user()
         db_session.add(user)
         await db_session.commit()
-        token = await _login(client)
+        await _login(client)
 
-        resp = await client.get(
-            "/api/v1/processing/incident/INC-EMPTY/status",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        resp = await client.get("/api/v1/processing/incident/INC-EMPTY/status")
         assert resp.status_code == 404
 
     async def test_returns_job_status_when_job_exists(self, client, db_session):
@@ -152,12 +181,9 @@ class TestProcessingStatus:
         )
         db_session.add(job)
         await db_session.commit()
-        token = await _login(client)
+        await _login(client)
 
-        resp = await client.get(
-            "/api/v1/processing/incident/INC-004/status",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        resp = await client.get("/api/v1/processing/incident/INC-004/status")
         assert resp.status_code == 200
         body = resp.json()
         assert body["status"] == "DONE"
