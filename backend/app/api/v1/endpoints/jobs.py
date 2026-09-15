@@ -5,7 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.deps import get_current_user, get_db, require_roles
 from app.core.modules import build_modules
 from app.crud.device import get_device
-from app.crud.job import count_active_jobs, create_job, get_job, list_jobs_for_incident, update_job_status
+from app.crud.job import (
+    count_active_jobs,
+    create_job,
+    get_job,
+    list_jobs_for_incident,
+    update_job_status,
+)
 from app.schemas.job import JobCreate, JobOut
 from app.services.audit_log_service import safe_record_event
 from app.services.system_settings_service import get_runtime_settings

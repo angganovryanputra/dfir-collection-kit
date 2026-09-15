@@ -3,9 +3,11 @@
 Revision ID: 20260902_agent_credentials
 Revises: 20260902_chain_custody_hardening
 """
+
 from __future__ import annotations
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20260902_agent_credentials"

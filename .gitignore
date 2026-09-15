@@ -56,7 +56,9 @@ lerna-debug.log*
 .DS_Store
 
 # Docker
-.dockerignore
+*.dockerignore
+!backend/.dockerignore
+!frontend/.dockerignore
 *.log
 
 # TLS material is supplied at runtime through Docker secrets.  Never commit

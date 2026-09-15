@@ -1,4 +1,5 @@
 """Super Timeline models: merged cross-host timeline + lateral movement detections."""
+
 from datetime import datetime
 
 from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, Integer, String, Text, func
@@ -23,8 +24,18 @@ class SuperTimeline(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TimelineAnnotation(Base):
+    __tablename__ = "timeline_annotations"
+
+    incident_id: Mapped[str] = mapped_column(String, ForeignKey("incidents.id"), primary_key=True)
+    event_uid: Mapped[str] = mapped_column(String, primary_key=True)
+    payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    updated_by: Mapped[str] = mapped_column(String, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
 

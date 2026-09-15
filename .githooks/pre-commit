@@ -1,0 +1,15 @@
+#!/usr/bin/env sh
+# Prevent PEM private keys from entering commits.  This hook intentionally
+# scans only staged text files so it is fast and does not inspect ignored data.
+set -eu
+
+for file in $(git diff --cached --name-only --diff-filter=ACMR); do
+  case "$file" in
+    *.pem|*.key|*.crt|*.env|*.txt|*.yaml|*.yml|*.json|*.py|*.go|*.ts|*.tsx|*.sh|*.ps1)
+      if git show ":$file" 2>/dev/null | grep -Eq -- '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----'; then
+        echo "ERROR: Private key material detected in staged file: $file" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done

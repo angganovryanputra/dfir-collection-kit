@@ -15,10 +15,12 @@ RateLimitExceeded = Exception
 SlowAPIMiddleware = None
 
 try:
-    from slowapi import Limiter, _rate_limit_exceeded_handler as _rleh  # type: ignore[assignment]
-    from slowapi.util import get_remote_address
+    from slowapi import Limiter
+    from slowapi import _rate_limit_exceeded_handler as _rleh  # type: ignore[assignment]
     from slowapi.errors import RateLimitExceeded as _RLE  # type: ignore[assignment]
     from slowapi.middleware import SlowAPIMiddleware as _SLAPI  # type: ignore[assignment]
+    from slowapi.util import get_remote_address
+
     _SLOWAPI_AVAILABLE = True
     limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
     _rate_limit_exceeded_handler = _rleh
@@ -85,7 +87,9 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         response.headers.setdefault("X-XSS-Protection", "1; mode=block")
         response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
         response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
-        response.headers.setdefault("Permissions-Policy", "geolocation=(), camera=(), microphone=()")
+        response.headers.setdefault(
+            "Permissions-Policy", "geolocation=(), camera=(), microphone=()"
+        )
         # CSP: API-only backend — no HTML served here, but block any accidental rendering
         response.headers.setdefault(
             "Content-Security-Policy",
@@ -102,7 +106,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="DFIR Backend", lifespan=lifespan)
 
-allowed_origins = [origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()]
+allowed_origins = [
+    origin.strip() for origin in settings.ALLOWED_ORIGINS.split(",") if origin.strip()
+]
 allow_origins = allowed_origins or ["*"]
 allow_credentials = False if "*" in allow_origins else True
 app.add_middleware(

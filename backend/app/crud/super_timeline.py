@@ -1,4 +1,5 @@
 """CRUD operations for SuperTimeline and LateralMovement."""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -47,9 +48,7 @@ async def get_super_timeline_by_incident(
     Returns:
         The SuperTimeline instance, or None if not found.
     """
-    result = await db.execute(
-        select(SuperTimeline).where(SuperTimeline.incident_id == incident_id)
-    )
+    result = await db.execute(select(SuperTimeline).where(SuperTimeline.incident_id == incident_id))
     return result.scalar_one_or_none()
 
 
@@ -210,9 +209,7 @@ async def delete_lateral_movements_by_super_timeline(
         Number of rows deleted.
     """
     result = await db.execute(
-        delete(LateralMovement).where(
-            LateralMovement.super_timeline_id == super_timeline_id
-        )
+        delete(LateralMovement).where(LateralMovement.super_timeline_id == super_timeline_id)
     )
     await db.flush()
     return result.rowcount  # type: ignore[return-value]

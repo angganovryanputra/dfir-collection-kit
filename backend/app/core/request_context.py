@@ -1,4 +1,5 @@
 """Trusted request metadata supplied by the internal reverse proxy."""
+
 from __future__ import annotations
 
 import ipaddress

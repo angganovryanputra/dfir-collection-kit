@@ -1,16 +1,17 @@
-from logging.config import fileConfig
 import sys
+from logging.config import fileConfig
 from pathlib import Path
 
-from alembic import context
 from sqlalchemy import engine_from_config, pool
+
+from alembic import context
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+import app.models  # noqa: F401
 from app.core.config import settings
 from app.db.base import Base
 from app.db.session import get_sync_database_url
-import app.models  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", get_sync_database_url())

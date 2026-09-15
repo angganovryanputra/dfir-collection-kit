@@ -7,10 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.security import decode_access_token, is_token_revoked
-from app.services.audit_log_service import safe_record_event
 from app.crud.user import get_user_by_username
 from app.db.session import AsyncSessionLocal
 from app.models.user import User
+from app.services.audit_log_service import safe_record_event
 
 security_scheme = HTTPBearer(auto_error=False)
 

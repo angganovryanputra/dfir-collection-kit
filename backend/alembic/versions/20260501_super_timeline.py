@@ -6,8 +6,9 @@ Create Date: 2026-05-01 00:00:00.000000
 """
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "20260501_super_timeline"
 down_revision = "20260403_phase2_analytics"
@@ -47,9 +48,7 @@ def upgrade() -> None:
             sa.Column("error_message", sa.Text(), nullable=True),
             sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
-            sa.Column(
-                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
-            ),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         )
         _create_index_if_missing(
             "ix_super_timelines_incident_id", "super_timelines", ["incident_id"]
@@ -79,12 +78,8 @@ def upgrade() -> None:
             sa.Column("last_seen", sa.DateTime(timezone=True), nullable=True),
             sa.Column("event_count", sa.Integer(), nullable=False, server_default="0"),
             sa.Column("confidence", sa.Float(), nullable=False, server_default="0.0"),
-            sa.Column(
-                "details", postgresql.JSONB(), nullable=False, server_default="{}"
-            ),
-            sa.Column(
-                "detected_at", sa.DateTime(timezone=True), server_default=sa.func.now()
-            ),
+            sa.Column("details", postgresql.JSONB(), nullable=False, server_default="{}"),
+            sa.Column("detected_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         )
         _create_index_if_missing(
             "ix_lateral_movements_incident_id", "lateral_movements", ["incident_id"]

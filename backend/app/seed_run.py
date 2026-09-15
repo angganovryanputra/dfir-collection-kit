@@ -62,6 +62,7 @@ async def init_db() -> None:
 
     if os.environ.get("SEED_DEMO_DATA", "").lower() == "true":
         from app.seed_demo import seed_all
+
         print("[seed_run] SEED_DEMO_DATA=true — seeding demo data …")
         await seed_all()
 

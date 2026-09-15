@@ -63,7 +63,13 @@ export default function SIEMExport() {
       if (siemTarget === "splunk") { body.splunk_hec_url = cfg.splunk_hec_url; body.splunk_hec_token = cfg.splunk_hec_token; }
       else if (siemTarget === "elastic") { body.elastic_url = cfg.elastic_url; body.elastic_index = cfg.elastic_index; if (cfg.elastic_api_key) body.elastic_api_key = cfg.elastic_api_key; }
       else { body.timesketch_url = cfg.timesketch_url; body.timesketch_token = cfg.timesketch_token; body.timesketch_sketch_id = parseInt(cfg.timesketch_sketch_id, 10) || 1; }
-      const r = await apiPost<{ sent: number }>("/platform/siem-export", body);
+      const r = await apiPost<{ sent: number; failed?: number; errors?: boolean }>("/platform/siem-export", body);
+      if (r.errors || r.failed) {
+        const message = `${r.sent.toLocaleString()} events accepted; ${r.failed ?? "some"} rejected by ${siemTarget.toUpperCase()}. Review the destination before retrying.`;
+        setSiemResult({ sent: r.sent, error: message });
+        toast({ title: "Export Sebagian Gagal", description: message, variant: "destructive" });
+        return;
+      }
       setSiemResult({ sent: r.sent });
       toast({ title: "Telemetri Terkirim", description: `${r.sent.toLocaleString()} event berhasil di-push ke ${siemTarget.toUpperCase()}.` });
     } catch (err) {

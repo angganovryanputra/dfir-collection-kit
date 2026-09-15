@@ -1,16 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json as _json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
+from app.core.request_throttle import enforce_expensive_operation_limit
 from app.crud.analytics import (
     create_ioc_indicator,
     delete_ioc_indicator,
@@ -31,7 +33,6 @@ from app.crud.super_timeline import (
     list_lateral_movements,
 )
 from app.models.user import User
-from app.services.audit_log_service import safe_record_event
 from app.schemas.analytics import (
     AttackChainOut,
     IOCIndicatorCreate,
@@ -51,11 +52,116 @@ from app.schemas.super_timeline import (
     LateralMovementOut,
     SuperTimelineOut,
     SuperTimelineTriggerResponse,
+    TimelineAnnotationPatch,
 )
+from app.services.audit_log_service import safe_record_event
 from app.services.system_settings_service import get_runtime_settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+@router.get("/incident/{incident_id}/annotations")
+async def list_timeline_annotations(
+    incident_id: str,
+    after: str = Query(default="", max_length=128),
+    limit: int = Query(default=200, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    from sqlalchemy import select
+
+    from app.models.super_timeline import TimelineAnnotation
+
+    rows = (
+        (
+            await db.execute(
+                select(TimelineAnnotation)
+                .where(
+                    TimelineAnnotation.incident_id == incident_id,
+                    TimelineAnnotation.event_uid > after,
+                )
+                .order_by(TimelineAnnotation.event_uid)
+                .limit(limit + 1)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "event_uid": row.event_uid,
+                **row.payload,
+                "updated_by": row.updated_by,
+                "updated_at": row.updated_at,
+            }
+            for row in rows[:limit]
+        ],
+        "next_cursor": rows[limit - 1].event_uid if len(rows) > limit else None,
+    }
+
+
+@router.patch(
+    "/incident/{incident_id}/annotations/{event_uid}",
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
+async def save_timeline_annotation(
+    incident_id: str,
+    event_uid: str,
+    payload: TimelineAnnotationPatch,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> dict:
+    import re
+
+    from sqlalchemy import func
+    from sqlalchemy.dialects.postgresql import insert
+
+    from app.models.incident import Incident
+    from app.models.super_timeline import TimelineAnnotation
+    from app.services.audit_log_service import record_event
+
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", event_uid):
+        raise HTTPException(422, "Invalid event identifier")
+    if not await db.get(Incident, incident_id):
+        raise HTTPException(404, "Incident not found")
+    data = payload.model_dump(exclude_unset=True)
+    if not data:
+        raise HTTPException(422, "Supply a bookmark or tag change")
+    if payload.bookmark and payload.bookmark.eventHash != event_uid:
+        raise HTTPException(422, "Bookmark identifier does not match the event")
+    statement = insert(TimelineAnnotation).values(
+        incident_id=incident_id,
+        event_uid=event_uid,
+        payload=data,
+        updated_by=user.username,
+    )
+    # Patch individual fields atomically: tagging must not erase another user's bookmark.
+    statement = statement.on_conflict_do_update(
+        index_elements=[TimelineAnnotation.incident_id, TimelineAnnotation.event_uid],
+        set_={
+            "payload": TimelineAnnotation.payload.op("||")(statement.excluded.payload),
+            "updated_by": user.username,
+            "updated_at": func.now(),
+        },
+    ).returning(TimelineAnnotation.payload)
+    saved = (await db.execute(statement)).scalar_one()
+    await record_event(
+        db,
+        event_type="timeline.annotation.updated",
+        actor_type="user",
+        actor_id=user.username,
+        source="api",
+        action="annotate",
+        target_type="incident",
+        target_id=incident_id,
+        status="success",
+        message="Timeline annotation updated",
+        metadata={"event_uid": event_uid, "fields": list(data)},
+    )
+    await db.commit()
+    return {"event_uid": event_uid, **saved}
 
 
 @router.post(
@@ -65,39 +171,75 @@ router = APIRouter()
 )
 async def trigger_processing(
     job_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
+    force: bool = Query(default=False),
 ) -> ProcessingTriggerResponse:
     """Manually trigger the parsing pipeline for a completed evidence job."""
-    from app.crud.job import get_job
+    enforce_expensive_operation_limit(request, "processing-trigger", limit=4)
+    from sqlalchemy import select
 
-    job = await get_job(db, job_id)
+    from app.crud.job import is_successful_job_status
+    from app.crud.processing import create_processing_job
+    from app.models.job import Job
+
+    # Lock the parent even when no processing record exists yet.
+    job = (
+        await db.execute(select(Job).where(Job.id == job_id).with_for_update())
+    ).scalar_one_or_none()
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    if not is_successful_job_status(job.status):
+        raise HTTPException(
+            status_code=422, detail="Collection must finish before processing can start"
+        )
 
     existing = await get_processing_job_by_evidence_job_id(db, job_id)
-    if existing and existing.status == "RUNNING":
+    if existing and existing.status in ("PENDING", "RUNNING"):
         return ProcessingTriggerResponse(
             processing_job_id=existing.id,
-            status="RUNNING",
+            status=existing.status,
             message="Pipeline already running",
         )
-    if existing and existing.status == "DONE":
+    if existing and existing.status in ("DONE", "PARTIAL") and not force:
         return ProcessingTriggerResponse(
             processing_job_id=existing.id,
-            status="DONE",
-            message="Pipeline already completed — re-trigger not supported; check /status",
+            status=existing.status,
+            message="Pipeline already completed — use force=true to rebuild derived results",
         )
 
     runtime = await get_runtime_settings(db)
     base_path = Path(runtime.evidence_storage_path) / job.incident_id / job_id
+    if not (base_path / "extracted").is_dir():
+        raise HTTPException(
+            status_code=409, detail="Extracted evidence is not available for processing"
+        )
+
+    if not existing:
+        existing = await create_processing_job(db, f"proc-{job_id}", job.incident_id, job_id)
+    existing.status = "PENDING"
+    existing.error_message = None
+    existing.completed_at = None
+    incident_id = job.incident_id
+    processing_id = existing.id
+    await db.commit()
 
     from app.services.artifact_parser_service import dispatch_pipeline
 
-    dispatch_pipeline(job.incident_id, job_id, base_path)
+    try:
+        dispatch_pipeline(incident_id, job_id, base_path, force=force)
+    except Exception as exc:
+        existing.status = "FAILED"
+        existing.error_message = (
+            "Unable to queue processing; retry when the worker broker is available"
+        )
+        await db.commit()
+        logger.exception("Unable to queue processing for %s", job_id)
+        raise HTTPException(status_code=503, detail=existing.error_message) from exc
 
     return ProcessingTriggerResponse(
-        processing_job_id=f"proc-{job_id}",
+        processing_job_id=processing_id,
         status="PENDING",
         message="Pipeline triggered — poll /processing/{job_id}/status for progress",
     )
@@ -128,7 +270,10 @@ async def get_sigma_hits_for_job(
     """List Sigma detection hits for a specific evidence job."""
     _ALLOWED_SEVERITIES = {"critical", "high", "medium", "low", "informational"}
     if severity is not None and severity.lower() not in _ALLOWED_SEVERITIES:
-        raise HTTPException(status_code=400, detail=f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}",
+        )
     if severity is not None:
         severity = severity.lower()
     proc_job = await get_processing_job_by_evidence_job_id(db, job_id)
@@ -152,28 +297,16 @@ async def get_sigma_hits_for_job(
 )
 async def trigger_processing_for_incident(
     incident_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
+    force: bool = Query(default=False),
 ) -> ProcessingTriggerResponse:
     """Trigger the parsing pipeline for the latest completed collection job of an incident.
 
     Convenience endpoint: frontend doesn't need to look up the evidence job_id separately.
     """
     from app.crud.job import is_successful_job_status, list_jobs_for_incident
-
-    existing = await get_latest_processing_job_by_incident_id(db, incident_id)
-    if existing and existing.status == "RUNNING":
-        return ProcessingTriggerResponse(
-            processing_job_id=existing.id,
-            status="RUNNING",
-            message="Pipeline already running",
-        )
-    if existing and existing.status == "DONE":
-        return ProcessingTriggerResponse(
-            processing_job_id=existing.id,
-            status="DONE",
-            message="Pipeline already completed",
-        )
 
     jobs = await list_jobs_for_incident(db, incident_id)
     completed_job = next((j for j in jobs if is_successful_job_status(j.status)), None)
@@ -183,18 +316,7 @@ async def trigger_processing_for_incident(
             detail="No completed collection job found — collection must finish before processing can start",
         )
 
-    runtime = await get_runtime_settings(db)
-    base_path = Path(runtime.evidence_storage_path) / incident_id / completed_job.id
-
-    from app.services.artifact_parser_service import dispatch_pipeline
-
-    dispatch_pipeline(incident_id, completed_job.id, base_path)
-
-    return ProcessingTriggerResponse(
-        processing_job_id=f"proc-{completed_job.id}",
-        status="PENDING",
-        message="Pipeline triggered",
-    )
+    return await trigger_processing(completed_job.id, request, db, _, force)
 
 
 @router.get("/incident/{incident_id}/status", response_model=ProcessingJobOut)
@@ -210,7 +332,9 @@ async def get_latest_processing_status_for_incident(
     return ProcessingJobOut.model_validate(proc_job)
 
 
-@router.get("/incident/{incident_id}/preflight", dependencies=[Depends(require_roles("admin", "operator"))])
+@router.get(
+    "/incident/{incident_id}/preflight", dependencies=[Depends(require_roles("admin", "operator"))]
+)
 async def preflight_check(
     incident_id: str,
     db: AsyncSession = Depends(get_db),
@@ -245,7 +369,9 @@ async def preflight_check(
     if not phase1_ready:
         warnings.append("EZ Tools not configured — Phase 1 (artifact parsing) will be skipped")
     if not phase2_ready:
-        warnings.append("No detection engine configured — Phase 2 (Sigma/Hayabusa/Chainsaw) will be skipped")
+        warnings.append(
+            "No detection engine configured — Phase 2 (Sigma/Hayabusa/Chainsaw) will be skipped"
+        )
     if not phase4_ready:
         warnings.append("YARA rules not configured — Phase 4 (YARA matching) will be skipped")
 
@@ -304,14 +430,19 @@ async def get_sigma_hits_for_incident(
     severity: str | None = Query(default=None),
     limit: int = Query(default=100, le=500),
     offset: int = Query(default=0),
-    q: str | None = Query(default=None, description="Text search across rule_name and artifact_file"),
+    q: str | None = Query(
+        default=None, description="Text search across rule_name and artifact_file"
+    ),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> SigmaHitListOut:
     """List all Sigma detection hits for an incident."""
     _ALLOWED_SEVERITIES = {"critical", "high", "medium", "low", "informational"}
     if severity is not None and severity.lower() not in _ALLOWED_SEVERITIES:
-        raise HTTPException(status_code=400, detail=f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid severity. Must be one of: {', '.join(sorted(_ALLOWED_SEVERITIES))}",
+        )
     if severity is not None:
         severity = severity.lower()
     hits, total = await list_sigma_hits(db, incident_id, severity, limit, offset, q=q)
@@ -338,7 +469,7 @@ async def download_timeline(
         raise HTTPException(status_code=404, detail="Job not found")
 
     proc_job = await get_processing_job_by_evidence_job_id(db, job_id)
-    if not proc_job or proc_job.status != "DONE":
+    if not proc_job or proc_job.status not in ("DONE", "PARTIAL"):
         raise HTTPException(
             status_code=404,
             detail="Timeline not ready — processing must complete first",
@@ -346,7 +477,11 @@ async def download_timeline(
 
     runtime = await get_runtime_settings(db)
     timeline_path = (
-        Path(runtime.evidence_storage_path) / job.incident_id / job_id / "timeline" / "timeline.jsonl"
+        Path(runtime.evidence_storage_path)
+        / job.incident_id
+        / job_id
+        / "timeline"
+        / "timeline.jsonl"
     )
     if not timeline_path.exists():
         raise HTTPException(status_code=404, detail="timeline.jsonl not found on disk")
@@ -395,7 +530,11 @@ async def push_to_timesketch(
         raise HTTPException(status_code=400, detail="Timesketch URL not configured in settings")
 
     timeline_path = (
-        Path(runtime.evidence_storage_path) / job.incident_id / job_id / "timeline" / "timeline.jsonl"
+        Path(runtime.evidence_storage_path)
+        / job.incident_id
+        / job_id
+        / "timeline"
+        / "timeline.jsonl"
     )
     if not timeline_path.exists():
         raise HTTPException(status_code=404, detail="timeline.jsonl not found — run pipeline first")
@@ -528,6 +667,7 @@ async def get_yara_matches(
 )
 async def trigger_super_timeline(
     incident_id: str,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> SuperTimelineTriggerResponse:
@@ -537,33 +677,63 @@ async def trigger_super_timeline(
     runs lateral movement heuristics.  Safe to re-trigger — existing record
     is reused if already BUILDING; otherwise a new build is queued.
     """
-    # Guard: at least one DONE processing job must exist
-    proc_job = await get_latest_processing_job_by_incident_id(db, incident_id)
-    if not proc_job or proc_job.status != "DONE":
+    enforce_expensive_operation_limit(request, "super-timeline-trigger", limit=4)
+    from sqlalchemy import select
+
+    from app.models.incident import Incident
+    from app.models.processing import ProcessingJob
+
+    incident = (
+        await db.execute(select(Incident).where(Incident.id == incident_id).with_for_update())
+    ).scalar_one_or_none()
+    if not incident:
+        raise HTTPException(status_code=404, detail="Incident not found")
+    proc_job = (
+        await db.execute(
+            select(ProcessingJob.id)
+            .where(
+                ProcessingJob.incident_id == incident_id,
+                ProcessingJob.status.in_(("DONE", "PARTIAL")),
+            )
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if not proc_job:
         raise HTTPException(
             status_code=409,
             detail="No completed processing job found for this incident — run the pipeline first",
         )
 
     existing = await get_super_timeline_by_incident(db, incident_id)
-    if existing and existing.status == "BUILDING":
+    if existing and existing.status in ("PENDING", "BUILDING"):
         return SuperTimelineTriggerResponse(
             incident_id=incident_id,
-            status="BUILDING",
+            status=existing.status,
             message="Super timeline build already in progress",
         )
 
     # Create (or recreate) the record
     if not existing:
-        await create_super_timeline(db, incident_id)
-        await db.commit()
+        existing = await create_super_timeline(db, incident_id)
 
     runtime = await get_runtime_settings(db)
     base_path = Path(runtime.evidence_storage_path)
+    existing.status = "PENDING"
+    existing.error_message = None
+    await db.commit()
 
     from app.services.super_timeline_service import dispatch_super_timeline
 
-    dispatch_super_timeline(incident_id, base_path)
+    try:
+        dispatch_super_timeline(incident_id, base_path)
+    except Exception as exc:
+        existing.status = "FAILED"
+        existing.error_message = (
+            "Unable to queue timeline build; retry when the worker broker is available"
+        )
+        await db.commit()
+        logger.exception("Unable to queue timeline for %s", incident_id)
+        raise HTTPException(status_code=503, detail=existing.error_message) from exc
 
     return SuperTimelineTriggerResponse(
         incident_id=incident_id,
@@ -585,7 +755,36 @@ async def get_super_timeline_status(
             status_code=404,
             detail="No super timeline found for this incident — trigger a build first",
         )
-    return SuperTimelineOut.model_validate(record)
+    from sqlalchemy import func, select
+
+    from app.models.processing import ProcessingJob
+
+    output = SuperTimelineOut.model_validate(record)
+    output.partial_job_count = (
+        await db.execute(
+            select(func.count())
+            .select_from(ProcessingJob)
+            .where(
+                ProcessingJob.incident_id == incident_id,
+                ProcessingJob.status == "PARTIAL",
+            )
+        )
+    ).scalar_one()
+    if record.started_at:
+        output.is_stale = bool(
+            (
+                await db.execute(
+                    select(ProcessingJob.id)
+                    .where(
+                        ProcessingJob.incident_id == incident_id,
+                        ProcessingJob.status.in_(("DONE", "PARTIAL")),
+                        ProcessingJob.completed_at > record.started_at,
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+        )
+    return output
 
 
 @router.get(
@@ -602,6 +801,37 @@ async def get_lateral_movements(
     return [LateralMovementOut.model_validate(d) for d in detections]
 
 
+@router.get("/incident/{incident_id}/correlations")
+async def get_timeline_correlations(
+    incident_id: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+    with_coverage: bool = Query(default=False),
+) -> list[dict] | dict:
+    """Run bounded, read-only multi-event detections for a completed Super Timeline."""
+    enforce_expensive_operation_limit(request, "super-timeline-correlation", limit=10)
+    timeline = await get_super_timeline_by_incident(db, incident_id)
+    if not timeline or timeline.status != "DONE" or not timeline.duckdb_path:
+        raise HTTPException(status_code=404, detail="Super timeline not built yet")
+
+    duckdb_path = Path(timeline.duckdb_path)
+    if not duckdb_path.is_file():
+        raise HTTPException(status_code=404, detail="Super timeline DuckDB file not found on disk")
+
+    from app.services.correlation_engine import run_correlations
+
+    coverage = {}
+    items = await asyncio.to_thread(run_correlations, duckdb_path, coverage=coverage)
+    # The coverage-aware UI must not render hundreds of thousands of cards.
+    if with_coverage:
+        coverage.update(
+            result_count=len(items), result_limit=1000, results_truncated=len(items) > 1000
+        )
+        return {"items": items[:1000], "coverage": coverage}
+    return {"items": items, "coverage": coverage} if with_coverage else items
+
+
 # ── IOC Bulk Import ────────────────────────────────────────────────────────────
 
 
@@ -612,6 +842,7 @@ async def get_lateral_movements(
     dependencies=[Depends(require_roles("admin"))],
 )
 async def bulk_import_ioc_indicators(
+    request: Request,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -622,6 +853,7 @@ async def bulk_import_ioc_indicators(
     JSON: array of objects with fields type, value, and optional description/source/severity.
     Max 10,000 rows per upload. Max 5MB file size.
     """
+    enforce_expensive_operation_limit(request, "ioc-bulk-import", limit=6)
     _MAX_ROWS = 10_000
     _MAX_BYTES = 5 * 1024 * 1024
     _VALID_TYPES = {"ip", "domain", "sha256", "md5", "sha1", "url"}
@@ -648,12 +880,11 @@ async def bulk_import_ioc_indicators(
         rows = list(reader)
 
     if len(rows) > _MAX_ROWS:
-        raise HTTPException(
-            status_code=400, detail=f"Too many rows ({len(rows)} > {_MAX_ROWS})"
-        )
+        raise HTTPException(status_code=400, detail=f"Too many rows ({len(rows)} > {_MAX_ROWS})")
+
+    import uuid as _uuid
 
     from app.models.analytics import IOCIndicator as _IOCIndicator
-    import uuid as _uuid
 
     imported = 0
     skipped = 0
@@ -771,9 +1002,7 @@ async def export_attack_chains_navigator(
             "minValue": 0,
             "maxValue": max_count,
         },
-        "legendItems": [
-            {"color": c, "label": s.capitalize()} for s, c in _SEV_COLOR.items()
-        ],
+        "legendItems": [{"color": c, "label": s.capitalize()} for s, c in _SEV_COLOR.items()],
         "showTacticRowBackground": True,
         "tacticRowBackground": "#dddddd",
         "selectTechniquesAcrossTactics": True,
@@ -784,7 +1013,5 @@ async def export_attack_chains_navigator(
     return Response(
         content=_json_local.dumps(layer, indent=2),
         media_type="application/json",
-        headers={
-            "Content-Disposition": f'attachment; filename="navigator_{safe_id}.json"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="navigator_{safe_id}.json"'},
     )

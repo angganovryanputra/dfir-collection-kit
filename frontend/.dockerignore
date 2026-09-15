@@ -1,0 +1,17 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+.git/
+.cache/
+.eslintcache
+.pytest_cache/
+.env
+.env.*
+!.env.example
+npm-debug.log*
+*.log
+Dockerfile.dev
+test.html
+src/App.test.tsx
+Dockerfile.prod

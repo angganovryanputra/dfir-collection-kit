@@ -24,4 +24,6 @@ class Device(Base):
     # HMAC of the per-agent credential.  The raw credential is returned once
     # at enrollment and is never stored or returned by the API again.
     agent_token_hash: Mapped[str | None] = mapped_column(String, nullable=True)
-    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    registered_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

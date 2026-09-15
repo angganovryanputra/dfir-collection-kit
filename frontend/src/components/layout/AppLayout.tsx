@@ -143,7 +143,13 @@ export function AppLayout({
   const navigate = useNavigate();
   const location = useLocation();
   const [open, setOpen] = useState(false);
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => window.matchMedia("(max-width: 767px)").matches);
+  useEffect(() => {
+    const mobile = window.matchMedia("(max-width: 767px)");
+    const collapseOnMobile = () => { if (mobile.matches) setIsSidebarCollapsed(true); };
+    mobile.addEventListener("change", collapseOnMobile);
+    return () => mobile.removeEventListener("change", collapseOnMobile);
+  }, []);
   const [currentUser, setCurrentUser] = useState<{ username: string; role: string } | null>(null);
   const [selectedIncidentId, setSelectedIncidentId] = useState(
     () => sessionStorage.getItem("dfir_active_incident_id") ?? ""
@@ -301,13 +307,13 @@ export function AppLayout({
 
         <div
           className={cn(
-            "flex-1 flex flex-col min-h-screen overflow-hidden transition-[padding] duration-300",
+            "flex-1 flex flex-col h-dvh min-h-0 min-w-0 overflow-hidden transition-[padding] duration-300",
             isSidebarCollapsed ? "pl-16" : "pl-64"
           )}
         >
           <header className="border-b border-border bg-card/80 backdrop-blur-md px-6 py-4 z-30">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-6">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-6">
                 <div>
                   <h1 className="font-mono text-lg font-bold tracking-wider text-foreground flex items-center gap-2">
                     <span className="text-primary/40 text-xs">//</span> {title}
@@ -318,7 +324,7 @@ export function AppLayout({
                     </p>
                   )}
                 </div>
-                <SystemHeartbeat />
+                <div className="hidden md:block"><SystemHeartbeat /></div>
                 {incidents.length > 0 && (
                   <label className="hidden xl:flex items-center gap-2 border-l border-border pl-4 font-mono text-[9px] text-muted-foreground uppercase tracking-wider">
                     <span>Case</span>
@@ -346,7 +352,7 @@ export function AppLayout({
                   <span>TO NAVIGATE</span>
                 </div>
                 {headerActions}
-                <LiveClock />
+                <div className="hidden xl:block"><LiveClock /></div>
               </div>
             </div>
           </header>
@@ -357,7 +363,7 @@ export function AppLayout({
             </WarningBanner>
           )}
 
-          <main className="flex-1 overflow-auto tactical-grid relative z-10">
+          <main className="flex-1 min-h-0 min-w-0 overflow-auto tactical-grid relative z-10">
             {children}
           </main>
 

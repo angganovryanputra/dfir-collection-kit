@@ -1,6 +1,6 @@
-from datetime import datetime, timezone
 import ipaddress
 import shutil
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy import func, select, text
@@ -43,8 +43,14 @@ async def get_connection_context(request: Request, response: Response) -> Connec
     )
 
 
-@router.get("/diagnostics", response_model=DiagnosticsResponse, dependencies=[Depends(require_roles("admin", "operator"))])
-async def get_diagnostics(request: Request, db: AsyncSession = Depends(get_db)) -> DiagnosticsResponse:
+@router.get(
+    "/diagnostics",
+    response_model=DiagnosticsResponse,
+    dependencies=[Depends(require_roles("admin", "operator"))],
+)
+async def get_diagnostics(
+    request: Request, db: AsyncSession = Depends(get_db)
+) -> DiagnosticsResponse:
     db_status = "unknown"
     try:
         await db.execute(text("SELECT 1"))
@@ -59,7 +65,9 @@ async def get_diagnostics(request: Request, db: AsyncSession = Depends(get_db)) 
     try:
         collectors_total = await db.scalar(select(func.count()).select_from(Collector)) or 0
         collectors_online = (
-            await db.scalar(select(func.count()).select_from(Collector).where(Collector.status == "online"))
+            await db.scalar(
+                select(func.count()).select_from(Collector).where(Collector.status == "online")
+            )
         ) or 0
     except Exception:
         collectors_total = 0

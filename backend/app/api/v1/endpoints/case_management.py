@@ -6,6 +6,7 @@ Environment variables (configure in .env):
   JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN, JIRA_PROJECT_KEY — Jira issue creation
   SLACK_WEBHOOK_URL              — Slack incoming webhook
 """
+
 from __future__ import annotations
 
 import logging
@@ -53,12 +54,14 @@ class ExportResult(BaseModel):
 
 async def _incident_summary(incident_id: str, db: AsyncSession) -> dict[str, Any]:
     from app.crud.incident import get_incident
+
     incident = await get_incident(db, incident_id)
     if not incident:
         raise HTTPException(status_code=404, detail="Incident not found")
     sigma: dict[str, int] = {}
     try:
         from app.crud.analytics import count_sigma_hits_by_severity
+
         sigma = await count_sigma_hits_by_severity(db, incident_id)
     except Exception:
         pass
@@ -88,7 +91,9 @@ async def export_to_thehive(
     url = os.getenv("THEHIVE_URL", "")
     key = os.getenv("THEHIVE_API_KEY", "")
     if not url or not key:
-        return ExportResult(service="thehive", success=False, error="THEHIVE_URL or THEHIVE_API_KEY not configured")
+        return ExportResult(
+            service="thehive", success=False, error="THEHIVE_URL or THEHIVE_API_KEY not configured"
+        )
 
     inc = await _incident_summary(incident_id, db)
     sev = max(1, min(4, inc["sigma_total"] // 5 + 1))
@@ -105,16 +110,25 @@ async def export_to_thehive(
     }
     try:
         import httpx
+
         headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
         verify_tls = os.getenv("THEHIVE_VERIFY_TLS", "true").lower() not in ("false", "0", "no")
         async with httpx.AsyncClient(timeout=20.0, verify=verify_tls) as client:
             resp = await client.post(f"{url.rstrip('/')}/api/v1/case", json=body, headers=headers)
         if resp.status_code not in (200, 201):
-            return ExportResult(service="thehive", success=False, error=f"HTTP {resp.status_code}: {resp.text[:150]}")
+            return ExportResult(
+                service="thehive",
+                success=False,
+                error=f"HTTP {resp.status_code}: {resp.text[:150]}",
+            )
         data = resp.json()
         cid = data.get("_id") or data.get("id", "")
-        return ExportResult(service="thehive", success=True, external_id=cid,
-                            url=f"{url}/cases/{cid}/details" if cid else None)
+        return ExportResult(
+            service="thehive",
+            success=True,
+            external_id=cid,
+            url=f"{url}/cases/{cid}/details" if cid else None,
+        )
     except ImportError:
         return ExportResult(service="thehive", success=False, error="httpx not installed")
     except Exception as exc:
@@ -137,21 +151,36 @@ async def export_to_jira(
     jira_token = os.getenv("JIRA_API_TOKEN", "")
     project = os.getenv("JIRA_PROJECT_KEY", "DFIR")
     if not jira_url or not jira_email or not jira_token:
-        return ExportResult(service="jira", success=False, error="JIRA_URL/JIRA_EMAIL/JIRA_API_TOKEN not configured")
+        return ExportResult(
+            service="jira", success=False, error="JIRA_URL/JIRA_EMAIL/JIRA_API_TOKEN not configured"
+        )
 
     inc = await _incident_summary(incident_id, db)
-    priority = "Highest" if inc["sigma_total"] > 20 else "High" if inc["sigma_total"] > 5 else "Medium"
+    priority = (
+        "Highest" if inc["sigma_total"] > 20 else "High" if inc["sigma_total"] > 5 else "Medium"
+    )
     body = {
         "fields": {
             "project": {"key": project},
             "summary": f"[DFIR] {inc['type']} — {incident_id}",
             "description": {
-                "type": "doc", "version": 1,
-                "content": [{"type": "paragraph", "content": [{"type": "text", "text": (
-                    f"Incident {incident_id} | Operator: {inc['operator']} | "
-                    f"Targets: {', '.join(inc['targets'])} | "
-                    f"Sigma: {inc['sigma_total']} hits | Status: {inc['status']}"
-                )}]}],
+                "type": "doc",
+                "version": 1,
+                "content": [
+                    {
+                        "type": "paragraph",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    f"Incident {incident_id} | Operator: {inc['operator']} | "
+                                    f"Targets: {', '.join(inc['targets'])} | "
+                                    f"Sigma: {inc['sigma_total']} hits | Status: {inc['status']}"
+                                ),
+                            }
+                        ],
+                    }
+                ],
             },
             "issuetype": {"name": "Bug"},
             "priority": {"name": priority},
@@ -159,16 +188,27 @@ async def export_to_jira(
         }
     }
     try:
-        import httpx, base64
+        import base64
+
+        import httpx
+
         auth = base64.b64encode(f"{jira_email}:{jira_token}".encode()).decode()
         headers = {"Authorization": f"Basic {auth}", "Content-Type": "application/json"}
         async with httpx.AsyncClient(timeout=20.0) as client:
-            resp = await client.post(f"{jira_url.rstrip('/')}/rest/api/3/issue", json=body, headers=headers)
+            resp = await client.post(
+                f"{jira_url.rstrip('/')}/rest/api/3/issue", json=body, headers=headers
+            )
         if resp.status_code not in (200, 201):
-            return ExportResult(service="jira", success=False, error=f"HTTP {resp.status_code}: {resp.text[:150]}")
+            return ExportResult(
+                service="jira", success=False, error=f"HTTP {resp.status_code}: {resp.text[:150]}"
+            )
         key_val = resp.json().get("key", "")
-        return ExportResult(service="jira", success=True, external_id=key_val,
-                            url=f"{jira_url}/browse/{key_val}" if key_val else None)
+        return ExportResult(
+            service="jira",
+            success=True,
+            external_id=key_val,
+            url=f"{jira_url}/browse/{key_val}" if key_val else None,
+        )
     except ImportError:
         return ExportResult(service="jira", success=False, error="httpx not installed")
     except Exception as exc:
@@ -188,30 +228,48 @@ async def notify_slack(
     await _record_export_request(db, current_user, incident_id, "slack")
     webhook = os.getenv("SLACK_WEBHOOK_URL", "")
     if not webhook:
-        return ExportResult(service="slack", success=False, error="SLACK_WEBHOOK_URL not configured")
+        return ExportResult(
+            service="slack", success=False, error="SLACK_WEBHOOK_URL not configured"
+        )
 
     inc = await _incident_summary(incident_id, db)
     crit = inc["sigma"].get("critical", 0)
-    emoji = ":rotating_light:" if crit > 0 else ":warning:" if inc["sigma_total"] > 0 else ":white_check_mark:"
+    emoji = (
+        ":rotating_light:"
+        if crit > 0
+        else ":warning:" if inc["sigma_total"] > 0 else ":white_check_mark:"
+    )
     msg = {
         "text": f"{emoji} DFIR Alert — Incident `{incident_id}`",
         "blocks": [
-            {"type": "header", "text": {"type": "plain_text", "text": f"{emoji} DFIR Incident: {incident_id}"}},
-            {"type": "section", "fields": [
-                {"type": "mrkdwn", "text": f"*Type:*\n{inc['type']}"},
-                {"type": "mrkdwn", "text": f"*Status:*\n{inc['status']}"},
-                {"type": "mrkdwn", "text": f"*Operator:*\n{inc['operator']}"},
-                {"type": "mrkdwn", "text": f"*Sigma Hits:*\n{inc['sigma_total']} ({crit} critical)"},
-                {"type": "mrkdwn", "text": f"*Targets:*\n{', '.join(inc['targets']) or '—'}"},
-            ]},
+            {
+                "type": "header",
+                "text": {"type": "plain_text", "text": f"{emoji} DFIR Incident: {incident_id}"},
+            },
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*Type:*\n{inc['type']}"},
+                    {"type": "mrkdwn", "text": f"*Status:*\n{inc['status']}"},
+                    {"type": "mrkdwn", "text": f"*Operator:*\n{inc['operator']}"},
+                    {
+                        "type": "mrkdwn",
+                        "text": f"*Sigma Hits:*\n{inc['sigma_total']} ({crit} critical)",
+                    },
+                    {"type": "mrkdwn", "text": f"*Targets:*\n{', '.join(inc['targets']) or '—'}"},
+                ],
+            },
         ],
     }
     try:
         import httpx
+
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(webhook, json=msg)
         if resp.status_code != 200:
-            return ExportResult(service="slack", success=False, error=f"HTTP {resp.status_code}: {resp.text[:100]}")
+            return ExportResult(
+                service="slack", success=False, error=f"HTTP {resp.status_code}: {resp.text[:100]}"
+            )
         return ExportResult(service="slack", success=True)
     except ImportError:
         return ExportResult(service="slack", success=False, error="httpx not installed")

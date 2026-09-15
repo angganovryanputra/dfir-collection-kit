@@ -4,12 +4,13 @@ and run lightweight lateral movement detection.
 
 Architecture:
   - Called by Celery task with incident_id and evidence_base_path
-  - Finds all DONE ProcessingJobs for the incident
+  - Finds DONE and PARTIAL ProcessingJobs for the incident
   - For each job: reads timeline.jsonl in bulk via DuckDB
   - Merges into a single DuckDB store at {incident_dir}/super_timeline.duckdb
   - Runs lateral movement detection using simple heuristics via DuckDB queries
   - Stores SuperTimeline + LateralMovement records in PostgreSQL
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -86,26 +87,28 @@ def _detect_lateral_movement(
             GROUP BY actor, source_host, target_host
             LIMIT 100
         """
-        
+
         pivot_results = con.execute(pivot_query).fetchall()
         for actor, src, tgt, first, last, count in pivot_results:
-            detections.append({
-                "id": str(uuid4()),
-                "incident_id": incident_id,
-                "super_timeline_id": super_timeline_id,
-                "detection_type": "account_pivot",
-                "source_host": src,
-                "target_host": tgt,
-                "actor": actor,
-                "first_seen": first,
-                "last_seen": last,
-                "event_count": count,
-                "confidence": 0.75,
-                "details": {
-                    "marker": "EVTX logon event",
-                    "window_hours": 6,
-                },
-            })
+            detections.append(
+                {
+                    "id": str(uuid4()),
+                    "incident_id": incident_id,
+                    "super_timeline_id": super_timeline_id,
+                    "detection_type": "account_pivot",
+                    "source_host": src,
+                    "target_host": tgt,
+                    "actor": actor,
+                    "first_seen": first,
+                    "last_seen": last,
+                    "event_count": count,
+                    "confidence": 0.75,
+                    "details": {
+                        "marker": "EVTX logon event",
+                        "window_hours": 6,
+                    },
+                }
+            )
 
         # ── 2. Process spread: SQL-based window analysis ──────────────────────
         # Find same executable name appearing on multiple hosts in a 15-min window.
@@ -142,26 +145,28 @@ def _detect_lateral_movement(
             GROUP BY proc, source_host, target_host
             LIMIT 100
         """
-        
+
         proc_results = con.execute(proc_query).fetchall()
         for proc, src, tgt, first, last, count in proc_results:
-            detections.append({
-                "id": str(uuid4()),
-                "incident_id": incident_id,
-                "super_timeline_id": super_timeline_id,
-                "detection_type": "process_spread",
-                "source_host": src,
-                "target_host": tgt,
-                "actor": proc,
-                "first_seen": first,
-                "last_seen": last,
-                "event_count": count,
-                "confidence": 0.65,
-                "details": {
-                    "process": proc,
-                    "window_minutes": 15,
-                },
-            })
+            detections.append(
+                {
+                    "id": str(uuid4()),
+                    "incident_id": incident_id,
+                    "super_timeline_id": super_timeline_id,
+                    "detection_type": "process_spread",
+                    "source_host": src,
+                    "target_host": tgt,
+                    "actor": proc,
+                    "first_seen": first,
+                    "last_seen": last,
+                    "event_count": count,
+                    "confidence": 0.65,
+                    "details": {
+                        "process": proc,
+                        "window_minutes": 15,
+                    },
+                }
+            )
 
     finally:
         con.close()
@@ -212,51 +217,55 @@ def _detect_beaconing(
         """).fetchall()
     except Exception as exc:
         logger.warning("Beaconing SQL failed: %s", exc)
+        raise
+    finally:
         con.close()
-        return detections
 
     for host, dest_ip, times in beacon_candidates:
+        try:
+            if not ipaddress.ip_address(dest_ip).is_global:
+                continue
+        except ValueError:
+            continue
         if len(times) < 5:
             continue
-            
-        intervals = [
-            (times[i + 1] - times[i]).total_seconds()
-            for i in range(len(times) - 1)
-        ]
+
+        intervals = [(times[i + 1] - times[i]).total_seconds() for i in range(len(times) - 1)]
         if not intervals:
             continue
-            
+
         mean_s = statistics.mean(intervals)
         if mean_s < 1.0:
             continue
-            
+
         stdev_s = statistics.stdev(intervals) if len(intervals) > 1 else 0.0
         cv = stdev_s / mean_s if mean_s > 0 else 1.0
-        
+
         if cv < 0.3:
             confidence = round(
                 min(0.95, 0.65 + (0.3 - cv) / 0.3 * 0.20 + min(len(times), 30) / 300), 2
             )
-            detections.append({
-                "id": str(uuid4()),
-                "incident_id": incident_id,
-                "super_timeline_id": super_timeline_id,
-                "detection_type": "beaconing",
-                "source_host": host,
-                "target_host": dest_ip,
-                "actor": dest_ip,
-                "first_seen": times[0],
-                "last_seen": times[-1],
-                "event_count": len(times),
-                "confidence": confidence,
-                "details": {
-                    "dest_ip": dest_ip,
-                    "mean_interval_seconds": round(mean_s, 1),
-                    "coefficient_of_variation": round(cv, 3),
-                },
-            })
+            detections.append(
+                {
+                    "id": str(uuid4()),
+                    "incident_id": incident_id,
+                    "super_timeline_id": super_timeline_id,
+                    "detection_type": "beaconing",
+                    "source_host": host,
+                    "target_host": dest_ip,
+                    "actor": dest_ip,
+                    "first_seen": times[0],
+                    "last_seen": times[-1],
+                    "event_count": len(times),
+                    "confidence": confidence,
+                    "details": {
+                        "dest_ip": dest_ip,
+                        "mean_interval_seconds": round(mean_s, 1),
+                        "coefficient_of_variation": round(cv, 3),
+                    },
+                }
+            )
 
-    con.close()
     detections.sort(key=lambda d: d["confidence"], reverse=True)
     return detections[:50]
 
@@ -268,13 +277,27 @@ async def build_super_timeline_background(
     incident_id: str,
     evidence_base_path: Path,
 ) -> None:
+    """Serialize workers sharing the incident evidence volume, including retries."""
+    from app.services.workspace_lock import WorkspaceBusy, WorkspaceLock
+
+    try:
+        with WorkspaceLock(evidence_base_path / incident_id / ".super-timeline.lock"):
+            await _build_super_timeline_locked(incident_id, evidence_base_path)
+    except WorkspaceBusy:
+        logger.info("SuperTimeline: build already active for %s", incident_id)
+
+
+async def _build_super_timeline_locked(
+    incident_id: str,
+    evidence_base_path: Path,
+) -> None:
     """Background runner: merge all per-host timelines and run lateral movement detection."""
     import duckdb
     from sqlalchemy import select
 
     from app.crud.super_timeline import (
-        create_super_timeline,
         create_lateral_movement,
+        create_super_timeline,
         delete_lateral_movements_by_super_timeline,
         get_super_timeline_by_incident,
         update_super_timeline,
@@ -291,6 +314,7 @@ async def build_super_timeline_background(
         existing = await get_super_timeline_by_incident(db, incident_id)
         if existing:
             suptl_id = existing.id
+            existing.error_message = None
             await update_super_timeline(
                 db,
                 suptl_id,
@@ -312,14 +336,14 @@ async def build_super_timeline_background(
         host_set: set[str] = set()
 
         async with AsyncSessionLocal() as db:
-            # Get all DONE processing jobs for this incident
+            # Partial coverage still produces usable timeline events.
             result = await db.execute(
                 select(ProcessingJob)
                 .where(ProcessingJob.incident_id == incident_id)
-                .where(ProcessingJob.status == "DONE")
+                .where(ProcessingJob.status.in_(("DONE", "PARTIAL")))
             )
             proc_jobs = list(result.scalars().all())
-            
+
             for proc_job in proc_jobs:
                 job_result = await db.execute(select(Job).where(Job.id == proc_job.job_id))
                 job = job_result.scalar_one_or_none()
@@ -328,9 +352,7 @@ async def build_super_timeline_background(
 
                 hostname = job.agent_id or proc_job.job_id
                 if job.agent_id:
-                    dev_result = await db.execute(
-                        select(Device).where(Device.id == job.agent_id)
-                    )
+                    dev_result = await db.execute(select(Device).where(Device.id == job.agent_id))
                     device = dev_result.scalar_one_or_none()
                     if device:
                         hostname = device.hostname
@@ -360,22 +382,38 @@ async def build_super_timeline_background(
 
         # ── Build DuckDB store ─────────────────────────────────────────────────
         duckdb_path = evidence_base_path / incident_id / "super_timeline.duckdb"
-        
-        def _bulk_ingest_duckdb() -> int:
-            duckdb_path.parent.mkdir(parents=True, exist_ok=True)
-            if duckdb_path.exists():
-                duckdb_path.unlink()
+        build_path = duckdb_path.with_name(f"super_timeline.{uuid4().hex}.building.duckdb")
 
-            con = duckdb.connect(str(duckdb_path))
+        def _bulk_ingest_duckdb() -> int:
+            from contextlib import ExitStack
+
+            from app.services.workspace_lock import WorkspaceLock
+
+            duckdb_path.parent.mkdir(parents=True, exist_ok=True)
+            source_locks = ExitStack()
+            try:
+                for _, _, timeline_path in sorted(timeline_sources, key=lambda item: str(item[2])):
+                    source_locks.enter_context(
+                        WorkspaceLock(timeline_path.parent.parent / ".pipeline.lock")
+                    )
+            except BaseException:
+                source_locks.close()
+                raise
+            try:
+                con = duckdb.connect(str(build_path))
+            except BaseException:
+                source_locks.close()
+                raise
             try:
                 con.execute("CREATE SEQUENCE row_id_seq")
-                con.execute("""
+                con.execute(
+                    """
                     CREATE TABLE timeline_events AS 
                     SELECT 
                         nextval('row_id_seq') as row_id,
                         CAST('' AS VARCHAR) as host,
                         CAST('' AS VARCHAR) as job_id,
-                        TRY_CAST(COALESCE(json->>'datetime', json->>'timestamp') AS TIMESTAMP) as event_dt,
+                        TRY_CAST(COALESCE(json->>'datetime', json->>'timestamp') AS TIMESTAMPTZ) AT TIME ZONE 'UTC' as event_dt,
                         substring(CAST(json->>'message' AS VARCHAR), 1, 2000) as message,
                         json->>'timestamp_desc' as timestamp_desc,
                         json->>'source' as source,
@@ -383,17 +421,20 @@ async def build_super_timeline_background(
                         json->>'incident_id' as incident_id,
                         json as extra
                     FROM read_json_objects(?) WHERE 1=0
-                """, [str(timeline_sources[0][2])])
+                """,
+                    [str(timeline_sources[0][2])],
+                )
 
                 # High-performance bulk ingestion
                 for h_name, j_id, tl_path in timeline_sources:
-                    con.execute("""
+                    con.execute(
+                        """
                         INSERT INTO timeline_events
                         SELECT 
                             nextval('row_id_seq'),
                             ?,
                             ?,
-                            TRY_CAST(COALESCE(json->>'datetime', json->>'timestamp') AS TIMESTAMP),
+                            TRY_CAST(COALESCE(json->>'datetime', json->>'timestamp') AS TIMESTAMPTZ) AT TIME ZONE 'UTC',
                             substring(CAST(json->>'message' AS VARCHAR), 1, 2000),
                             json->>'timestamp_desc',
                             json->>'source',
@@ -401,7 +442,9 @@ async def build_super_timeline_background(
                             json->>'incident_id',
                             json
                         FROM read_json_objects(?)
-                    """, [h_name, j_id, str(tl_path)])
+                    """,
+                        [h_name, j_id, str(tl_path)],
+                    )
 
                 con.execute("CREATE INDEX idx_st_dt   ON timeline_events(event_dt)")
                 con.execute("CREATE INDEX idx_st_host ON timeline_events(host)")
@@ -410,6 +453,7 @@ async def build_super_timeline_background(
                 return con.execute("SELECT COUNT(*) FROM timeline_events").fetchone()[0]
             finally:
                 con.close()
+                source_locks.close()
 
         event_count = await asyncio.to_thread(_bulk_ingest_duckdb)
 
@@ -420,10 +464,10 @@ async def build_super_timeline_background(
             len(host_set),
         )
         lateral_detections = await asyncio.to_thread(
-            _detect_lateral_movement, duckdb_path, incident_id, suptl_id
+            _detect_lateral_movement, build_path, incident_id, suptl_id
         )
         beaconing_detections = await asyncio.to_thread(
-            _detect_beaconing, duckdb_path, incident_id, suptl_id
+            _detect_beaconing, build_path, incident_id, suptl_id
         )
         detections = lateral_detections + beaconing_detections
         logger.info(
@@ -454,6 +498,10 @@ async def build_super_timeline_background(
                     details=det.get("details", {}),
                 )
 
+            # Publish only after ingestion and detection have succeeded. Readers
+            # see a complete file; a failed detection preserves the last file.
+            await db.flush()
+            await asyncio.to_thread(build_path.replace, duckdb_path)
             await update_super_timeline(
                 db,
                 suptl_id,
@@ -483,16 +531,17 @@ async def build_super_timeline_background(
                 _wh = getattr(_rt, "webhook_url", None) or ""
             if _wh:
                 await notify_super_timeline_complete(
-                    incident_id, len(host_set), event_count, _wh,
+                    incident_id,
+                    len(host_set),
+                    event_count,
+                    _wh,
                     getattr(_rt, "webhook_secret", None),
                 )
         except Exception as _nex:
             logger.debug("SuperTimeline notification failed (non-fatal): %s", _nex)
 
     except Exception as exc:
-        logger.error(
-            "SuperTimeline: failed for incident %s: %s", incident_id, exc, exc_info=True
-        )
+        logger.error("SuperTimeline: failed for incident %s: %s", incident_id, exc, exc_info=True)
         async with AsyncSessionLocal() as db:
             await update_super_timeline(
                 db,

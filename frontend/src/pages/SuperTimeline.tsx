@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback, memo } from "react";
+import { createPortal } from "react-dom";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
@@ -8,8 +9,9 @@ import {
     ChevronLeft, Loader2, Network, Shield, ArrowRight, Table as TableIcon, GitBranch,
     Server, Database, Clock, RefreshCw
 } from "lucide-react";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, apiPatch } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 // Sub-components
 import { SuperTimelineStatus } from "./SuperTimeline/SuperTimelineStatus";
@@ -17,6 +19,7 @@ import { SuperTimelineFilters } from "./SuperTimeline/SuperTimelineFilters";
 import { SuperTimelineTable } from "./SuperTimeline/SuperTimelineTable";
 import { SuperTimelineToolbar } from "./SuperTimeline/SuperTimelineToolbar";
 import { SuperTimelineChart } from "./SuperTimeline/SuperTimelineChart";
+import { SuperTimelineCorrelations } from "./SuperTimeline/SuperTimelineCorrelations";
 import { NarrativeStoryline } from "./SuperTimeline/NarrativeStoryline";
 import { EventDetailPanel, ComparePanel } from "./SuperTimeline/SuperTimelinePanels";
 import { LateralMovementMap } from "./SuperTimeline/LateralMovementMap";
@@ -60,8 +63,12 @@ export default function SuperTimeline() {
     const [allSourcesActive, setAllSourcesActive] = useState(true);
 
     const [visibleCols, setVisibleCols] = useState<Set<ColumnKey>>(() => {
-        const stored = localStorage.getItem(COL_STORAGE_KEY);
-        return stored ? new Set(JSON.parse(stored)) : new Set(DEFAULT_VISIBLE);
+        try {
+            const stored = JSON.parse(localStorage.getItem(COL_STORAGE_KEY) ?? "null");
+            return Array.isArray(stored) ? new Set(stored.filter((key): key is ColumnKey => ["event_id", "user", "display_name"].includes(key))) : new Set(DEFAULT_VISIBLE);
+        } catch {
+            return new Set(DEFAULT_VISIBLE);
+        }
     });
 
     const [selectedEvent, setSelectedEvent] = useState<Record<string, unknown> | null>(null);
@@ -90,6 +97,7 @@ export default function SuperTimeline() {
     const [isBuilding, setIsBuilding] = useState(false);
     const [buildError, setBuildError] = useState<string | null>(null);
     const [isExporting, setIsExporting] = useState(false);
+    const [exportFormat, setExportFormat] = useState<"csv" | "jsonl" | "cef" | "leef" | "stix">("csv");
 
     // ─── Data Fetching ───────────────────────────────────────────────────────
     const { data: stStatus, isLoading: statusLoading, error: statusError } = useQuery<SuperTimelineStatusData | null>({
@@ -127,14 +135,14 @@ export default function SuperTimeline() {
     }, [page, pageSize, sortBy, sortOrder, debouncedSearch, dateFilterActive, dateFrom, dateTo, activeHosts, allHostsActive, activeSources, allSourcesActive]);
 
     const { data: timelineData, isLoading: tlLoading, error: tlError } = useQuery<SuperTimelineResponse>({
-        queryKey: ["super-timeline-data", incidentId, timelineParams],
+        queryKey: ["super-timeline-data", incidentId, stStatus?.completed_at, timelineParams],
         queryFn: () => apiGet<SuperTimelineResponse>(`/evidence/super-timeline/${incidentId}?${timelineParams}`),
         enabled: isDone,
         staleTime: 60_000,
     });
 
     const { data: lmDetections = [] } = useQuery<LateralMovementDetection[]>({
-        queryKey: ["lateral-movements", incidentId],
+        queryKey: ["lateral-movements", incidentId, stStatus?.completed_at],
         queryFn: () => apiGet<LateralMovementDetection[]>(`/processing/incident/${incidentId}/super-timeline/lateral-movement`),
         enabled: isDone,
         staleTime: 60_000,
@@ -146,17 +154,78 @@ export default function SuperTimeline() {
         return () => clearTimeout(t);
     }, [searchInput]);
 
+    type Annotation = { event_uid: string; bookmark?: Bookmark | null; tag?: EventTagValue | null };
+    const { data: annotations, error: annotationError, isLoading: annotationsLoading } = useQuery<Annotation[]>({
+        queryKey: ["timeline-annotations", incidentId],
+        enabled: !!incidentId,
+        queryFn: async () => {
+            const rows: Annotation[] = [];
+            let cursor = "";
+            do {
+                const page = await apiGet<{ items: Annotation[]; next_cursor: string | null }>(
+                    `/processing/incident/${incidentId}/annotations?limit=500&after=${encodeURIComponent(cursor)}`
+                );
+                rows.push(...page.items);
+                cursor = page.next_cursor ?? "";
+                if (cursor && rows.length >= 10000) throw new Error("Annotation view exceeds 10,000 records");
+            } while (cursor);
+            return rows;
+        },
+    });
+
     useEffect(() => {
-        if (incidentId) {
-            const b = localStorage.getItem(`bookmarks_${incidentId}`);
-            if (b) setBookmarks(JSON.parse(b));
-            const t = localStorage.getItem(`tags_${incidentId}`);
-            if (t) setEventTags(JSON.parse(t));
-        }
+        setBookmarks([]);
+        setEventTags({});
+        setSelectedEvent(null);
+        setCompareEvents(null);
     }, [incidentId]);
 
-    const saveBookmarks = useCallback((id: string, b: Bookmark[]) => localStorage.setItem(`bookmarks_${id}`, JSON.stringify(b)), []);
-    const saveTags = useCallback((id: string, t: Record<string, EventTagValue | null>) => localStorage.setItem(`tags_${id}`, JSON.stringify(t)), []);
+    useEffect(() => {
+        if (!annotations) return;
+        setBookmarks(annotations.flatMap(row => row.bookmark ? [row.bookmark] : []));
+        setEventTags(Object.fromEntries(annotations.map(row => [row.event_uid, row.tag ?? null])));
+    }, [annotations]);
+
+    const saveAnnotation = useCallback(async (hash: string, change: { bookmark?: Bookmark | null; tag?: EventTagValue | null }) => {
+        if (!incidentId || annotationsLoading || annotationError) {
+            toast.error("Annotations are unavailable. Wait for loading or retry the page.");
+            return false;
+        }
+        try {
+            await apiPatch(`/processing/incident/${incidentId}/annotations/${encodeURIComponent(hash)}`, change);
+            await queryClient.invalidateQueries({ queryKey: ["timeline-annotations", incidentId] });
+            return true;
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Annotation was not saved");
+            return false;
+        }
+    }, [incidentId, annotationsLoading, annotationError, queryClient]);
+
+    const importBrowserAnnotations = async () => {
+        if (!incidentId || annotationsLoading || annotationError) return;
+        try {
+            const legacyBookmarks: Bookmark[] = JSON.parse(localStorage.getItem(`bookmarks_${incidentId}`) ?? "[]");
+            const legacyTags: Record<string, EventTagValue | null> = JSON.parse(localStorage.getItem(`tags_${incidentId}`) ?? "{}");
+            if (!Array.isArray(legacyBookmarks) || !legacyTags || typeof legacyTags !== "object" || Array.isArray(legacyTags)) throw new Error("Invalid browser annotations");
+            const known = new Set(annotations?.map(row => row.event_uid));
+            const keys = new Set([...legacyBookmarks.map(item => item.eventHash), ...Object.keys(legacyTags)]);
+            if (keys.size > 10000) throw new Error("Import is limited to 10,000 annotations");
+            let imported = 0;
+            for (const key of keys) {
+                if (known.has(key)) continue;
+                await apiPatch(`/processing/incident/${incidentId}/annotations/${encodeURIComponent(key)}`, {
+                    bookmark: legacyBookmarks.find(item => item.eventHash === key) ?? null,
+                    tag: legacyTags[key] ?? null,
+                });
+                imported++;
+            }
+            await queryClient.invalidateQueries({ queryKey: ["timeline-annotations", incidentId] });
+            toast.success(`${imported} browser annotations imported. Original browser data was retained.`);
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Import failed");
+            await queryClient.invalidateQueries({ queryKey: ["timeline-annotations", incidentId] });
+        }
+    };
 
     // ─── Handlers ────────────────────────────────────────────────────────────
     const triggerBuild = async () => {
@@ -242,50 +311,47 @@ export default function SuperTimeline() {
         if (!incidentId) return;
         setIsExporting(true);
         try {
-            const params = new URLSearchParams({ format: "csv" });
+            const params = new URLSearchParams({ format: exportFormat });
             if (debouncedSearch) params.append("q", debouncedSearch);
-            window.location.href = `${import.meta.env.VITE_API_BASE_URL || "/api/v1"}/evidence/super-timeline/${incidentId}/export?${params.toString()}`;
+            if (dateFilterActive && dateFrom) params.append("date_from", dateFrom);
+            if (dateFilterActive && dateTo) params.append("date_to", dateTo);
+            if (!allHostsActive && activeHosts.size > 0) params.append("hosts", [...activeHosts].join(","));
+            if (!allSourcesActive && activeSources.size > 0) params.append("source", [...activeSources].join(","));
+            const response = await fetch(`${import.meta.env.VITE_API_BASE_URL || "/api/v1"}/evidence/super-timeline/${incidentId}/export?${params.toString()}`, { credentials: "include" });
+            if (!response.ok) {
+                const error = await response.json().catch(() => null);
+                throw new Error(error?.detail || `Export failed (${response.status})`);
+            }
+            const url = URL.createObjectURL(await response.blob());
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `super-timeline-${incidentId}.${exportFormat === "stix" ? "json" : exportFormat}`;
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Export failed");
         } finally {
-            setTimeout(() => setIsExporting(false), 2000);
+            setIsExporting(false);
         }
     };
 
     const toggleBookmark = useCallback((event: Record<string, unknown>, note: string) => {
-        if (!incidentId) return;
         const hash = hashEvent(event);
-        setBookmarks(prev => {
-            const existing = prev.find(b => b.eventHash === hash);
-            let next: Bookmark[];
-            if (existing) {
-                next = prev.filter(b => b.eventHash !== hash);
-            } else {
-                next = [...prev, {
-                    eventHash: hash,
-                    note,
-                    createdAt: new Date().toISOString(),
-                    datetime: String(event["datetime"]),
-                    host: String(event["host"] ?? event["computer"] ?? "UNKNOWN"),
-                    message: String(event["message"] ?? event["description"] ?? ""),
-                    source_short: String(event["source_short"] ?? ""),
-                }];
-            }
-            saveBookmarks(incidentId, next);
-            return next;
-        });
-    }, [incidentId, saveBookmarks]);
+        const bookmark = bookmarks.some(item => item.eventHash === hash) ? null : {
+            eventHash: hash, note, createdAt: new Date().toISOString(),
+            datetime: String(event.datetime ?? ""), host: String(event.host ?? event.computer ?? "UNKNOWN"),
+            message: String(event.message ?? event.description ?? ""), source_short: String(event.source_short ?? ""),
+        };
+        return saveAnnotation(hash, { bookmark });
+    }, [bookmarks, saveAnnotation]);
 
     const setEventTag = useCallback((hash: string, tag: EventTagValue | null) => {
-        if (!incidentId) return;
-        setEventTags(prev => {
-            const next = { ...prev, [hash]: tag };
-            saveTags(incidentId, next);
-            return next;
-        });
-    }, [incidentId, saveTags]);
+        void saveAnnotation(hash, { tag });
+    }, [saveAnnotation]);
 
     const onSelectChartWindow = useCallback((from: string, to: string) => {
-        setDateFrom(from.replace(" ", "T"));
-        setDateTo(to.replace(" ", "T"));
+        setDateFrom(from.replace(" ", "T").replace(/(?:Z|\+00:00)$/, ""));
+        setDateTo(to.replace(" ", "T").replace(/(?:Z|\+00:00)$/, ""));
         setDateFilterActive(true);
         setPage(1);
     }, []);
@@ -349,7 +415,7 @@ export default function SuperTimeline() {
                 </div>
             }
         >
-            <div className="flex flex-col h-full overflow-hidden">
+            <div className="flex flex-col min-h-full">
                 
                 {/* ─── Global Status Overlay (Floating when not done) ─── */}
                 {!isDone && (
@@ -370,9 +436,20 @@ export default function SuperTimeline() {
 
                 {isDone && (
                     <div className="flex-1 flex flex-col min-h-0">
+                        <SuperTimelineCorrelations incidentId={incidentId!} snapshot={stStatus?.completed_at} />
+                        {(stStatus?.is_stale || !!stStatus?.partial_job_count || buildError) && (
+                            <div role="status" className="px-6 py-2 border-b border-yellow-500/30 bg-yellow-500/10 text-yellow-400 text-xs font-mono flex items-center justify-between gap-3">
+                                <span>{buildError || (stStatus?.is_stale ? "New processing results are available; rebuild this snapshot. " : "")}{!buildError && !!stStatus?.partial_job_count && `${stStatus.partial_job_count} job(s) have incomplete processing coverage.`}</span>
+                                <Button variant="outline" size="sm" disabled={isBuilding} onClick={triggerBuild}>REBUILD</Button>
+                            </div>
+                        )}
                         
                         {/* ─── Refined Unified Action Bar ─── */}
                         <div className="bg-card border-b border-border shrink-0 px-6 py-3 flex flex-col gap-4">
+                            <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-muted-foreground">
+                                <span role="status">{annotationError ? "ANNOTATIONS UNAVAILABLE — CHANGES WILL NOT BE SAVED" : annotationsLoading ? "LOADING SHARED ANNOTATIONS…" : "ANNOTATIONS SAVED TO INCIDENT · SHARED WITH INVESTIGATORS"}</span>
+                                <Button variant="ghost" size="sm" disabled={annotationsLoading || !!annotationError} onClick={importBrowserAnnotations}>IMPORT BROWSER ANNOTATIONS</Button>
+                            </div>
                             <SuperTimelineFilters 
                                 searchInput={searchInput}
                                 onSearchChange={setSearchInput}
@@ -442,6 +519,8 @@ export default function SuperTimeline() {
                                         setShowBookmarks={setShowBookmarks}
                                         bookmarkCount={bookmarks.length}
                                         onExport={handleExport}
+                                        exportFormat={exportFormat}
+                                        setExportFormat={setExportFormat}
                                         isExporting={isExporting}
                                         activeFilterCount={activeFilterCount}
                                         totalEvents={timelineData?.total ?? 0}
@@ -483,7 +562,7 @@ export default function SuperTimeline() {
                         )}
 
                         {/* ─── Main Content Area ─── */}
-                        <div className="flex-1 flex min-h-0 relative">
+                        <div className="flex-1 flex min-h-[500px] relative">
                             <div className={cn(
                                 "flex-1 flex flex-col min-w-0 transition-all duration-300",
                                 compareEvents ? "mr-[400px]" : selectedEvent ? (isEventDetailCollapsed ? "mr-12" : "mr-[500px]") : "mr-0"
@@ -491,7 +570,7 @@ export default function SuperTimeline() {
                                 {!showBookmarks && viewMode === "table" && timelineData && (
                                     <div className="px-6 py-2 bg-background/20 border-b border-border/40">
                                         <SuperTimelineChart 
-                                            data={timelineData.data} 
+            data={timelineData.histogram ?? []}
                                             onSelectWindow={onSelectChartWindow}
                                         />
                                     </div>
@@ -544,9 +623,7 @@ export default function SuperTimeline() {
                                                 onSearchChange={(q) => { setSearchInput(q); setPage(1); }}
                                                 bookmarks={bookmarks}
                                                 onRemoveBookmark={(hash) => {
-                                                    const next = bookmarks.filter(b => b.eventHash !== hash);
-                                                    setBookmarks(next);
-                                                    saveBookmarks(incidentId ?? "", next);
+                                                    void saveAnnotation(hash, { bookmark: null });
                                                 }}
                                                 showBookmarks={showBookmarks}
                                             />
@@ -559,7 +636,7 @@ export default function SuperTimeline() {
                 )}
             </div>
 
-            {selectedEvent && (
+            {selectedEvent && createPortal(
                 <EventDetailPanel 
                     event={selectedEvent}
                     knownHosts={timelineData?.hosts ?? []}
@@ -574,17 +651,17 @@ export default function SuperTimeline() {
                     isBookmarked={!!bookmarks.find(b => b.eventHash === (eventHashCache.get(selectedEvent) ?? hashEvent(selectedEvent)))}
                     onBookmarkToggle={toggleBookmark}
                     onNavigateIOC={(val, type) => navigate(`/incidents/${incidentId}/ioc-matches`)}
-                />
+                />, document.body
             )}
 
-            {compareEvents && (
+            {compareEvents && createPortal(
                 <ComparePanel 
                     events={compareEvents}
                     knownHosts={timelineData?.hosts ?? []}
                     onClose={() => setCompareEvents(null)}
                     onFilterSearch={(q) => { setSearchInput(q); setPage(1); }}
                     isSidebarCollapsed={isSidebarCollapsed}
-                />
+                />, document.body
             )}
         </AppLayout>
     );

@@ -23,6 +23,7 @@ import { apiGet, apiPost } from "@/lib/api";
 import { getStoredRole, isViewerRole } from "@/lib/auth";
 import { StatusBadge } from "@/components/common/StatusBadge";
 import { SafeText } from "@/components/common/SafeText";
+import { cn } from "@/lib/utils";
 
 type IncidentSummary = {
   id: string;

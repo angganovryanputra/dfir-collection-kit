@@ -10,6 +10,7 @@ Endpoints:
   POST /ai/summary/{id}      — generate executive summary for an incident
   POST /ai/query             — answer natural-language questions about evidence
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -20,7 +21,7 @@ import re
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
@@ -46,6 +47,7 @@ def _validate_incident_id(incident_id: str) -> str:
             detail="Invalid incident_id: must be 1-128 alphanumeric/hyphen/underscore characters",
         )
     return incident_id
+
 
 # Provider → default API URL (all providers expose OpenAI-compatible /chat/completions)
 _PROVIDER_DEFAULTS: dict[str, str] = {
@@ -90,8 +92,17 @@ async def _llm_cfg(db: AsyncSession) -> tuple[str, str, str]:
     try:
         s = await get_settings(db)
         provider = s.ai_provider or os.getenv("AI_PROVIDER", "openai")
-        model = s.ai_model or os.getenv("LLM_MODEL") or _PROVIDER_DEFAULT_MODELS.get(provider, "gpt-4o-mini")
-        if provider == "gemini" and s.google_oauth_refresh_token and s.google_oauth_client_id and s.google_oauth_client_secret:
+        model = (
+            s.ai_model
+            or os.getenv("LLM_MODEL")
+            or _PROVIDER_DEFAULT_MODELS.get(provider, "gpt-4o-mini")
+        )
+        if (
+            provider == "gemini"
+            and s.google_oauth_refresh_token
+            and s.google_oauth_client_id
+            and s.google_oauth_client_secret
+        ):
             try:
                 access_token = await _google_get_access_token(
                     s.google_oauth_client_id,
@@ -103,7 +114,11 @@ async def _llm_cfg(db: AsyncSession) -> tuple[str, str, str]:
             except Exception as exc:
                 logger.warning("Google OAuth token refresh failed: %s", exc)
         api_key = s.ai_api_key or os.getenv("LLM_API_KEY", "")
-        url = s.ai_api_url or os.getenv("LLM_API_URL") or _PROVIDER_DEFAULTS.get(provider, "https://api.openai.com/v1")
+        url = (
+            s.ai_api_url
+            or os.getenv("LLM_API_URL")
+            or _PROVIDER_DEFAULTS.get(provider, "https://api.openai.com/v1")
+        )
         return url, api_key, model
     except Exception:
         return (
@@ -113,12 +128,16 @@ async def _llm_cfg(db: AsyncSession) -> tuple[str, str, str]:
         )
 
 
-async def _chat(system: str, user: str, max_tokens: int = 1024, db: AsyncSession | None = None) -> str:
+async def _chat(
+    system: str, user: str, max_tokens: int = 1024, db: AsyncSession | None = None
+) -> str:
     if db is None:
         raise HTTPException(status_code=503, detail="DB session required for AI config")
     url, key, model = await _llm_cfg(db)
     if not key:
-        raise HTTPException(status_code=503, detail="AI API key not configured — set it in Settings → AI Config")
+        raise HTTPException(
+            status_code=503, detail="AI API key not configured — set it in Settings → AI Config"
+        )
     try:
         import httpx
     except ImportError:
@@ -137,11 +156,14 @@ async def _chat(system: str, user: str, max_tokens: int = 1024, db: AsyncSession
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         )
     if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"LLM error {resp.status_code}: {resp.text[:200]}")
+        raise HTTPException(
+            status_code=502, detail=f"LLM error {resp.status_code}: {resp.text[:200]}"
+        )
     return resp.json()["choices"][0]["message"]["content"]
 
 
 # ── Event Annotation ──────────────────────────────────────────────────────────
+
 
 class AnnotateRequest(BaseModel):
     events: list[dict[str, Any]]
@@ -165,18 +187,29 @@ async def get_ai_config(
     try:
         s = await get_settings(db)
         provider = s.ai_provider or os.getenv("AI_PROVIDER", "openai")
-        model = s.ai_model or os.getenv("LLM_MODEL") or _PROVIDER_DEFAULT_MODELS.get(provider, "gpt-4o-mini")
+        model = (
+            s.ai_model
+            or os.getenv("LLM_MODEL")
+            or _PROVIDER_DEFAULT_MODELS.get(provider, "gpt-4o-mini")
+        )
         return {
             "provider": provider,
             "model": model,
-            "api_url": s.ai_api_url or os.getenv("LLM_API_URL") or _PROVIDER_DEFAULTS.get(provider, ""),
+            "api_url": s.ai_api_url
+            or os.getenv("LLM_API_URL")
+            or _PROVIDER_DEFAULTS.get(provider, ""),
             "api_key_set": bool(s.ai_api_key or os.getenv("LLM_API_KEY")),
             "google_oauth_client_id": s.google_oauth_client_id or "",
             "google_oauth_connected": bool(s.google_oauth_refresh_token),
             "default_url": _PROVIDER_DEFAULTS.get(provider, ""),
         }
     except Exception:
-        return {"provider": "openai", "model": "gpt-4o-mini", "api_key_set": False, "google_oauth_connected": False}
+        return {
+            "provider": "openai",
+            "model": "gpt-4o-mini",
+            "api_key_set": False,
+            "google_oauth_connected": False,
+        }
 
 
 class GoogleOAuthExchangeRequest(BaseModel):
@@ -199,7 +232,10 @@ async def google_oauth_exchange(
 
     s = await get_settings(db)
     if not s.google_oauth_client_id or not s.google_oauth_client_secret:
-        raise HTTPException(status_code=400, detail="Google OAuth client_id/client_secret not configured in Settings")
+        raise HTTPException(
+            status_code=400,
+            detail="Google OAuth client_id/client_secret not configured in Settings",
+        )
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(
@@ -214,19 +250,26 @@ async def google_oauth_exchange(
             },
         )
     if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Google token exchange failed: {resp.text[:200]}")
+        raise HTTPException(
+            status_code=502, detail=f"Google token exchange failed: {resp.text[:200]}"
+        )
 
     token_data = resp.json()
     refresh_token = token_data.get("refresh_token")
     if not refresh_token:
-        raise HTTPException(status_code=502, detail="Google did not return a refresh_token — ensure 'access_type=offline' was sent")
+        raise HTTPException(
+            status_code=502,
+            detail="Google did not return a refresh_token — ensure 'access_type=offline' was sent",
+        )
 
     s.google_oauth_refresh_token = refresh_token
     await db.commit()
     return {"connected": True, "scope": token_data.get("scope", "")}
 
 
-@router.delete("/oauth/google/disconnect", dependencies=[Depends(require_roles("admin", "operator"))])
+@router.delete(
+    "/oauth/google/disconnect", dependencies=[Depends(require_roles("admin", "operator"))]
+)
 async def google_oauth_disconnect(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
@@ -239,6 +282,7 @@ async def google_oauth_disconnect(
 
 
 # ── Event Annotation ──────────────────────────────────────────────────────────
+
 
 @router.post(
     "/annotate",
@@ -293,6 +337,7 @@ async def annotate_events(
 
 # ── Executive Summary ─────────────────────────────────────────────────────────
 
+
 @router.post(
     "/summary/{incident_id}",
     dependencies=[Depends(require_roles("operator", "admin"))],
@@ -304,24 +349,31 @@ async def generate_summary(
 ) -> dict:
     """Generate an executive summary of the incident's super timeline using an LLM."""
     import pathlib
-    from app.core.config import settings as app_settings
+
+    from app.services.timeline_access import published_timeline_path
 
     _validate_incident_id(incident_id)
-    db_path = pathlib.Path(app_settings.EVIDENCE_STORAGE_PATH) / incident_id / "timeline" / "super_timeline.duckdb"
+    db_path = await published_timeline_path(db, incident_id)
     sample: list[dict] = []
 
     if db_path.exists():
+
         def _fetch(p: pathlib.Path) -> list[dict]:
             import duckdb
+
             con = duckdb.connect(str(p), read_only=True)
             try:
                 rows = con.execute(
-                    "SELECT datetime, source, host, message FROM events "
-                    "ORDER BY datetime NULLS LAST LIMIT 40"
+                    "SELECT event_dt AS datetime, source, host, message FROM timeline_events "
+                    "ORDER BY event_dt NULLS LAST LIMIT 40"
                 ).fetchall()
-                return [{"dt": str(r[0]), "src": r[1], "host": r[2], "msg": str(r[3])[:200]} for r in rows]
+                return [
+                    {"dt": str(r[0]), "src": r[1], "host": r[2], "msg": str(r[3])[:200]}
+                    for r in rows
+                ]
             finally:
                 con.close()
+
         try:
             sample = await asyncio.to_thread(_fetch, db_path)
         except Exception as exc:
@@ -340,6 +392,7 @@ async def generate_summary(
     summary = await _chat(system, user, max_tokens=1200, db=db)
 
     from app.services.audit_log_service import safe_record_event
+
     await safe_record_event(
         db,
         event_type="ai.summary.generated",
@@ -363,10 +416,11 @@ async def generate_summary(
 
 # ── Natural Language Query ────────────────────────────────────────────────────
 
+
 class NLQueryRequest(BaseModel):
     incident_id: str
     question: str
-    context_limit: int = 25
+    context_limit: int = Field(default=25, ge=1, le=100)
 
 
 @router.post(
@@ -380,35 +434,44 @@ async def nl_query(
 ) -> dict:
     """Answer a natural-language question about an incident's collected evidence."""
     import pathlib
-    from app.core.config import settings as app_settings
+
+    from app.services.timeline_access import published_timeline_path
 
     _validate_incident_id(payload.incident_id)
-    db_path = pathlib.Path(app_settings.EVIDENCE_STORAGE_PATH) / payload.incident_id / "timeline" / "super_timeline.duckdb"
+    db_path = await published_timeline_path(db, payload.incident_id)
     context: list[dict] = []
 
     if db_path.exists():
+
         def _get(p: pathlib.Path, q: str, limit: int) -> list[dict]:
             import duckdb
+
             limit = max(1, min(int(limit), 100))
             con = duckdb.connect(str(p), read_only=True)
             try:
                 rows = con.execute(
-                    "SELECT datetime, source, host, message FROM events "
+                    "SELECT event_dt AS datetime, source, host, message FROM timeline_events "
                     "WHERE CAST(message AS VARCHAR) ILIKE '%' || ? || '%' "
-                    "ORDER BY datetime NULLS LAST LIMIT ?",
+                    "ORDER BY event_dt NULLS LAST LIMIT ?",
                     [q[:80], limit],
                 ).fetchall()
                 if not rows:
                     rows = con.execute(
-                        "SELECT datetime, source, host, message FROM events "
-                        "ORDER BY datetime NULLS LAST LIMIT ?",
+                        "SELECT event_dt AS datetime, source, host, message FROM timeline_events "
+                        "ORDER BY event_dt NULLS LAST LIMIT ?",
                         [limit],
                     ).fetchall()
-                return [{"dt": str(r[0]), "src": r[1], "host": r[2], "msg": str(r[3])[:300]} for r in rows]
+                return [
+                    {"dt": str(r[0]), "src": r[1], "host": r[2], "msg": str(r[3])[:300]}
+                    for r in rows
+                ]
             finally:
                 con.close()
+
         try:
-            context = await asyncio.to_thread(_get, db_path, payload.question, payload.context_limit)
+            context = await asyncio.to_thread(
+                _get, db_path, payload.question, payload.context_limit
+            )
         except Exception as exc:
             logger.debug("Context fetch failed: %s", exc)
 

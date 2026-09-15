@@ -66,7 +66,7 @@ interface EventDetailPanelProps {
     onFilterSearch: (q: string) => void;
     incidentId: string;
     isBookmarked: boolean;
-    onBookmarkToggle: (event: Record<string, unknown>, note: string) => void;
+    onBookmarkToggle: (event: Record<string, unknown>, note: string) => Promise<boolean>;
     onNavigateIOC: (value: string, type: string) => void;
     isCollapsed: boolean;
     onToggleCollapsed: () => void;
@@ -78,16 +78,29 @@ export function EventDetailPanel({
 }: EventDetailPanelProps) {
     const navigate = useNavigate();
     const [noteInput, setNoteInput] = useState("");
+    const [isSaving, setIsSaving] = useState(false);
     const [copied, setCopied] = useState<string | null>(null);
 
     const host = String(event["host"] ?? event["computer"] ?? "UNKNOWN");
     const hColor = getHostColor(host, knownHosts);
     const message = String(event["message"] ?? event["description"] ?? "");
     const iocs = detectIOCs(message + " " + JSON.stringify(event));
+    const formatValue = (value: unknown) => typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
 
     // Detect if this is a process creation event
     const eventId = String(event["event_id"] || "");
     const sourceShort = String(event["source_short"] || "").toUpperCase();
+    const sourceText = `${sourceShort} ${String(event["source"] || "")} ${String(event["source_artifact"] || "")}`.toLowerCase();
+    const platform = /linux|syslog|journal|auditd|apt|dpkg/.test(sourceText) ? "LINUX" : /mac|darwin|quarantine|unified log/.test(sourceText) ? "MACOS" : "WINDOWS";
+    const normalizedFields = [
+        ["EVENT ID", event["event_id"]], ["ACTOR / USER", event["actor"] || event["user"]],
+        ["TARGET", event["target"]], ["ACTION", event["action"]], ["RESULT", event["result"]],
+        ["CATEGORY", event["category"]], ["SEVERITY", event["severity"] || event["level"]],
+        ["PROCESS", event["process"]], ["COMMAND LINE", event["command_line"]],
+        ["SOURCE IP", event["source_ip"]], ["DESTINATION IP", event["dest_ip"]],
+        ["SOURCE PORT", event["source_port"]], ["DESTINATION PORT", event["dest_port"]],
+        ["HASHES", event["hashes"]], ["ATT&CK", event["mitre_techniques"]],
+    ].filter(([, value]) => value !== undefined && value !== null && value !== "");
     const isProcessEvent = eventId === "4688" || eventId === "1" || sourceShort === "SYSMON" || message.toLowerCase().includes("process creation");
 
     const handleCopy = (val: string, label: string) => {
@@ -108,8 +121,8 @@ export function EventDetailPanel({
 
     return (
         <div className={cn(
-            "fixed inset-y-0 right-0 bg-card border-l border-border shadow-2xl z-50 flex flex-col font-mono animate-in slide-in-from-right duration-300 transition-[width]",
-            isCollapsed ? "w-12" : "w-[500px]"
+            "fixed inset-y-0 right-0 bg-card border-l border-border shadow-2xl z-[100] flex flex-col font-mono animate-in slide-in-from-right duration-300 transition-[width]",
+            isCollapsed ? "w-12" : "w-full max-w-[500px]"
         )}>
             {isCollapsed ? (
                 <div className="flex h-full flex-col items-center gap-3 py-3">
@@ -183,6 +196,10 @@ export function EventDetailPanel({
                     <div className="text-[10px] text-muted-foreground uppercase tracking-widest border-b border-border/40 pb-1 flex items-center gap-2">
                         <Server className="w-3 h-3" /> Artifact Data
                     </div>
+                    <div className="flex flex-wrap gap-2 text-[9px] mb-2">
+                        <span className="rounded-sm border border-primary/30 bg-primary/10 px-2 py-1 text-primary">PLATFORM: {platform}</span>
+                        <span className="rounded-sm border border-border/40 bg-secondary/30 px-2 py-1">SOURCE: {sourceShort || "UNKNOWN"}</span>
+                    </div>
                     <div className="grid grid-cols-2 gap-3 text-[10px]">
                         <div>
                             <div className="text-muted-foreground mb-0.5">SOURCE</div>
@@ -192,6 +209,13 @@ export function EventDetailPanel({
                             <div className="text-muted-foreground mb-0.5">TYPE</div>
                             <div className="text-foreground truncate">{String(event["timestamp_desc"])}</div>
                         </div>
+                    </div>
+                </div>
+
+                <div className="space-y-2">
+                    <div className="text-[10px] text-muted-foreground uppercase tracking-widest border-b border-border/40 pb-1">Normalized Event Fields</div>
+                    <div className="grid grid-cols-1 gap-1 rounded-sm border border-primary/20 bg-primary/5 p-3">
+                        {normalizedFields.map(([label, value]) => <div key={String(label)} className="flex gap-3 text-[10px]"><span className="w-28 shrink-0 text-muted-foreground">{String(label)}</span><pre className="whitespace-pre-wrap break-all text-foreground/90">{formatValue(value)}</pre></div>)}
                     </div>
                 </div>
 
@@ -221,14 +245,16 @@ export function EventDetailPanel({
                     <div className="text-[10px] text-muted-foreground uppercase tracking-widest border-b border-border/40 pb-1 flex items-center gap-2">
                         <LayoutGrid className="w-3 h-3" /> Full Attribute Map
                     </div>
-                    <div className="bg-secondary/10 border border-border/40 rounded-sm p-3 space-y-1.5 overflow-hidden">
+                    <details className="bg-secondary/10 border border-border/40 rounded-sm p-3 overflow-hidden" open>
+                        <summary className="mb-2 cursor-pointer text-[10px] text-primary">SHOW COMPLETE RAW / PARSER FIELDS</summary>
+                        <div className="space-y-1.5">
                         {Object.entries(event).map(([key, val]) => {
                             if (["message", "description", "datetime", "timestamp"].includes(key)) return null;
                             if (val === null || val === undefined || val === "") return null;
                             return (
                                 <div key={key} className="flex gap-3 text-[10px] group/row">
                                     <span className="text-muted-foreground shrink-0 w-24 truncate" title={key}>{key}:</span>
-                                    <span className="text-foreground/90 break-all flex-1">{String(val)}</span>
+                                    <pre className="text-foreground/90 whitespace-pre-wrap break-all flex-1">{formatValue(val)}</pre>
                                     <button 
                                         onClick={() => handleCopy(String(val), key)}
                                         className="opacity-0 group-hover/row:opacity-100 p-0.5 hover:text-primary transition-opacity"
@@ -238,7 +264,8 @@ export function EventDetailPanel({
                                 </div>
                             );
                         })}
-                    </div>
+                        </div>
+                    </details>
                 </div>
 
                 {/* Bookmarking & Notes */}
@@ -255,9 +282,15 @@ export function EventDetailPanel({
                     <Button 
                         variant={isBookmarked ? "outline" : "tactical"} 
                         className="w-full h-9 font-bold text-xs"
-                        onClick={() => {
-                            onBookmarkToggle(event, noteInput);
-                            if (!isBookmarked) setNoteInput("");
+                        disabled={isSaving}
+                        onClick={async () => {
+                            setIsSaving(true);
+                            try {
+                                const saved = await onBookmarkToggle(event, noteInput);
+                                if (saved && !isBookmarked) setNoteInput("");
+                            } finally {
+                                setIsSaving(false);
+                            }
                         }}
                     >
                         {isBookmarked ? "REMOVE FROM BOOKMARKS" : "ADD TO INVESTIGATION"}

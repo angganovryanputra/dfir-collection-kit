@@ -82,7 +82,9 @@ async def export_entries(
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["id", "incident_id", "timestamp", "action", "actor", "target", "sequence", "entry_hash"])
+    writer.writerow(
+        ["id", "incident_id", "timestamp", "action", "actor", "target", "sequence", "entry_hash"]
+    )
     for entry in entries:
         writer.writerow(
             [
@@ -116,5 +118,3 @@ async def export_entries(
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
-
-

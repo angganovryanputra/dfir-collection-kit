@@ -9,7 +9,7 @@ test("authenticated user can open demo Evidence Vault", async ({ page }) => {
   await page.getByRole("button", { name: /access system/i }).click();
   await page.waitForURL(/\/dashboard/, { timeout: 30_000 });
   await page.goto("/evidence/INC-MOCK-SUPERTL");
-  await expect(page.getByText(/evidence vault/i)).toBeVisible();
+  await expect(page.getByRole("heading", { name: /evidence vault/i })).toBeVisible();
   await expect(page.getByText(/demo-collection-manifest/i)).toBeVisible();
   await page.getByLabel(/view demo-collection-manifest/i).click();
   await expect(page.getByRole("dialog", { name: /evidence details/i })).toBeVisible();

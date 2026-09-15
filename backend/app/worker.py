@@ -7,6 +7,7 @@ Workers are started with:
 Note: Pipeline tasks are CPU/IO-bound long-running operations.
 Use --pool=solo or --concurrency=1 to avoid event loop conflicts with asyncio.
 """
+
 import asyncio
 import logging
 import os
@@ -37,6 +38,7 @@ async def _run_with_disposed_engine(coroutine: Awaitable[_TaskResult]) -> _TaskR
 
         await engine.dispose()
 
+
 broker_url = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 result_backend = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/0")
 
@@ -60,7 +62,7 @@ celery_app.conf.update(
     beat_schedule={
         "check-scheduled-collections": {
             "task": "dfir.check_scheduled_collections",
-            "schedule": 60.0,    # every minute
+            "schedule": 60.0,  # every minute
         },
         "expire-legal-holds": {
             "task": "dfir.expire_legal_holds",
@@ -74,8 +76,12 @@ celery_app.conf.update(
 )
 
 
-@celery_app.task(bind=True, name="dfir.run_pipeline", max_retries=1, time_limit=7200, soft_time_limit=6600)
-def run_pipeline_task(self, incident_id: str, job_id: str, base_path: str) -> dict:
+@celery_app.task(
+    bind=True, name="dfir.run_pipeline", max_retries=1, time_limit=7200, soft_time_limit=6600
+)
+def run_pipeline_task(
+    self, incident_id: str, job_id: str, base_path: str, force: bool = False
+) -> dict:
     """
     Celery task wrapper for the forensics parsing pipeline.
     Runs the async pipeline inside a fresh event loop.
@@ -85,7 +91,11 @@ def run_pipeline_task(self, incident_id: str, job_id: str, base_path: str) -> di
 
     logger.info("Celery: starting pipeline for job %s (incident %s)", job_id, incident_id)
     try:
-        asyncio.run(_run_with_disposed_engine(run_pipeline_background(incident_id, job_id, Path(base_path))))
+        asyncio.run(
+            _run_with_disposed_engine(
+                run_pipeline_background(incident_id, job_id, Path(base_path), force=force)
+            )
+        )
         logger.info("Celery: pipeline completed for job %s", job_id)
         return {"status": "done", "job_id": job_id}
     except SoftTimeLimitExceeded:
@@ -96,8 +106,12 @@ def run_pipeline_task(self, incident_id: str, job_id: str, base_path: str) -> di
         raise self.retry(exc=exc, countdown=30)
 
 
-@celery_app.task(bind=True, name="dfir.process_s3_upload", max_retries=3, time_limit=7200, soft_time_limit=6600)
-def process_s3_upload_task(self, incident_id: str, job_id: str, base_path: str, object_key: str) -> dict:
+@celery_app.task(
+    bind=True, name="dfir.process_s3_upload", max_retries=3, time_limit=7200, soft_time_limit=6600
+)
+def process_s3_upload_task(
+    self, incident_id: str, job_id: str, base_path: str, object_key: str
+) -> dict:
     """
     Celery task wrapper for downloading, extracting, and initiating the pipeline for an S3 upload.
     """
@@ -118,25 +132,34 @@ def process_s3_upload_task(self, incident_id: str, job_id: str, base_path: str, 
         raise self.retry(exc=exc, countdown=60)
 
 
-async def process_s3_upload_background(incident_id: str, job_id: str, base_path: Path, object_key: str) -> None:
-    from app.db.session import AsyncSessionLocal
-    from app.services.s3_service import get_s3_service
-    from app.services.system_settings_service import get_runtime_settings
+async def process_s3_upload_background(
+    incident_id: str, job_id: str, base_path: Path, object_key: str
+) -> None:
+    from datetime import datetime, timezone
+
+    from sqlalchemy import select
+
     # Keep the S3 path on the same evidence primitives and data model as the
     # streamed agent upload.  The old imports referred to a removed service
     # and an obsolete CRUD API, so S3 processing failed at task startup.
-    from app.core.evidence_files import extract_zip, hash_file, write_hash_manifest, write_lock_marker
+    from app.core.evidence_files import (
+        append_chain_log,
+        extract_zip,
+        hash_file,
+        write_hash_manifest,
+        write_lock_marker,
+    )
     from app.crud.chain_of_custody import create_entry
     from app.crud.evidence import create_folder, create_item
     from app.crud.job import sync_incident_collection_status
+    from app.db.session import AsyncSessionLocal
     from app.models.job import Job
     from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
     from app.schemas.evidence import EvidenceFolderCreate, EvidenceItemCreate
-    from sqlalchemy import select
-    from datetime import datetime, timezone
-    from app.core.evidence_files import append_chain_log
     from app.services.artifact_parser_service import run_parsing_pipeline
     from app.services.audit_log_service import safe_record_event
+    from app.services.s3_service import get_s3_service
+    from app.services.system_settings_service import get_runtime_settings
 
     async with AsyncSessionLocal() as db:
         try:
@@ -148,11 +171,11 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
 
             zip_path = base_path / "collection.zip"
             base_path.mkdir(parents=True, exist_ok=True)
-            
+
             await s3_service.download_file(object_key, str(zip_path))
 
             runtime_settings = await get_runtime_settings(db)
-            
+
             await safe_record_event(
                 db,
                 event_type="evidence_s3_downloaded",
@@ -173,7 +196,11 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
 
             manifest_path = base_path / "hashes.sha256"
             await asyncio.to_thread(
-                write_hash_manifest, extracted_files, manifest_path, extracted_dir, runtime_settings.hash_algorithm
+                write_hash_manifest,
+                extracted_files,
+                manifest_path,
+                extracted_dir,
+                runtime_settings.hash_algorithm,
             )
 
             await safe_record_event(
@@ -191,7 +218,9 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
             )
 
             # 3. Create DB records using the canonical evidence schema.
-            total_size = await asyncio.to_thread(lambda: sum(p.stat().st_size for p in extracted_files))
+            total_size = await asyncio.to_thread(
+                lambda: sum(p.stat().st_size for p in extracted_files)
+            )
             await create_folder(
                 db,
                 EvidenceFolderCreate(
@@ -211,6 +240,9 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
                         id=f"{job_id}-{idx}",
                         incident_id=incident_id,
                         name=evidence_file.name,
+                        job_id=job_id,
+                        relative_path=evidence_file.relative_to(base_path.parent).as_posix(),
+                        hash_algorithm=runtime_settings.hash_algorithm,
                         type="FILE",
                         size=str(evidence_file.stat().st_size),
                         status="HASH_VERIFIED",
@@ -242,13 +274,17 @@ async def process_s3_upload_background(incident_id: str, job_id: str, base_path:
                 job.completed_at = datetime.now(timezone.utc)
                 await sync_incident_collection_status(db, incident_id)
                 await db.commit()
-                
+
                 timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
                 chain_log_path = base_path / "chain-of-custody.log"
                 await asyncio.to_thread(
-                    append_chain_log, chain_log_path, f"{timestamp} | UPLOAD_S3 | AGENT {job.agent_id} | {zip_path.name}"
+                    append_chain_log,
+                    chain_log_path,
+                    f"{timestamp} | UPLOAD_S3 | AGENT {job.agent_id} | {zip_path.name}",
                 )
-                chain_log_hash = await asyncio.to_thread(hash_file, chain_log_path, runtime_settings.hash_algorithm)
+                chain_log_hash = await asyncio.to_thread(
+                    hash_file, chain_log_path, runtime_settings.hash_algorithm
+                )
                 await asyncio.to_thread(
                     append_chain_log, chain_log_path, f"{timestamp} | HASH | {chain_log_hash}"
                 )
@@ -279,9 +315,11 @@ def check_scheduled_collections_task() -> dict:
 async def _run_scheduled_collections() -> None:
     """Find enabled scheduled collections that are due and trigger them."""
     from datetime import datetime, timezone
+
+    from sqlalchemy import select, update
+
     from app.db.session import AsyncSessionLocal
     from app.models.platform_features import ScheduledCollection
-    from sqlalchemy import select, update
 
     try:
         from croniter import croniter  # type: ignore[import]
@@ -310,10 +348,13 @@ async def _run_scheduled_collections() -> None:
             if sc.next_run_at > now:
                 continue  # not due yet
 
-            logger.info("Dispatching scheduled collection %s for incident %s", sc.id, sc.incident_id)
+            logger.info(
+                "Dispatching scheduled collection %s for incident %s", sc.id, sc.incident_id
+            )
             try:
                 # Trigger collection via HTTP to the backend (uses the same pipeline)
                 from app.services.system_settings_service import get_runtime_settings
+
                 # Just dispatch a Celery pipeline task directly
                 run_scheduled_collection_task.delay(sc.incident_id, sc.id)
                 # Update last_run_at and compute next_run_at
@@ -333,7 +374,9 @@ def run_scheduled_collection_task(self, incident_id: str, schedule_id: str) -> d
     """Trigger a collection for a scheduled collection entry."""
     logger.info("Running scheduled collection %s for incident %s", schedule_id, incident_id)
     try:
-        asyncio.run(_run_with_disposed_engine(_trigger_scheduled_collection(incident_id, schedule_id)))
+        asyncio.run(
+            _run_with_disposed_engine(_trigger_scheduled_collection(incident_id, schedule_id))
+        )
         return {"status": "done", "schedule_id": schedule_id}
     except Exception as exc:
         logger.error("Scheduled collection %s failed: %s", schedule_id, exc, exc_info=True)
@@ -344,15 +387,16 @@ async def _trigger_scheduled_collection(incident_id: str, schedule_id: str) -> N
     """Create one uniquely identified, OS-compatible job per scheduled target."""
     from uuid import uuid4
 
+    from sqlalchemy import select
+
+    from app.core.modules import build_modules, get_profile_modules, normalize_os_name
+    from app.crud.incident import get_incident, update_incident
+    from app.crud.job import create_job
     from app.db.session import AsyncSessionLocal
     from app.models.device import Device
     from app.models.platform_features import CustomModule, ScheduledCollection
-    from app.crud.incident import get_incident, update_incident
-    from app.crud.job import create_job
     from app.schemas.incident import IncidentUpdate
     from app.schemas.job import JobCreate
-    from app.core.modules import build_modules, get_profile_modules, normalize_os_name
-    from sqlalchemy import select
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -372,15 +416,19 @@ async def _trigger_scheduled_collection(incident_id: str, schedule_id: str) -> N
             select(Device).where(Device.hostname.in_(incident.target_endpoints or []))
         )
         devices = list(device_result.scalars().all())
-        custom_result = await db.execute(select(CustomModule).where(CustomModule.enabled == True))  # noqa: E712
+        custom_result = await db.execute(
+            select(CustomModule).where(CustomModule.enabled == True)
+        )  # noqa: E712
         custom_by_os: dict[str, list[dict]] = {}
         for module in custom_result.scalars():
-            custom_by_os.setdefault(module.os, []).append({
-                "module_id": module.id,
-                "output_relpath": module.output_relpath,
-                "params": {},
-                "command": module.command,
-            })
+            custom_by_os.setdefault(module.os, []).append(
+                {
+                    "module_id": module.id,
+                    "output_relpath": module.output_relpath,
+                    "params": {},
+                    "command": module.command,
+                }
+            )
 
         targets: list[Device | None] = devices or [None]
         job_ids: list[str] = []
@@ -396,7 +444,12 @@ async def _trigger_scheduled_collection(incident_id: str, schedule_id: str) -> N
                 else:
                     modules = build_modules(os_name=os_name)
             except ValueError as exc:
-                logger.error("Scheduled collection %s for OS %s: module build failed: %s", schedule_id, os_name, exc)
+                logger.error(
+                    "Scheduled collection %s for OS %s: module build failed: %s",
+                    schedule_id,
+                    os_name,
+                    exc,
+                )
                 continue
 
             modules.extend(custom_by_os.get(os_name, []))
@@ -405,7 +458,9 @@ async def _trigger_scheduled_collection(incident_id: str, schedule_id: str) -> N
             job_id = f"JOB-{incident_id}-SCHED-{schedule_id[:8]}-{uuid4().hex[:10]}"
             await create_job(
                 db,
-                JobCreate(id=job_id, incident_id=incident_id, agent_id=device.id if device else None),
+                JobCreate(
+                    id=job_id, incident_id=incident_id, agent_id=device.id if device else None
+                ),
                 modules,
                 f"{incident_id}/{job_id}",
             )
@@ -429,9 +484,11 @@ def expire_legal_holds_task() -> dict:
 async def _expire_legal_holds() -> None:
     """Set status=EXPIRED for all ACTIVE holds whose expires_at has passed."""
     from datetime import datetime, timezone
+
+    from sqlalchemy import update
+
     from app.db.session import AsyncSessionLocal
     from app.models.platform_features import LegalHold
-    from sqlalchemy import update
 
     now = datetime.now(timezone.utc)
     async with AsyncSessionLocal() as db:
@@ -465,11 +522,13 @@ async def _verify_evidence_integrity() -> None:
     """Re-hash all LOCKED evidence items and compare against DB hashes."""
     import hashlib
     from pathlib import Path
-    from app.db.session import AsyncSessionLocal
-    from app.services.system_settings_service import get_runtime_settings
-    from app.services.audit_log_service import safe_record_event
+
     from sqlalchemy import select
+
+    from app.db.session import AsyncSessionLocal
     from app.models.evidence import EvidenceItem
+    from app.services.audit_log_service import safe_record_event
+    from app.services.system_settings_service import get_runtime_settings
 
     async with AsyncSessionLocal() as db:
         runtime = await get_runtime_settings(db)
@@ -498,7 +557,10 @@ async def _verify_evidence_integrity() -> None:
                     tamper_count += 1
                     logger.error(
                         "TAMPER DETECTED: %s/%s — expected %s got %s",
-                        item.incident_id, item.name, item.hash[:16], computed[:16],
+                        item.incident_id,
+                        item.name,
+                        item.hash[:16],
+                        computed[:16],
                     )
                     await safe_record_event(
                         db,
@@ -521,10 +583,16 @@ async def _verify_evidence_integrity() -> None:
             except Exception as exc:
                 logger.warning("Integrity check failed for %s: %s", item.id, exc)
 
-        logger.info("Evidence integrity check complete: %d tamper(s) detected in %d items", tamper_count, len(items))
+        logger.info(
+            "Evidence integrity check complete: %d tamper(s) detected in %d items",
+            tamper_count,
+            len(items),
+        )
 
 
-@celery_app.task(bind=True, name="dfir.run_super_timeline", max_retries=1, time_limit=3600, soft_time_limit=3300)
+@celery_app.task(
+    bind=True, name="dfir.run_super_timeline", max_retries=1, time_limit=3600, soft_time_limit=3300
+)
 def run_super_timeline_task(self, incident_id: str, base_path: str) -> dict:
     """
     Celery task wrapper for the Super Timeline merge + lateral movement detection.
@@ -535,11 +603,16 @@ def run_super_timeline_task(self, incident_id: str, base_path: str) -> dict:
 
     logger.info("Celery: starting super timeline for incident %s", incident_id)
     try:
-        asyncio.run(_run_with_disposed_engine(build_super_timeline_background(incident_id, Path(base_path))))
+        asyncio.run(
+            _run_with_disposed_engine(build_super_timeline_background(incident_id, Path(base_path)))
+        )
         logger.info("Celery: super timeline completed for incident %s", incident_id)
         return {"status": "done", "incident_id": incident_id}
     except SoftTimeLimitExceeded:
-        logger.error("Celery: super timeline soft time limit exceeded for incident %s — aborting", incident_id)
+        logger.error(
+            "Celery: super timeline soft time limit exceeded for incident %s — aborting",
+            incident_id,
+        )
         raise
     except Exception as exc:
         logger.error(

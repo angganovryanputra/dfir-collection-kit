@@ -6,6 +6,7 @@ Create Date: 2026-05-02 00:00:00.000000
 """
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20260502_notifications_and_binary"
@@ -18,9 +19,7 @@ def upgrade() -> None:
     # Widen alembic_version.version_num so long revision IDs (> 32 chars) are accepted.
     # Alembic writes the new revision ID AFTER upgrade() returns, so this ALTER must
     # happen first — otherwise the UPDATE alembic_version SET version_num=... fails.
-    op.execute(sa.text(
-        "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"
-    ))
+    op.execute(sa.text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
 
     bind = op.get_bind()
     inspector = sa.inspect(bind)
@@ -29,7 +28,9 @@ def upgrade() -> None:
     if "webhook_url" not in existing_cols:
         op.add_column("system_settings", sa.Column("webhook_url", sa.String(), nullable=True))
     if "notification_email" not in existing_cols:
-        op.add_column("system_settings", sa.Column("notification_email", sa.String(), nullable=True))
+        op.add_column(
+            "system_settings", sa.Column("notification_email", sa.String(), nullable=True)
+        )
     if "agent_binary_path" not in existing_cols:
         op.add_column("system_settings", sa.Column("agent_binary_path", sa.String(), nullable=True))
 

@@ -1,18 +1,20 @@
 """add incident collection state
 
 Revision ID: 20260117_add_incident_collection_state
-Revises: 
+Revises:
 Create Date: 2026-01-17 00:00:00.000000
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 
 def _get_existing_columns(table_name: str) -> set[str]:
     bind = op.get_bind()
     inspector = sa.inspect(bind)
     return {col["name"] for col in inspector.get_columns(table_name)}
+
 
 revision = "20260117_collection_state"
 down_revision = "initial"
@@ -46,8 +48,15 @@ def upgrade() -> None:
             sa.Column("sequence", sa.Integer(), nullable=False),
             sa.Column("level", sa.String(), nullable=False),
             sa.Column("message", sa.String(), nullable=False),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-            sa.ForeignKeyConstraint(["incident_id"], ["incidents.id"], name="collection_logs_incident_id_fkey"),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                nullable=False,
+            ),
+            sa.ForeignKeyConstraint(
+                ["incident_id"], ["incidents.id"], name="collection_logs_incident_id_fkey"
+            ),
             sa.PrimaryKeyConstraint("id", name="collection_logs_pkey"),
         )
         op.create_index("ix_collection_logs_incident_id", "collection_logs", ["incident_id"])

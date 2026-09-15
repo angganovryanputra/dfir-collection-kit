@@ -55,9 +55,9 @@ Open your browser and navigate to:
 
 | Service | URL |
 |---------|-----|
-| **Frontend** | http://localhost:5173 |
-| **Backend API** | http://localhost:8000 |
-| **Interactive API Docs** | http://localhost:8000/docs |
+| **Frontend** | https://localhost |
+| **Backend API** | https://localhost/api/v1 |
+| **Interactive API Docs** | https://localhost/docs |
 
 ### Step 2 — Login
 
@@ -126,9 +126,9 @@ The database is initialized and seeded automatically on first launch.
 
 | Service | URL |
 |---------|-----|
-| **Frontend** | http://localhost:5173 |
-| **Backend API** | http://localhost:8000 |
-| **Interactive API Docs** | http://localhost:8000/docs |
+| **Frontend** | https://localhost |
+| **Backend API** | https://localhost/api/v1 |
+| **Interactive API Docs** | https://localhost/docs |
 
 ### Step 5 — Login
 
@@ -154,6 +154,20 @@ Password: <value of DFIR_DEFAULT_ADMIN_PASSWORD from .env>
 | `frontend` | React UI served by Nginx | 5173 |
 
 Evidence files are stored in the Docker volume `dfir_evidence` (mounted at `/vault/evidence` in the backend and Celery containers). The database persists in `dfir_postgres`.
+
+## Timeline exports and correlations
+
+After a Super Timeline is built, its toolbar exports the active filters as CSV,
+JSONL, CEF, LEEF 2.0, or STIX 2.1. The same capabilities are available to an
+authenticated API client:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/v1/evidence/super-timeline/{incident_id}/export?format=cef` | Filtered CEF, LEEF, STIX, CSV, or JSONL export |
+| `GET /api/v1/processing/incident/{incident_id}/correlations` | Read-only cross-event detections for the built Super Timeline |
+
+See [FORENSICS_TOOLS.md](FORENSICS_TOOLS.md) before running a production
+pipeline: third-party parsers and rule packs are mounted separately.
 
 ---
 

@@ -126,7 +126,10 @@ export function AppSidebar({
 
     return (
       <button
-        onClick={() => navigate(targetPath)}
+        onClick={() => {
+          navigate(targetPath);
+          if (window.matchMedia("(max-width: 767px)").matches) onCollapsedChange(true);
+        }}
         className={cn(
           "w-full flex items-center gap-3 px-3 py-2.5 font-mono text-xs uppercase tracking-wider transition-all",
           isActive

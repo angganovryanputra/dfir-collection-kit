@@ -48,6 +48,15 @@ const VirtualizedRow = React.memo(function VirtualizedRow<T>({
 }: VirtualizedRowProps<T>) {
   return (
     <div
+      role="row"
+      aria-rowindex={index + 2}
+      tabIndex={onRowClick ? 0 : undefined}
+      onKeyDown={(e) => {
+        if (onRowClick && e.target === e.currentTarget && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          e.currentTarget.click();
+        }
+      }}
       onClick={(e) => onRowClick?.(e, item, index)}
       className={cn(
         "absolute top-0 left-0 w-full grid border-b border-border/5 transition-colors group",
@@ -63,6 +72,7 @@ const VirtualizedRow = React.memo(function VirtualizedRow<T>({
       {columns.map((col) => (
         <div
           key={col.id}
+          role="cell"
           className={cn("px-4 py-2 text-xs flex items-center min-w-0", col.className)}
         >
           {col.cell(item, index)}
@@ -152,17 +162,23 @@ export function VirtualizedDataTable<T>({
 
   return (
     <div 
+      role="table"
+      aria-rowcount={data.length + 1}
+      aria-colcount={columns.length}
       className={cn("relative border border-border/40 bg-card/20 rounded-sm flex flex-col", className)}
       style={{ height }}
     >
       {/* Header */}
       <div 
+        role="row"
+        aria-rowindex={1}
         className="grid border-b border-border/60 bg-background/95 backdrop-blur z-20 sticky top-0"
         style={{ gridTemplateColumns }}
       >
         {columns.map((col) => (
           <div
             key={col.id}
+            role="columnheader"
             className={cn(
               "font-mono text-[9px] font-bold uppercase tracking-[0.1em] text-muted-foreground h-9 px-4 flex items-center",
               col.headerClassName

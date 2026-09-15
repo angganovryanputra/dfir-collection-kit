@@ -31,6 +31,7 @@ CHAINSAW_MAPPING: str | None = os.getenv(
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _has_evtx(directory: Path) -> bool:
     """Return True when *directory* contains at least one .evtx file."""
     return any(directory.rglob("*.evtx"))
@@ -46,6 +47,7 @@ def _resolve(env: str | None, name: str) -> str | None:
 # ---------------------------------------------------------------------------
 # Hayabusa — Fast Windows Event Log Analyzer
 # ---------------------------------------------------------------------------
+
 
 def run_hayabusa(evtx_dir: Path, output_dir: Path, *, timeout: int = 900) -> Path | None:
     """
@@ -67,10 +69,13 @@ def run_hayabusa(evtx_dir: Path, output_dir: Path, *, timeout: int = 900) -> Pat
     cmd = [
         binary,
         "csv-timeline",
-        "-d", str(evtx_dir),
-        "-o", str(output_csv),
+        "-d",
+        str(evtx_dir),
+        "-o",
+        str(output_csv),
         "--no-color",
-        "-p", "verbose",
+        "-p",
+        "verbose",
     ]
     logger.info("Executing: %s", " ".join(cmd))
 
@@ -103,6 +108,7 @@ def run_hayabusa(evtx_dir: Path, output_dir: Path, *, timeout: int = 900) -> Pat
 # Chainsaw — Rapidly search & hunt through Windows EVTX
 # ---------------------------------------------------------------------------
 
+
 def run_chainsaw(evtx_dir: Path, output_dir: Path, *, timeout: int = 900) -> Path | None:
     """
     Scan *evtx_dir* with Chainsaw + Sigma rules producing a CSV of alerts.
@@ -125,10 +131,13 @@ def run_chainsaw(evtx_dir: Path, output_dir: Path, *, timeout: int = 900) -> Pat
         binary,
         "hunt",
         str(evtx_dir),
-        "-s", sigma_dir,
-        "--mapping", CHAINSAW_MAPPING or "mappings/sigma-event-logs-all.yml",
+        "-s",
+        sigma_dir,
+        "--mapping",
+        CHAINSAW_MAPPING or "mappings/sigma-event-logs-all.yml",
         "--csv",
-        "--output", str(output_csv),
+        "--output",
+        str(output_csv),
         "--full",
     ]
     logger.info("Executing: %s", " ".join(cmd))

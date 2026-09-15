@@ -4,6 +4,7 @@ Attack chain reconstruction from Sigma hits.
 Groups hits into 15-minute temporal windows, maps rule tags to MITRE ATT&CK
 tactics/techniques, builds a directed graph per window, and stores AttackChain records.
 """
+
 from __future__ import annotations
 
 import logging
@@ -45,7 +46,7 @@ def _extract_attack_tags(rule_tags: list[str]) -> tuple[list[str], list[str]]:
         tag_lower = tag.lower().strip()
         if not tag_lower.startswith("attack."):
             continue
-        part = tag_lower[len("attack."):]
+        part = tag_lower[len("attack.") :]
         if part in _TACTIC_SLUGS:
             tactics.append(part)
         elif part.startswith("t") and len(part) >= 5:
@@ -117,19 +118,19 @@ async def build_attack_chains(
     reconstruct ATT&CK chains, and store AttackChain records.
     Returns number of chains created.
     """
+    from sqlalchemy import delete, select
+
     from app.models.analytics import AttackChain
-    from sqlalchemy import select, delete
     from app.models.processing import SigmaHit
 
     # Clear previous chains for this processing job
-    await db.execute(
-        delete(AttackChain).where(AttackChain.processing_job_id == processing_job_id)
-    )
+    await db.execute(delete(AttackChain).where(AttackChain.processing_job_id == processing_job_id))
 
     # Load all sigma hits for the incident
     result = await db.execute(
         select(SigmaHit)
         .where(SigmaHit.incident_id == incident_id)
+        .where(SigmaHit.processing_job_id == processing_job_id)
         .order_by(SigmaHit.event_timestamp.nullslast())
     )
     hits = result.scalars().all()
@@ -161,9 +162,11 @@ async def build_attack_chains(
             hit_ids.append(hit.id)
 
         # Deduplicate and order tactics by kill-chain position
-        unique_tactics = list(dict.fromkeys(
-            slug for slug in (s[0] for s in _TACTIC_ORDER) if slug in set(all_tactics)
-        ))
+        unique_tactics = list(
+            dict.fromkeys(
+                slug for slug in (s[0] for s in _TACTIC_ORDER) if slug in set(all_tactics)
+            )
+        )
         unique_techniques = list(dict.fromkeys(all_techniques))
 
         nodes, edges = _build_graph(unique_tactics, unique_techniques)
@@ -197,6 +200,8 @@ async def build_attack_chains(
 
     logger.info(
         "Attack chain reconstruction complete for incident %s: %d chains from %d hits",
-        incident_id, len(chains), len(hits),
+        incident_id,
+        len(chains),
+        len(hits),
     )
     return len(chains)

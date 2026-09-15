@@ -2,6 +2,7 @@
 collections, threat hunt queries, legal holds, cross-incident correlation,
 and SIEM export.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -18,7 +19,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
@@ -28,12 +29,151 @@ from app.models.platform_features import (
     LegalHold,
     ScheduledCollection,
     ThreatHuntQuery,
+    DetectionTriage, IncidentNote, IncidentTask,
 )
 from app.models.user import User
 from app.services.audit_log_service import safe_record_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class IncidentNoteOut(BaseModel):
+    incident_id: str
+    content: str
+    updated_by: str
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class IncidentNoteUpdate(BaseModel):
+    content: str = Field(default="", max_length=100_000)
+
+
+class IncidentTaskIn(BaseModel):
+    title: str = Field(min_length=1, max_length=240)
+    description: str | None = Field(default=None, max_length=20_000)
+    assignee: str | None = Field(default=None, max_length=128)
+    due_at: datetime | None = None
+
+
+class IncidentTaskUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=240)
+    description: str | None = Field(default=None, max_length=20_000)
+    status: str | None = Field(default=None, pattern="^(OPEN|IN_PROGRESS|DONE|CANCELLED)$")
+    assignee: str | None = Field(default=None, max_length=128)
+    due_at: datetime | None = None
+
+
+class IncidentTaskOut(IncidentTaskIn):
+    id: str
+    incident_id: str
+    status: str
+    created_by: str
+    created_at: datetime
+    updated_at: datetime
+    class Config:
+        from_attributes = True
+
+
+class DetectionTriageIn(BaseModel):
+    detection_type: str = Field(pattern="^(SIGMA|IOC|YARA)$")
+    detection_id: str = Field(min_length=1, max_length=256)
+    status: str = Field(default="NEW", pattern="^(NEW|REVIEWING|CONFIRMED|FALSE_POSITIVE|RESOLVED)$")
+    comment: str | None = Field(default=None, max_length=20_000)
+
+
+class DetectionTriageOut(DetectionTriageIn):
+    id: str
+    incident_id: str
+    updated_by: str
+    updated_at: datetime
+    class Config:
+        from_attributes = True
+
+
+@router.get("/incidents/{incident_id}/tasks", response_model=list[IncidentTaskOut])
+async def list_incident_tasks(incident_id: str, db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
+    result = await db.execute(select(IncidentTask).where(IncidentTask.incident_id == incident_id).order_by(IncidentTask.created_at.desc()))
+    return [IncidentTaskOut.model_validate(row) for row in result.scalars()]
+
+
+@router.post("/incidents/{incident_id}/tasks", response_model=IncidentTaskOut, dependencies=[Depends(require_roles("operator", "admin"))])
+async def create_incident_task(incident_id: str, payload: IncidentTaskIn, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.crud.incident import get_incident
+    if not await get_incident(db, incident_id): raise HTTPException(404, "Incident not found")
+    task = IncidentTask(id=f"TASK-{uuid4().hex[:12].upper()}", incident_id=incident_id, created_by=current_user.id, **payload.model_dump())
+    db.add(task); await db.commit(); await db.refresh(task)
+    return IncidentTaskOut.model_validate(task)
+
+
+@router.patch("/incidents/{incident_id}/tasks/{task_id}", response_model=IncidentTaskOut, dependencies=[Depends(require_roles("operator", "admin"))])
+async def update_incident_task(incident_id: str, task_id: str, payload: IncidentTaskUpdate, db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
+    task = await db.scalar(select(IncidentTask).where(IncidentTask.id == task_id, IncidentTask.incident_id == incident_id))
+    if not task: raise HTTPException(404, "Task not found")
+    for key, value in payload.model_dump(exclude_unset=True).items(): setattr(task, key, value)
+    await db.commit(); await db.refresh(task)
+    return IncidentTaskOut.model_validate(task)
+
+
+@router.get("/incidents/{incident_id}/detection-triage", response_model=list[DetectionTriageOut])
+async def list_detection_triage(incident_id: str, db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
+    result = await db.execute(select(DetectionTriage).where(DetectionTriage.incident_id == incident_id).order_by(DetectionTriage.updated_at.desc()))
+    return [DetectionTriageOut.model_validate(row) for row in result.scalars()]
+
+
+@router.put("/incidents/{incident_id}/detection-triage", response_model=DetectionTriageOut, dependencies=[Depends(require_roles("operator", "admin"))])
+async def save_detection_triage(incident_id: str, payload: DetectionTriageIn, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.crud.incident import get_incident
+    if not await get_incident(db, incident_id): raise HTTPException(404, "Incident not found")
+    row = await db.scalar(select(DetectionTriage).where(DetectionTriage.incident_id == incident_id, DetectionTriage.detection_type == payload.detection_type, DetectionTriage.detection_id == payload.detection_id))
+    if row:
+        row.status, row.comment, row.updated_by, row.updated_at = payload.status, payload.comment, current_user.id, datetime.now(timezone.utc)
+    else:
+        row = DetectionTriage(id=f"TRIAGE-{uuid4().hex[:12].upper()}", incident_id=incident_id, updated_by=current_user.id, **payload.model_dump()); db.add(row)
+    await db.commit(); await db.refresh(row)
+    return DetectionTriageOut.model_validate(row)
+
+
+@router.get("/incidents/{incident_id}/notes", response_model=IncidentNoteOut | None)
+async def get_incident_note(
+    incident_id: str, db: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)
+) -> IncidentNoteOut | None:
+    note = await db.get(IncidentNote, incident_id)
+    return IncidentNoteOut.model_validate(note) if note else None
+
+
+@router.put(
+    "/incidents/{incident_id}/notes",
+    response_model=IncidentNoteOut,
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
+async def save_incident_note(
+    incident_id: str,
+    payload: IncidentNoteUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> IncidentNoteOut:
+    from app.crud.incident import get_incident
+
+    if not await get_incident(db, incident_id):
+        raise HTTPException(status_code=404, detail="Incident not found")
+    note = await db.get(IncidentNote, incident_id)
+    if note:
+        note.content = payload.content
+        note.updated_by = current_user.id
+        note.updated_at = datetime.now(timezone.utc)
+    else:
+        note = IncidentNote(incident_id=incident_id, content=payload.content, updated_by=current_user.id)
+        db.add(note)
+    await db.commit()
+    await db.refresh(note)
+    await safe_record_event(db, event_type="incident.note.updated", actor_type="user", actor_id=current_user.id,
+                            source="backend", action="update incident note", target_type="incident",
+                            target_id=incident_id, status="success", message="Incident note updated", metadata={})
+    return IncidentNoteOut.model_validate(note)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Security validators (shared)
@@ -97,7 +237,11 @@ def _validate_siem_url(value: str) -> str:
     from app.core.config import settings
 
     hostname = parsed.hostname.lower().rstrip(".")
-    allowed_hosts = {host.strip().lower().rstrip(".") for host in settings.SIEM_ALLOWED_HOSTS.split(",") if host.strip()}
+    allowed_hosts = {
+        host.strip().lower().rstrip(".")
+        for host in settings.SIEM_ALLOWED_HOSTS.split(",")
+        if host.strip()
+    }
     try:
         addresses = {item[4][0] for item in socket.getaddrinfo(hostname, parsed.port or 443)}
     except socket.gaierror as exc:
@@ -107,7 +251,9 @@ def _validate_siem_url(value: str) -> str:
         if ip.is_loopback or ip.is_link_local:
             raise ValueError("SIEM URL must not resolve to a loopback or link-local address")
         if not ip.is_global and hostname not in allowed_hosts:
-            raise ValueError("SIEM URL must not resolve to a private, loopback, or link-local address")
+            raise ValueError(
+                "SIEM URL must not resolve to a private, loopback, or link-local address"
+            )
     return value
 
 
@@ -122,7 +268,9 @@ def _validate_custom_command(value: str | None) -> str | None:
     if not command or len(command) > 1024:
         raise ValueError("command must contain 1-1024 characters")
     if _SHELL_METACHARACTERS.search(command):
-        raise ValueError("command may not contain shell operators, redirection, expansion, or newlines")
+        raise ValueError(
+            "command may not contain shell operators, redirection, expansion, or newlines"
+        )
     return command
 
 
@@ -133,6 +281,7 @@ def _validate_output_relpath(value: str | None) -> str | None:
     if not value.strip() or path.is_absolute() or ".." in path.parts:
         raise ValueError("output_relpath must be a non-empty relative path without '..'")
     return path.as_posix()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pydantic schemas
@@ -505,8 +654,9 @@ async def update_hypothesis(
     _: User = Depends(get_current_user),
 ) -> AttackHypothesisOut:
     result = await db.execute(
-        select(AttackHypothesis)
-        .where(AttackHypothesis.id == hyp_id, AttackHypothesis.incident_id == incident_id)
+        select(AttackHypothesis).where(
+            AttackHypothesis.id == hyp_id, AttackHypothesis.incident_id == incident_id
+        )
     )
     hyp = result.scalar_one_or_none()
     if not hyp:
@@ -607,7 +757,9 @@ async def delete_scheduled_collection(
     _: User = Depends(get_current_user),
 ) -> dict:
     result = await db.execute(
-        delete(ScheduledCollection).where(ScheduledCollection.id == sc_id).returning(ScheduledCollection.id)
+        delete(ScheduledCollection)
+        .where(ScheduledCollection.id == sc_id)
+        .returning(ScheduledCollection.id)
     )
     if not result.scalar():
         raise HTTPException(status_code=404, detail="Scheduled collection not found")
@@ -711,20 +863,24 @@ async def run_threat_hunt_query(
         raise HTTPException(status_code=404, detail="Query not found")
 
     import pathlib
-    from app.core.config import settings as app_settings
 
-    evidence_base = pathlib.Path(app_settings.EVIDENCE_STORAGE_PATH)
-    db_path = evidence_base / safe_incident_id / "timeline" / "super_timeline.duckdb"
-    if not db_path.exists():
-        raise HTTPException(status_code=404, detail="Super timeline not available for this incident")
+    from app.services.timeline_access import published_timeline_path
+
+    db_path = await published_timeline_path(db, safe_incident_id)
 
     def _run_query(db_path: pathlib.Path, sql: str) -> list[dict]:
         import duckdb
+
         con = duckdb.connect(str(db_path), read_only=True)
         try:
-            rows = con.execute(sql).fetchall()
+            # Compatibility for saved hunts created against the legacy schema.
+            con.execute(
+                "CREATE TEMP VIEW events AS SELECT *, event_dt AS datetime FROM timeline_events"
+            )
+            con.execute("SET enable_external_access = false")
+            rows = con.execute(sql).fetchmany(1001)
             cols = [d[0] for d in con.description or []]
-            return [dict(zip(cols, row)) for row in rows[:1000]]
+            return [dict(zip(cols, row)) for row in rows]
         finally:
             con.close()
 
@@ -737,7 +893,13 @@ async def run_threat_hunt_query(
 
     try:
         rows = await asyncio.to_thread(_run_query, db_path, thq.query)
-        return {"query_id": thq_id, "incident_id": incident_id, "row_count": len(rows), "rows": rows}
+        return {
+            "query_id": thq_id,
+            "incident_id": incident_id,
+            "row_count": min(len(rows), 1000),
+            "rows": rows[:1000],
+            "truncated": len(rows) > 1000,
+        }
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Query failed: {exc}") from exc
 
@@ -776,6 +938,7 @@ async def create_legal_hold(
     expires_at = None
     if payload.retention_days > 0:
         from datetime import timedelta
+
         expires_at = now + timedelta(days=payload.retention_days)
     hold = LegalHold(
         id=f"LH-{uuid4().hex[:12].upper()}",
@@ -856,10 +1019,12 @@ async def correlate_timelines(
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
     _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Merge super timeline events from multiple incidents for cross-incident correlation."""
     import pathlib
-    from app.core.config import settings as app_settings
+
+    from app.services.timeline_access import normalize_timeline_row, published_timeline_path
 
     ids = [i.strip() for i in incident_ids.split(",") if i.strip()]
     if not ids or len(ids) > 10:
@@ -873,14 +1038,17 @@ async def correlate_timelines(
                 detail=f"Invalid incident_id '{iid[:32]}': must be alphanumeric/hyphen/underscore only",
             )
 
-    evidence_base = pathlib.Path(app_settings.EVIDENCE_STORAGE_PATH)
     available: list[str] = []
     db_paths: list[pathlib.Path] = []
     for iid in ids:
-        p = evidence_base / iid / "timeline" / "super_timeline.duckdb"
-        if p.exists():
-            available.append(iid)
-            db_paths.append(p)
+        try:
+            p = await published_timeline_path(db, iid)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                continue
+            raise
+        available.append(iid)
+        db_paths.append(p)
 
     if not db_paths:
         raise HTTPException(
@@ -895,6 +1063,7 @@ async def correlate_timelines(
         d_to: str | None,
     ) -> list[dict]:
         import duckdb
+
         con = duckdb.connect()
         try:
             selects: list[str] = []
@@ -904,7 +1073,9 @@ async def correlate_timelines(
                 escaped_path = str(p).replace("'", "''")
                 con.execute(f"ATTACH '{escaped_path}' AS {alias} (READ_ONLY)")
                 # avail[idx] already validated by _SAFE_ID_RE (no quotes possible)
-                selects.append(f"SELECT *, '{avail[idx]}' AS corr_incident_id FROM {alias}.events")
+                selects.append(
+                    f"SELECT *, '{avail[idx]}' AS corr_incident_id FROM {alias}.timeline_events"
+                )
             union_sql = " UNION ALL ".join(selects)
 
             # Build WHERE clause using DuckDB positional parameters — no string interpolation.
@@ -915,29 +1086,37 @@ async def correlate_timelines(
             where: list[str] = []
             params: list[Any] = []
             if search:
-                where.append("(CAST(message AS VARCHAR) ILIKE ? OR CAST(source AS VARCHAR) ILIKE ?)")
+                where.append(
+                    "(CAST(message AS VARCHAR) ILIKE ? OR CAST(source AS VARCHAR) ILIKE ?)"
+                )
                 params.extend([f"%{search}%", f"%{search}%"])
             if d_from:
-                where.append("datetime >= TRY_CAST(? AS TIMESTAMPTZ)")
+                where.append("event_dt >= TRY_CAST(? AS TIMESTAMPTZ)")
                 params.append(d_from)
             if d_to:
-                where.append("datetime <= TRY_CAST(? AS TIMESTAMPTZ)")
+                where.append("event_dt <= TRY_CAST(? AS TIMESTAMPTZ)")
                 params.append(d_to)
 
             sql = f"SELECT * FROM ({union_sql}) t"
             if where:
                 sql += " WHERE " + " AND ".join(where)
-            sql += " ORDER BY datetime NULLS LAST LIMIT 500"
+            sql += " ORDER BY event_dt NULLS LAST LIMIT 501"
 
             rows = con.execute(sql, params).fetchall()
             cols = [d[0] for d in con.description or []]
-            return [dict(zip(cols, row)) for row in rows]
+            return [normalize_timeline_row(dict(zip(cols, row))) for row in rows]
         finally:
             con.close()
 
     try:
         rows = await asyncio.to_thread(_correlate, db_paths, available, q, date_from, date_to)
-        return {"incident_ids": available, "row_count": len(rows), "rows": rows}
+        return {
+            "incident_ids": available,
+            "row_count": min(len(rows), 500),
+            "rows": rows[:500],
+            "truncated": len(rows) > 500,
+            "unavailable_incident_ids": [iid for iid in ids if iid not in available],
+        }
     except Exception as exc:
         logger.warning("Correlation query failed: %s", exc)
         raise HTTPException(status_code=500, detail=f"Correlation failed: {exc}") from exc
@@ -990,28 +1169,28 @@ class SIEMExportRequest(BaseModel):
 async def siem_export(
     payload: SIEMExportRequest,
     _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     """Push super timeline events to an external SIEM (Splunk HEC, Elastic, Timesketch)."""
     safe_incident_id = _validate_safe_id(payload.incident_id, "incident_id")
 
     import pathlib
-    from app.core.config import settings as app_settings
 
-    evidence_base = pathlib.Path(app_settings.EVIDENCE_STORAGE_PATH)
-    db_path = evidence_base / safe_incident_id / "timeline" / "super_timeline.duckdb"
-    if not db_path.exists():
-        raise HTTPException(status_code=404, detail="Super timeline not available")
+    from app.services.timeline_access import normalize_timeline_row, published_timeline_path
+
+    db_path = await published_timeline_path(db, safe_incident_id)
 
     def _fetch(path: pathlib.Path, limit: int) -> list[dict]:
         import duckdb
+
         con = duckdb.connect(str(path), read_only=True)
         try:
             # limit is already validated by Field(ge=1, le=100_000) — safe to embed
             rows = con.execute(
-                f"SELECT * FROM events ORDER BY datetime NULLS LAST LIMIT {int(limit)}"
+                f"SELECT * FROM timeline_events ORDER BY event_dt NULLS LAST LIMIT {int(limit)}"
             ).fetchall()
             cols = [d[0] for d in con.description or []]
-            return [dict(zip(cols, row)) for row in rows]
+            return [normalize_timeline_row(dict(zip(cols, row))) for row in rows]
         finally:
             con.close()
 
@@ -1033,18 +1212,52 @@ async def _push_splunk(payload: SIEMExportRequest, events: list[dict]) -> dict:
         raise HTTPException(status_code=422, detail="splunk_hec_url and splunk_hec_token required")
     try:
         import httpx
-        batch = "\n".join(
-            json.dumps({"time": str(e.get("datetime", "")), "event": {k: str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v for k, v in e.items()}})
-            for e in events
-        )
+
+        batch = "\n".join(json.dumps(_splunk_event(event), default=str) for event in events)
         headers = {"Authorization": f"Splunk {payload.splunk_hec_token}"}
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(payload.splunk_hec_url, content=batch, headers=headers)
+        resp = await _post_siem(payload.splunk_hec_url, content=batch, headers=headers)
         if resp.status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"Splunk HEC returned {resp.status_code}: {resp.text[:200]}")
+            raise HTTPException(
+                status_code=502, detail=f"Splunk HEC returned {resp.status_code}: {resp.text[:200]}"
+            )
+        if _siem_response_json(resp).get("code") != 0:
+            raise HTTPException(502, "Splunk HEC did not acknowledge the events")
         return {"target": "splunk", "sent": len(events), "http_status": resp.status_code}
     except ImportError:
         raise HTTPException(status_code=503, detail="httpx not installed")
+
+
+def _splunk_event(event: dict) -> dict:
+    from app.services.timeline_access import normalize_timeline_row
+
+    normalized = normalize_timeline_row(event)
+    envelope = {"event": normalized, "host": normalized.get("host") or "UNKNOWN"}
+    if normalized["datetime"]:
+        envelope["time"] = datetime.fromisoformat(normalized["datetime"]).timestamp()
+    return envelope
+
+
+async def _post_siem(url: str, **kwargs):
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            return await client.post(url, **kwargs)
+    except httpx.RequestError as exc:
+        raise HTTPException(
+            502,
+            "SIEM destination could not be reached; delivery is unconfirmed. Check destination logs before retrying.",
+        ) from exc
+
+
+def _siem_response_json(response) -> dict:
+    try:
+        result = response.json()
+    except ValueError as exc:
+        raise HTTPException(502, "SIEM destination returned an invalid acknowledgement") from exc
+    if not isinstance(result, dict):
+        raise HTTPException(502, "SIEM destination returned an invalid acknowledgement")
+    return result
 
 
 async def _push_elastic(payload: SIEMExportRequest, events: list[dict]) -> dict:
@@ -1052,41 +1265,70 @@ async def _push_elastic(payload: SIEMExportRequest, events: list[dict]) -> dict:
         raise HTTPException(status_code=422, detail="elastic_url and elastic_index required")
     try:
         import httpx
+
         lines: list[str] = []
         for ev in events:
             lines.append(json.dumps({"index": {"_index": payload.elastic_index}}))
-            safe = {k: (str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v) for k, v in ev.items()}
-            lines.append(json.dumps(safe))
+            from app.services.timeline_access import normalize_timeline_row
+
+            safe = normalize_timeline_row(ev)
+            safe["@timestamp"] = safe["datetime"]
+            lines.append(json.dumps(safe, default=str))
         body = "\n".join(lines) + "\n"
         headers: dict[str, str] = {"Content-Type": "application/x-ndjson"}
         if payload.elastic_api_key:
             headers["Authorization"] = f"ApiKey {payload.elastic_api_key}"
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(f"{payload.elastic_url.rstrip('/')}/_bulk", content=body, headers=headers)
+        resp = await _post_siem(
+            f"{payload.elastic_url.rstrip('/')}/_bulk", content=body, headers=headers
+        )
         if resp.status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"Elastic returned {resp.status_code}: {resp.text[:200]}")
-        result = resp.json()
-        return {"target": "elastic", "sent": len(events), "errors": result.get("errors", False)}
+            raise HTTPException(
+                status_code=502, detail=f"Elastic returned {resp.status_code}: {resp.text[:200]}"
+            )
+        result = _siem_response_json(resp)
+        items = result.get("items", [])
+        if not isinstance(items, list) or len(items) != len(events):
+            raise HTTPException(502, "Elastic returned an incomplete bulk acknowledgement")
+        statuses = [
+            item.get("index", {}).get("status")
+            for item in items
+            if isinstance(item, dict) and isinstance(item.get("index"), dict)
+        ]
+        if len(statuses) != len(events) or any(type(status) is not int for status in statuses):
+            raise HTTPException(502, "Elastic returned an invalid bulk acknowledgement")
+        failed = sum(1 for status in statuses if not 200 <= status < 300)
+        return {
+            "target": "elastic",
+            "sent": len(events) - failed,
+            "failed": failed,
+            "errors": failed > 0,
+        }
     except ImportError:
         raise HTTPException(status_code=503, detail="httpx not installed")
 
 
 async def _push_timesketch(payload: SIEMExportRequest, events: list[dict]) -> dict:
-    if not payload.timesketch_url or not payload.timesketch_token or not payload.timesketch_sketch_id:
+    if (
+        not payload.timesketch_url
+        or not payload.timesketch_token
+        or not payload.timesketch_sketch_id
+    ):
         raise HTTPException(
             status_code=422,
             detail="timesketch_url, timesketch_token, and timesketch_sketch_id required",
         )
     try:
         import httpx
+
         url = f"{payload.timesketch_url.rstrip('/')}/api/v1/sketches/{payload.timesketch_sketch_id}/import"
         headers = {"Authorization": f"Bearer {payload.timesketch_token}"}
         jsonl = "\n".join(json.dumps(e, default=str) for e in events)
         files = {"file": ("timeline.jsonl", jsonl.encode(), "application/jsonlines")}
-        async with httpx.AsyncClient(timeout=120.0) as client:
-            resp = await client.post(url, headers=headers, files=files)
+        resp = await _post_siem(url, headers=headers, files=files)
         if resp.status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"Timesketch returned {resp.status_code}: {resp.text[:200]}")
+            raise HTTPException(
+                status_code=502, detail=f"Timesketch returned {resp.status_code}: {resp.text[:200]}"
+            )
         return {"target": "timesketch", "sent": len(events), "http_status": resp.status_code}
     except ImportError:
         raise HTTPException(status_code=503, detail="httpx not installed")

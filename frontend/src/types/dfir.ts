@@ -24,8 +24,14 @@ export type CollectorStatus = "ONLINE" | "OFFLINE" | "BUSY";
 
 export interface Incident {
   id: string;
+  title?: string | null;
+  description?: string | null;
   type: IncidentType;
   status: IncidentStatus;
+  severity?: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFORMATIONAL";
+  priority?: "P0" | "P1" | "P2" | "P3";
+  assignee?: string | null;
+  tags?: string[];
   templateId?: string | null;
   targetEndpoints: string[];
   operator: string;

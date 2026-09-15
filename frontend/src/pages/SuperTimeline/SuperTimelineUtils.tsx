@@ -15,7 +15,9 @@ export function getSourceColor(sourceShort: string): string {
 
 export function formatTs(ts: string | null): string {
     if (!ts) return "—";
-    return new Date(ts).toLocaleString();
+    const normalized = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(ts) ? ts : `${ts.replace(" ", "T")}Z`;
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? "—" : `${date.toISOString().replace("T", " ").replace("Z", "")} UTC`;
 }
 
 export function truncate(val: unknown, max = 120): string {
@@ -93,6 +95,7 @@ export function parseDSLQuery(input: string): ParsedDSL {
 }
 
 export function hashEvent(event: Record<string, unknown>): string {
+    if (event.event_uid || event.event_id_unique) return String(event.event_uid ?? event.event_id_unique);
     const str = `${String(event.datetime)}|${String(event.host ?? event.computer)}|${String(event.message ?? event.description)}`;
     let h = 0;
     for (const c of str) h = (Math.imul(31, h) + c.charCodeAt(0)) | 0;

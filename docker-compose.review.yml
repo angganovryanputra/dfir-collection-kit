@@ -1,0 +1,27 @@
+# Isolated acceptance stack: use with -p dfir-acceptance and docker-compose.yml.
+# All persistent volumes are scoped to that project; no production containers are replaced.
+services:
+  db:
+    container_name: !reset null
+    ports: !reset []
+  redis:
+    container_name: !reset null
+    ports: !reset []
+  volume_init:
+    container_name: !reset null
+  backend:
+    container_name: !reset null
+    environment:
+      SEED_DEMO_DATA: "true"
+      DFIR_DEFAULT_ADMIN_PASSWORD: acceptance-only-password
+      ALLOWED_ORIGINS: https://localhost:18443
+  celery_worker:
+    container_name: !reset null
+  celery_beat:
+    container_name: !reset null
+  frontend:
+    container_name: !reset null
+  nginx:
+    container_name: !reset null
+    ports: !override
+      - "127.0.0.1:18443:443"

@@ -7,13 +7,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.analytics import AttackChain, IOCIndicator, IOCMatch, YaraMatch
 
-
 # ── Attack Chain ──────────────────────────────────────────────────────────────
 
 
-async def list_attack_chains(
-    db: AsyncSession, incident_id: str
-) -> list[AttackChain]:
+async def list_attack_chains(db: AsyncSession, incident_id: str) -> list[AttackChain]:
     result = await db.execute(
         select(AttackChain)
         .where(AttackChain.incident_id == incident_id)
@@ -68,9 +65,7 @@ async def list_ioc_indicators(
 async def delete_ioc_indicator(db: AsyncSession, indicator_id: str) -> bool:
     from sqlalchemy import delete
 
-    result = await db.execute(
-        delete(IOCIndicator).where(IOCIndicator.id == indicator_id)
-    )
+    result = await db.execute(delete(IOCIndicator).where(IOCIndicator.id == indicator_id))
     await db.flush()
     return result.rowcount > 0
 
@@ -86,8 +81,8 @@ async def list_ioc_matches(
     offset: int = 0,
 ) -> tuple[list[IOCMatch], int]:
     stmt = select(IOCMatch).where(IOCMatch.incident_id == incident_id)
-    count_stmt = select(func.count()).select_from(IOCMatch).where(
-        IOCMatch.incident_id == incident_id
+    count_stmt = (
+        select(func.count()).select_from(IOCMatch).where(IOCMatch.incident_id == incident_id)
     )
     if ioc_type:
         stmt = stmt.where(IOCMatch.ioc_type == ioc_type.lower())
@@ -114,8 +109,8 @@ async def list_yara_matches(
         .limit(limit)
         .offset(offset)
     )
-    count_stmt = select(func.count()).select_from(YaraMatch).where(
-        YaraMatch.incident_id == incident_id
+    count_stmt = (
+        select(func.count()).select_from(YaraMatch).where(YaraMatch.incident_id == incident_id)
     )
     result = await db.execute(stmt)
     count_result = await db.execute(count_stmt)

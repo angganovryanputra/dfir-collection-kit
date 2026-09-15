@@ -12,37 +12,26 @@ import {
 import { BarChart2 } from "lucide-react";
 
 interface SuperTimelineChartProps {
-    data: Record<string, unknown>[];
+    data: { start: string; end: string; count: number }[];
     onSelectWindow: (from: string, to: string) => void;
 }
 
 export const SuperTimelineChart = React.memo(({ data, onSelectWindow }: SuperTimelineChartProps) => {
     const chartData = useMemo(() => {
-        const hc = new Map<string, number>();
-        for (const row of data) {
-            const dt = String(row["datetime"] ?? row["timestamp"] ?? "");
-            if (dt.length >= 13) {
-                const hour = dt.slice(0, 13); // YYYY-MM-DD HH
-                hc.set(hour, (hc.get(hour) ?? 0) + 1);
-            }
-        }
-        return Array.from(hc.entries())
-            .map(([hour, count]) => ({
-                hour,
-                displayHour: hour.split("T")[1] || hour.split(" ")[1] || hour,
-                fullTime: hour.replace("T", " "),
-                count,
-            }))
-            .sort((a, b) => a.hour.localeCompare(b.hour));
+        return data.map(bucket => ({
+            ...bucket,
+            displayHour: bucket.start.slice(5, 16).replace("T", " "),
+            fullTime: bucket.start,
+        }));
     }, [data]);
 
-    if (chartData.length < 2) return null;
+    if (chartData.length === 0) return null;
 
     return (
         <div className="px-1 pb-1 shrink-0 bg-secondary/10 border-b border-border/40">
             <div className="flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground uppercase tracking-wider p-2">
                 <BarChart2 className="w-3 h-3 text-primary" />
-                EVENT DENSITY (PER HOUR)
+                EVENT DENSITY (ALL MATCHING EVENTS · UTC)
                 <span className="ml-auto text-[8px] opacity-50">CLICK BAR TO ZOOM</span>
             </div>
             <div className="h-[80px] w-full">
@@ -78,10 +67,10 @@ export const SuperTimelineChart = React.memo(({ data, onSelectWindow }: SuperTim
                             fill="hsl(var(--primary))" 
                             radius={[2, 2, 0, 0]}
                             onClick={(data) => {
-                                if (data && data.hour) {
+                                if (data && data.start) {
                                     onSelectWindow(
-                                        data.hour.replace("T", " ") + ":00:00",
-                                        data.hour.replace("T", " ") + ":59:59"
+                                        data.start,
+                                        data.end
                                     );
                                 }
                             }}

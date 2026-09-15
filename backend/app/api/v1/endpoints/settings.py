@@ -9,12 +9,11 @@ logger = logging.getLogger(__name__)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
+from app.crud.audit_log import prune_old_entries
 from app.crud.settings import get_settings, upsert_settings
 from app.models.user import User
-from app.services.audit_log_service import safe_record_event
 from app.schemas.settings import SystemSettingsApiOut, SystemSettingsCreate, SystemSettingsOut
 from app.services.audit_log_service import safe_record_event
-from app.crud.audit_log import prune_old_entries
 from app.services.system_settings_service import get_runtime_settings, set_runtime_settings
 
 router = APIRouter()
@@ -78,12 +77,26 @@ def _check_ez_tools(path: str | None) -> dict:
     """Check EZ Tools base directory AND each individual parser DLL."""
     ts = _now_utc()
     if not path:
-        return {"ok": False, "status": "not_configured", "path": None, "last_validated_at": ts,
-                "found_count": 0, "total_count": len(_EZ_DLLS), "dlls": {}}
+        return {
+            "ok": False,
+            "status": "not_configured",
+            "path": None,
+            "last_validated_at": ts,
+            "found_count": 0,
+            "total_count": len(_EZ_DLLS),
+            "dlls": {},
+        }
     p = Path(path)
     if not p.is_dir():
-        return {"ok": False, "status": "not_found", "path": path, "last_validated_at": ts,
-                "found_count": 0, "total_count": len(_EZ_DLLS), "dlls": {}}
+        return {
+            "ok": False,
+            "status": "not_found",
+            "path": path,
+            "last_validated_at": ts,
+            "found_count": 0,
+            "total_count": len(_EZ_DLLS),
+            "dlls": {},
+        }
     dlls: dict[str, dict] = {}
     for name, rel in _EZ_DLLS.items():
         dll_path = p / rel
@@ -122,16 +135,14 @@ def _validate_yara_rules_dir(yara_dir: Path) -> None:
         try:
             yara.compile(str(rule_path))
         except yara.SyntaxError as exc:
-            raise ValueError(
-                f"YARA rule compile error in {rule_path.name}: {exc}"
-            ) from exc
+            raise ValueError(f"YARA rule compile error in {rule_path.name}: {exc}") from exc
         except Exception as exc:
-            raise ValueError(
-                f"YARA rule validation failed for {rule_path.name}: {exc}"
-            ) from exc
+            raise ValueError(f"YARA rule validation failed for {rule_path.name}: {exc}") from exc
 
 
-@router.get("/", response_model=SystemSettingsApiOut | None, dependencies=[Depends(require_roles("admin"))])
+@router.get(
+    "/", response_model=SystemSettingsApiOut | None, dependencies=[Depends(require_roles("admin"))]
+)
 async def get_system_settings(db: AsyncSession = Depends(get_db)) -> SystemSettingsApiOut | None:
     settings = await get_settings(db)
     if settings:
@@ -140,7 +151,9 @@ async def get_system_settings(db: AsyncSession = Depends(get_db)) -> SystemSetti
     return SystemSettingsApiOut(**runtime.__dict__)
 
 
-@router.put("/", response_model=SystemSettingsApiOut, dependencies=[Depends(require_roles("admin"))])
+@router.put(
+    "/", response_model=SystemSettingsApiOut, dependencies=[Depends(require_roles("admin"))]
+)
 async def put_system_settings(
     payload: SystemSettingsCreate,
     db: AsyncSession = Depends(get_db),
@@ -148,9 +161,13 @@ async def put_system_settings(
 ) -> SystemSettingsApiOut:
     storage_path = Path(payload.evidence_storage_path.strip())
     if not storage_path.is_absolute():
-        raise HTTPException(status_code=400, detail="evidence_storage_path must be an absolute path")
+        raise HTTPException(
+            status_code=400, detail="evidence_storage_path must be an absolute path"
+        )
     if storage_path.exists() and not os.access(storage_path, os.W_OK):
-        raise HTTPException(status_code=400, detail="evidence_storage_path exists but is not writable")
+        raise HTTPException(
+            status_code=400, detail="evidence_storage_path exists but is not writable"
+        )
     # Numeric range checks for fields not covered by schema-level Field constraints.
     if payload.session_timeout_min <= 0:
         raise HTTPException(status_code=400, detail="session_timeout_min must be greater than 0")
@@ -165,7 +182,9 @@ async def put_system_settings(
     # timesketch_url is validated at the schema level; this guard makes the HTTP
     # error message explicit for API consumers that bypass schema validation.
     if payload.timesketch_url and not payload.timesketch_url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=400, detail="timesketch_url must start with http:// or https://")
+        raise HTTPException(
+            status_code=400, detail="timesketch_url must start with http:// or https://"
+        )
 
     # YARA rule pre-validation: attempt to compile rules before accepting the path.
     # This prevents the pipeline from failing later with cryptic YARA parse errors.
@@ -239,7 +258,8 @@ async def tools_health_endpoint(db: AsyncSession = Depends(get_db)) -> dict:
         if ez_dir.is_dir():
             ez_found = sum(1 for rel in _EZ_DLLS.values() if (ez_dir / rel).exists())
             ez_status = (
-                "ok" if ez_found == len(_EZ_DLLS)
+                "ok"
+                if ez_found == len(_EZ_DLLS)
                 else ("partial" if ez_found > 0 else "no_dlls_found")
             )
         else:
@@ -298,7 +318,10 @@ async def verify_single_tool_endpoint(
 ) -> dict:
     """Verify a single forensics tool by key."""
     if tool_key not in _TOOL_VERIFY_MAP:
-        raise HTTPException(status_code=400, detail=f"Unknown tool key '{tool_key}'. Valid keys: {sorted(_TOOL_VERIFY_MAP)}")
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown tool key '{tool_key}'. Valid keys: {sorted(_TOOL_VERIFY_MAP)}",
+        )
     settings = await get_runtime_settings(db)
     checkers = {
         "ez_tools": lambda: _check_ez_tools(settings.ez_tools_path),
@@ -331,13 +354,17 @@ async def system_readiness(db: AsyncSession = Depends(get_db)) -> dict:
     every dashboard load. Returns an 'overall' status and per-item checklist.
     """
     from app.core.config import settings as config_settings
-    from app.crud.device import list_devices
     from app.crud.collector import list_collectors
+    from app.crud.device import list_devices
 
     rt = await get_runtime_settings(db)
 
     storage_path = rt.evidence_storage_path
-    storage_ok = bool(storage_path) and Path(storage_path).is_dir() and os.access(Path(storage_path), os.W_OK)
+    storage_ok = (
+        bool(storage_path)
+        and Path(storage_path).is_dir()
+        and os.access(Path(storage_path), os.W_OK)
+    )
 
     agent_secret_ok = bool(getattr(config_settings, "AGENT_SHARED_SECRET", ""))
 
@@ -353,7 +380,9 @@ async def system_readiness(db: AsyncSession = Depends(get_db)) -> dict:
     collectors = await list_collectors(db)
     collectors_ok = len(collectors) > 0
 
-    def _item(id_: str, label: str, description: str, ok: bool, action: str, action_path: str | None) -> dict:
+    def _item(
+        id_: str, label: str, description: str, ok: bool, action: str, action_path: str | None
+    ) -> dict:
         return {
             "id": id_,
             "label": label,
@@ -365,35 +394,40 @@ async def system_readiness(db: AsyncSession = Depends(get_db)) -> dict:
 
     checklist = [
         _item(
-            "storage", "Evidence Storage",
+            "storage",
+            "Evidence Storage",
             f"Vault path is writable ({storage_path or 'not set'})",
             storage_ok,
             "Verify evidence_storage_path in Settings → System Config",
             "/admin/settings",
         ),
         _item(
-            "agent_secret", "Agent Authentication",
+            "agent_secret",
+            "Agent Authentication",
             "AGENT_SHARED_SECRET is configured — agents can authenticate",
             agent_secret_ok,
             "Set AGENT_SHARED_SECRET env var and restart the backend",
             None,
         ),
         _item(
-            "tools", "Forensics Tools",
+            "tools",
+            "Forensics Tools",
             "At least one parser (EZ Tools, Hayabusa, or Chainsaw) is installed",
             tools_any_ok,
             "Configure tool paths in Settings → System Config → FORENSICS PIPELINE",
             "/admin/settings",
         ),
         _item(
-            "collectors", "Collector Nodes",
+            "collectors",
+            "Collector Nodes",
             "At least one collector node is registered",
             collectors_ok,
             "Add a collector in the COLLECTORS page",
             "/collectors",
         ),
         _item(
-            "agents", "Enrolled Agents",
+            "agents",
+            "Enrolled Agents",
             "At least one DFIR agent has registered from a target host",
             agents_enrolled,
             "Deploy the agent binary on target hosts (see DEVICES page)",

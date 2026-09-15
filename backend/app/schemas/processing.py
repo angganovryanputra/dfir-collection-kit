@@ -14,6 +14,7 @@ class ProcessingJobOut(BaseModel):
     started_at: datetime | None
     completed_at: datetime | None
     error_message: str | None
+    stage_results: dict | None = None
     created_at: datetime
 
     class Config:

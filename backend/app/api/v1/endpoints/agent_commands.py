@@ -17,6 +17,7 @@ Agent endpoints:
   POST /agent-commands/result/{command_id}    → submit output + exit_code
   POST /agent-commands/run/{agent_id}         → synchronous REST alternative
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -27,7 +28,14 @@ from datetime import datetime, timezone
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query as FastAPIQuery, WebSocket, WebSocketDisconnect
+from fastapi import (
+    APIRouter,
+    Depends,
+    Header,
+    HTTPException,
+)
+from fastapi import Query as FastAPIQuery
+from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.agents import verify_agent_secret
@@ -35,7 +43,7 @@ from app.core.config import settings
 from app.core.deps import get_current_user, get_db
 from app.crud.device import get_device
 from app.models.user import User
-from app.services.audit_log_service import safe_record_event
+from app.services.audit_log_service import record_event
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -52,6 +60,39 @@ _pending_lock = asyncio.Lock()
 _MAX_TIMEOUT_SEC = 300
 _MAX_COMMAND_CHARS = 4096
 _MAX_OUTPUT_CHARS = 1_000_000
+
+
+def _validate_command(payload: object) -> tuple[str, int]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("cmd"), str):
+        raise ValueError("cmd must be a string")
+    cmd = payload["cmd"].strip()
+    if not cmd or len(cmd) > _MAX_COMMAND_CHARS:
+        raise ValueError("cmd must contain between 1 and 4096 characters")
+    timeout = payload.get("timeout_sec", 30)
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, int)
+        or not 1 <= timeout <= _MAX_TIMEOUT_SEC
+    ):
+        raise ValueError("timeout_sec must be an integer between 1 and 300")
+    return cmd, timeout
+
+
+async def _authorize_console_session(token: str) -> str:
+    from jwt import InvalidTokenError
+
+    from app.core.security import decode_access_token, is_token_revoked
+    from app.crud.user import get_user_by_username
+    from app.db.session import AsyncSessionLocal
+
+    payload = decode_access_token(token)
+    if not payload.get("sub") or (payload.get("jti") and is_token_revoked(payload["jti"])):
+        raise InvalidTokenError("Invalid or revoked session")
+    async with AsyncSessionLocal() as db:
+        user = await get_user_by_username(db, str(payload["sub"]))
+        if not user or user.status.lower() != "active" or user.role not in ("admin", "operator"):
+            raise InvalidTokenError("Session no longer authorized")
+        return user.username
 
 
 def Query(default: object = ..., **kwargs: object):
@@ -71,14 +112,13 @@ def _is_allowed_websocket_origin(websocket: WebSocket) -> bool:
     except ValueError:
         return False
     trusted = {
-        value.strip().rstrip("/")
-        for value in settings.ALLOWED_ORIGINS.split(",")
-        if value.strip()
+        value.strip().rstrip("/") for value in settings.ALLOWED_ORIGINS.split(",") if value.strip()
     }
     return "*" not in trusted and origin.rstrip("/") in trusted
 
 
 # ── Analyst WebSocket endpoint ────────────────────────────────────────────────
+
 
 @router.websocket("/ws/{agent_id}")
 async def analyst_ws(
@@ -87,7 +127,6 @@ async def analyst_ws(
     token: str = Query(..., description="Bearer JWT — sent as ?token=... (WS can't set headers)"),
 ) -> None:
     """Stream live command output to an analyst."""
-    from app.core.security import decode_access_token, is_token_revoked
     from jwt import InvalidTokenError
 
     if not _is_allowed_websocket_origin(websocket):
@@ -101,20 +140,12 @@ async def analyst_ws(
         return
 
     try:
-        payload = decode_access_token(token)
-        jti = payload.get("jti")
-        if jti and is_token_revoked(jti):
-            await websocket.close(code=4001, reason="Token revoked")
-            return
-        if payload.get("role", "viewer") not in ("admin", "operator"):
-            await websocket.close(code=4003, reason="Insufficient permissions")
-            return
+        analyst_name = await _authorize_console_session(token)
     except InvalidTokenError:
         await websocket.close(code=4001, reason="Invalid token")
         return
 
     await websocket.accept()
-    analyst_name = str(payload.get("sub", "unknown"))
     logger.info("Analyst WS connected for agent %s", agent_id)
 
     try:
@@ -131,37 +162,43 @@ async def analyst_ws(
                 await websocket.send_text(json.dumps({"type": "error", "message": "Invalid JSON"}))
                 continue
 
-            cmd = str(msg.get("cmd", "")).strip()
             try:
-                timeout_sec = min(max(1, int(msg.get("timeout_sec", 30))), _MAX_TIMEOUT_SEC)
-            except (TypeError, ValueError):
-                await websocket.send_text(json.dumps({"type": "error", "message": "timeout_sec must be an integer"}))
+                cmd, timeout_sec = _validate_command(msg)
+            except ValueError as exc:
+                await websocket.send_text(json.dumps({"type": "error", "message": str(exc)}))
                 continue
+
+            # Re-check session state for every command. Long-lived WebSockets
+            # must honor expiry, revocation, and role changes after connect.
+            try:
+                analyst_name = await _authorize_console_session(token)
+            except InvalidTokenError:
+                await websocket.close(code=4001, reason="Session expired")
+                return
             if not cmd:
-                await websocket.send_text(json.dumps({"type": "error", "message": "cmd is required"}))
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "cmd is required"})
+                )
                 continue
             if len(cmd) > _MAX_COMMAND_CHARS:
-                await websocket.send_text(json.dumps({"type": "error", "message": "cmd exceeds 4096 characters"}))
+                await websocket.send_text(
+                    json.dumps({"type": "error", "message": "cmd exceeds 4096 characters"})
+                )
                 continue
 
             command_id = f"CMD-{uuid4().hex[:12].upper()}"
             result_queue: asyncio.Queue = asyncio.Queue()
 
-            async with _pending_lock:
-                _pending.setdefault(agent_id, []).append({
-                    "command_id": command_id,
-                    "cmd": cmd,
-                    "timeout_sec": timeout_sec,
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                    "expires_at": time.time() + timeout_sec + 30,
-                })
-                _ws_queues[command_id] = result_queue
-                _command_agents[command_id] = agent_id
-
             try:
                 from app.db.session import AsyncSessionLocal
+
                 async with AsyncSessionLocal() as audit_db:
-                    await safe_record_event(
+                    if not await get_device(audit_db, agent_id):
+                        await websocket.send_text(
+                            json.dumps({"type": "error", "message": "Agent not found"})
+                        )
+                        continue
+                    await record_event(
                         audit_db,
                         event_type="agent.command.submitted",
                         actor_type="user",
@@ -172,28 +209,61 @@ async def analyst_ws(
                         target_id=agent_id,
                         status="queued",
                         message=cmd[:500],
+                        metadata={"command_id": command_id},
                     )
+                    await audit_db.commit()
             except Exception as exc:
                 logger.warning("Audit log for WS command failed: %s", exc)
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "error",
+                            "message": "Unable to record command audit; command was not queued",
+                        }
+                    )
+                )
+                continue
 
-            await websocket.send_text(json.dumps({
-                "type": "queued",
-                "command_id": command_id,
-                "message": f"Queued — waiting for agent {agent_id}",
-            }))
+            async with _pending_lock:
+                _pending.setdefault(agent_id, []).append(
+                    {
+                        "command_id": command_id,
+                        "cmd": cmd,
+                        "timeout_sec": timeout_sec,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                        "expires_at": time.time() + timeout_sec + 30,
+                    }
+                )
+                _ws_queues[command_id] = result_queue
+                _command_agents[command_id] = agent_id
 
             deadline = time.monotonic() + timeout_sec + 30
             try:
+                await websocket.send_text(
+                    json.dumps(
+                        {
+                            "type": "queued",
+                            "command_id": command_id,
+                            "message": f"Queued — waiting for agent {agent_id}",
+                        }
+                    )
+                )
                 while True:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
-                        await websocket.send_text(json.dumps({
-                            "type": "error",
-                            "message": "Timed out waiting for agent response",
-                        }))
+                        await websocket.send_text(
+                            json.dumps(
+                                {
+                                    "type": "error",
+                                    "message": "Timed out waiting for agent response",
+                                }
+                            )
+                        )
                         break
                     try:
-                        chunk = await asyncio.wait_for(result_queue.get(), timeout=min(remaining, 5.0))
+                        chunk = await asyncio.wait_for(
+                            result_queue.get(), timeout=min(remaining, 5.0)
+                        )
                     except asyncio.TimeoutError:
                         await websocket.send_text(json.dumps({"type": "ping"}))
                         continue
@@ -203,7 +273,9 @@ async def analyst_ws(
             finally:
                 async with _pending_lock:
                     pending = _pending.get(agent_id, [])
-                    _pending[agent_id] = [entry for entry in pending if entry["command_id"] != command_id]
+                    _pending[agent_id] = [
+                        entry for entry in pending if entry["command_id"] != command_id
+                    ]
                     if not _pending[agent_id]:
                         _pending.pop(agent_id, None)
                     _ws_queues.pop(command_id, None)
@@ -219,6 +291,7 @@ async def analyst_ws(
 
 
 # ── Agent poll endpoint ────────────────────────────────────────────────────────
+
 
 @router.get("/poll/{agent_id}")
 async def poll_for_command(
@@ -266,7 +339,9 @@ async def post_command_result(
     output = str(payload.get("output", ""))
     if len(output) > _MAX_OUTPUT_CHARS:
         raise HTTPException(status_code=413, detail="Command output exceeds 1 MB limit")
-    exit_code = int(payload.get("exit_code", 0))
+    exit_code = payload.get("exit_code", 0)
+    if isinstance(exit_code, bool) or not isinstance(exit_code, int):
+        raise HTTPException(status_code=422, detail="exit_code must be an integer")
     if output:
         await result_queue.put({"type": "output", "chunk": output})
     await result_queue.put({"type": "done", "exit_code": exit_code})
@@ -274,6 +349,7 @@ async def post_command_result(
 
 
 # ── REST alternative (for clients that can't use WebSocket) ───────────────────
+
 
 @router.post("/run/{agent_id}")
 async def run_command_sync(
@@ -286,12 +362,15 @@ async def run_command_sync(
     if current_user.role not in ("admin", "operator"):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
 
-    cmd = payload.get("cmd", "").strip()
-    timeout_sec = min(int(payload.get("timeout_sec", 30)), _MAX_TIMEOUT_SEC)
-    if not cmd:
-        raise HTTPException(status_code=422, detail="cmd is required")
+    try:
+        cmd, timeout_sec = _validate_command(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if not await get_device(db, agent_id):
+        raise HTTPException(status_code=404, detail="Agent not found")
+    command_id = f"CMD-{uuid4().hex[:12].upper()}"
 
-    await safe_record_event(
+    await record_event(
         db,
         event_type="agent.command.submitted",
         actor_type="user",
@@ -302,18 +381,22 @@ async def run_command_sync(
         target_id=agent_id,
         status="queued",
         message=cmd[:500],
+        metadata={"command_id": command_id},
     )
+    await db.commit()
 
-    command_id = f"CMD-{uuid4().hex[:12].upper()}"
     result_queue: asyncio.Queue = asyncio.Queue()
 
     async with _pending_lock:
-        _pending.setdefault(agent_id, []).append({
-            "command_id": command_id,
-            "cmd": cmd,
-            "timeout_sec": timeout_sec,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        })
+        _pending.setdefault(agent_id, []).append(
+            {
+                "command_id": command_id,
+                "cmd": cmd,
+                "timeout_sec": timeout_sec,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "expires_at": time.time() + timeout_sec + 30,
+            }
+        )
         _ws_queues[command_id] = result_queue
         _command_agents[command_id] = agent_id
 
@@ -338,6 +421,13 @@ async def run_command_sync(
                 raise HTTPException(status_code=502, detail=chunk.get("message", "Agent error"))
     finally:
         async with _pending_lock:
+            remaining_commands = [
+                entry for entry in _pending.get(agent_id, []) if entry["command_id"] != command_id
+            ]
+            if remaining_commands:
+                _pending[agent_id] = remaining_commands
+            else:
+                _pending.pop(agent_id, None)
             _ws_queues.pop(command_id, None)
             _command_agents.pop(command_id, None)
 

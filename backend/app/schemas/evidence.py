@@ -29,6 +29,9 @@ class EvidenceItemBase(BaseModel):
     status: str
     hash: str
     collected_at: str
+    job_id: str | None = None
+    relative_path: str | None = None
+    hash_algorithm: str | None = None
 
 
 class EvidenceItemCreate(EvidenceItemBase):

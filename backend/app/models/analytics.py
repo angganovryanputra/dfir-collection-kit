@@ -1,4 +1,5 @@
 """Phase 2 analytics models: AttackChain, IOCIndicator, IOCMatch, YaraMatch."""
+
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, func
@@ -42,7 +43,9 @@ class IOCIndicator(Base):
     __table_args__ = (Index("ix_ioc_type_value", "ioc_type", "value"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
-    ioc_type: Mapped[str] = mapped_column(String, index=True)  # ip | domain | sha256 | md5 | sha1 | url
+    ioc_type: Mapped[str] = mapped_column(
+        String, index=True
+    )  # ip | domain | sha256 | md5 | sha1 | url
     value: Mapped[str] = mapped_column(String, index=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str | None] = mapped_column(String, nullable=True)  # e.g. "MISP", "manual"
@@ -74,7 +77,9 @@ class IOCMatch(Base):
     event_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     event_data: Mapped[dict] = mapped_column(JSONB, default=dict)
     severity: Mapped[str] = mapped_column(String, default="high")
-    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
 
 
 class YaraMatch(Base):
@@ -95,4 +100,6 @@ class YaraMatch(Base):
     file_sha256: Mapped[str | None] = mapped_column(String, nullable=True)
     strings: Mapped[list] = mapped_column(JSONB, default=list)  # [{offset, name, data}]
     severity: Mapped[str] = mapped_column(String, default="high")
-    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    detected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

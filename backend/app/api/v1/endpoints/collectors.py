@@ -2,7 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
-from app.crud.collector import create_collector, delete_collector, get_collector, list_collectors, update_collector_status
+from app.crud.collector import (
+    create_collector,
+    delete_collector,
+    get_collector,
+    list_collectors,
+    update_collector_status,
+)
 from app.models.user import User
 from app.schemas.collector import CollectorCreate, CollectorOut, CollectorUpdate
 from app.services.audit_log_service import safe_record_event

@@ -172,7 +172,7 @@ export function EvidenceWorkspace() {
                                     </span>
                                     <span className="flex items-center gap-1 uppercase truncate max-w-[120px]">
                                         <ExternalLink className="w-2.5 h-2.5" />
-                                        {item.metadata.host || "UNKNOWN"}
+                                        {String(item.metadata.host || "UNKNOWN")}
                                     </span>
                                 </div>
                             </div>

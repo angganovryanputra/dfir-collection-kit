@@ -1,4 +1,5 @@
 """Agent binary download endpoint."""
+
 from __future__ import annotations
 
 import logging
@@ -55,8 +56,7 @@ async def download_agent_binary(
         raise HTTPException(
             status_code=503,
             detail=(
-                "Agent binary path not configured. "
-                "Set it in Admin Settings → Agent Binary Path."
+                "Agent binary path not configured. " "Set it in Admin Settings → Agent Binary Path."
             ),
         )
 

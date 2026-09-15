@@ -5,8 +5,9 @@ Revises: 20260122_template_id
 Create Date: 2026-03-03 00:00:00.000000
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 
 def _get_existing_columns(table_name: str) -> set[str]:

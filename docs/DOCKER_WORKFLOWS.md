@@ -19,6 +19,16 @@ The application is served at `https://localhost`. The API is available below
 `https://localhost/api/v1`; backend, database, and Redis are intentionally not
 published to the network.
 
+The bundled certificate is development-only. The setup script rotates it for a
+new installation; browsers will show a self-signed-certificate warning. Before
+committing, enable the repository key scan once:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/enable-git-hooks.ps1
+```
+
+For external parser setup, see [FORENSICS_TOOLS.md](FORENSICS_TOOLS.md).
+
 ## Development with live reload
 
 Use the development override, which changes no production configuration:

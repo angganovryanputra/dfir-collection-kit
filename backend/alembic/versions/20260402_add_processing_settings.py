@@ -6,6 +6,7 @@ Create Date: 2026-04-02 00:00:00.000000
 """
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20260402_processing_settings"
@@ -45,6 +46,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    for col in ["auto_process", "timesketch_token", "timesketch_url",
-                "sigma_rules_path", "hayabusa_path", "chainsaw_path", "ez_tools_path"]:
+    for col in [
+        "auto_process",
+        "timesketch_token",
+        "timesketch_url",
+        "sigma_rules_path",
+        "hayabusa_path",
+        "chainsaw_path",
+        "ez_tools_path",
+    ]:
         op.drop_column("system_settings", col)

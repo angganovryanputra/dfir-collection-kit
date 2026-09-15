@@ -1,24 +1,24 @@
 import asyncio
 import functools
-from datetime import datetime, timezone
 import logging
-from pathlib import Path
 import re
 import zipfile
+from datetime import datetime, timezone
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.system_settings_service import get_runtime_settings
 from app.core.deps import get_current_user, get_db, require_roles
+from app.core.request_throttle import enforce_expensive_operation_limit
 from app.core.security import compute_export_signature
 from app.crud.chain_of_custody import create_entry
 from app.crud.evidence import create_folder, create_item, get_item, list_folders, list_items
-from app.crud.incident import get_incident
 from app.crud.evidence_export import build_export_url
+from app.crud.incident import get_incident
 from app.models.user import User
 from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
 from app.schemas.evidence import (
@@ -30,12 +30,14 @@ from app.schemas.evidence import (
 )
 from app.schemas.evidence_export import EvidenceExportRequest, EvidenceExportResponse
 from app.services.audit_log_service import safe_record_event
+from app.services.evidence_resolver import resolve_evidence_file
+from app.services.system_settings_service import get_runtime_settings
 
 router = APIRouter()
 
 
 def _validate_identifier(value: str, label: str) -> str:
-    if len(value) > 256:
+    if len(value) > 256 or value in {".", ".."}:
         raise HTTPException(status_code=400, detail=f"Invalid {label}")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+", value):
         raise HTTPException(status_code=400, detail=f"Invalid {label}")
@@ -43,7 +45,7 @@ def _validate_identifier(value: str, label: str) -> str:
 
 
 def _select_recent_zip(root: Path) -> Path:
-    zips = sorted(root.glob("**/*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
+    zips = sorted(root.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not zips:
         raise HTTPException(status_code=404, detail="Incident export not found")
     return zips[0]
@@ -54,9 +56,7 @@ def _ensure_directory(path: Path) -> None:
 
 
 def _enforce_export_retention(export_dir: Path, limit: int) -> None:
-    exports = sorted(
-        export_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True
-    )
+    exports = sorted(export_dir.glob("*.zip"), key=lambda p: p.stat().st_mtime, reverse=True)
     for stale in exports[limit:]:
         try:
             stale.unlink()
@@ -65,12 +65,12 @@ def _enforce_export_retention(export_dir: Path, limit: int) -> None:
 
 
 def _build_export_zip(incident_id: str, storage_path: str, max_bytes: int) -> Path:
-    base_path = Path(storage_path) / incident_id
+    base_path = (Path(storage_path) / incident_id).resolve()
     if not base_path.exists():
         raise HTTPException(status_code=404, detail="Incident export not found")
-    export_dir = base_path / "exports"
+    export_dir = base_path / "exports" / "incident"
     _ensure_directory(export_dir)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
     zip_path = export_dir / f"{incident_id}-{timestamp}.zip"
 
     # Pre-check: sum uncompressed sizes before building so we fail fast
@@ -82,19 +82,27 @@ def _build_export_zip(incident_id: str, storage_path: str, max_bytes: int) -> Pa
             for file_path in base_path.rglob("*"):
                 if not file_path.is_file():
                     continue
-                if export_dir in file_path.parents:
+                relative = file_path.relative_to(base_path)
+                if (
+                    base_path / "exports" in file_path.parents
+                    or relative.parts[0].startswith(".phase")
+                    or relative.name in {".pipeline.lock", ".super-timeline.lock"}
+                    or ".building.duckdb" in relative.name
+                    or "derived-history" in relative.parts
+                    or not file_path.resolve().is_relative_to(base_path)
+                ):
                     continue
-                
+
                 f_size = file_path.stat().st_size
                 if total_uncompressed + f_size > max_bytes:
-                     raise HTTPException(
+                    raise HTTPException(
                         status_code=413,
-                        detail="Total export size too large. Request a partial export."
+                        detail="Total export size too large. Request a partial export.",
                     )
-                
-                zip_file.write(file_path, file_path.relative_to(base_path))
+
+                zip_file.write(file_path, relative)
                 total_uncompressed += f_size
-                
+
                 # Mid-build guard: abort if compressed output exceeds limit
                 if zip_path.stat().st_size > max_bytes:
                     raise HTTPException(status_code=413, detail="Export exceeds size limit")
@@ -116,25 +124,31 @@ def _build_evidence_export_zip(
     evidence_name: str,
     storage_path: str,
     max_bytes: int,
+    expected_hash: str = "",
+    relative_path: str | None = None,
+    job_id: str | None = None,
+    hash_algorithm: str | None = None,
 ) -> Path:
-    base_path = Path(storage_path) / incident_id
-    if not base_path.exists():
-        raise HTTPException(status_code=404, detail="Evidence not found")
-    export_dir = base_path / "exports"
+    base_path = (Path(storage_path) / incident_id).resolve()
+    file_path = resolve_evidence_file(
+        storage_path,
+        incident_id,
+        evidence_name,
+        expected_hash,
+        relative_path,
+        job_id,
+        hash_algorithm,
+    )
+    if file_path.stat().st_size > max_bytes:
+        raise HTTPException(413, "Evidence exceeds export size limit")
+    export_dir = (
+        base_path / "exports" / "evidence" / _validate_identifier(evidence_id, "evidence_id")
+    )
     _ensure_directory(export_dir)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
     zip_path = export_dir / f"{incident_id}-{evidence_id}-{timestamp}.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-        for file_path in base_path.rglob(evidence_name):
-            if not file_path.is_file():
-                continue
-            if export_dir in file_path.parents:
-                continue
-            rel_path = file_path.relative_to(base_path)
-            zip_file.write(file_path, rel_path)
-            break
-    if not zip_path.exists() or zip_path.stat().st_size == 0:
-        raise HTTPException(status_code=404, detail="Evidence not found")
+        zip_file.write(file_path, file_path.relative_to(base_path))
     if zip_path.stat().st_size > max_bytes:
         try:
             zip_path.unlink()
@@ -151,11 +165,26 @@ def _resolve_evidence_export(
     evidence_name: str,
     storage_path: str,
     max_bytes: int,
+    expected_hash: str = "",
+    relative_path: str | None = None,
+    job_id: str | None = None,
+    hash_algorithm: str | None = None,
 ) -> Path:
     base_path = Path(storage_path) / incident_id
     if not base_path.exists():
         raise HTTPException(status_code=404, detail="Evidence not found")
-    export_dir = base_path / "exports"
+    resolve_evidence_file(
+        storage_path,
+        incident_id,
+        evidence_name,
+        expected_hash,
+        relative_path,
+        job_id,
+        hash_algorithm,
+    )
+    export_dir = (
+        base_path / "exports" / "evidence" / _validate_identifier(evidence_id, "evidence_id")
+    )
     if export_dir.exists():
         existing = sorted(
             export_dir.glob(f"{incident_id}-{evidence_id}-*.zip"),
@@ -164,15 +193,27 @@ def _resolve_evidence_export(
         )
         if existing:
             return existing[0]
-    return _build_evidence_export_zip(incident_id, evidence_id, evidence_name, storage_path, max_bytes)
+    return _build_evidence_export_zip(
+        incident_id,
+        evidence_id,
+        evidence_name,
+        storage_path,
+        max_bytes,
+        expected_hash,
+        relative_path,
+        job_id,
+        hash_algorithm,
+    )
 
 
-def _resolve_incident_export(incident_id: str, storage_path: str, max_bytes: int) -> Path:
+def _resolve_incident_export(
+    incident_id: str, storage_path: str, max_bytes: int, refresh: bool = False
+) -> Path:
     base_path = Path(storage_path) / incident_id
     if not base_path.exists():
         raise HTTPException(status_code=404, detail="Incident export not found")
-    export_dir = base_path / "exports"
-    if export_dir.exists():
+    export_dir = base_path / "exports" / "incident"
+    if export_dir.exists() and not refresh:
         try:
             return _select_recent_zip(export_dir)
         except HTTPException:
@@ -251,8 +292,7 @@ async def get_items(
     safe_incident_id = _validate_identifier(incident_id, "incident_id") if incident_id else None
     items, total = await list_items(db, safe_incident_id, limit=limit, offset=offset)
     return EvidenceItemListOut(
-        items=[EvidenceItemOut.model_validate(item) for item in items],
-        total=total
+        items=[EvidenceItemOut.model_validate(item) for item in items], total=total
     )
 
 
@@ -289,9 +329,11 @@ async def create_item_endpoint(
 @router.post("/exports", response_model=EvidenceExportResponse)
 async def create_export_endpoint(
     payload: EvidenceExportRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_roles("operator", "admin")),
 ) -> EvidenceExportResponse:
+    enforce_expensive_operation_limit(request, "evidence-export", limit=6)
     runtime_settings = await get_runtime_settings(db)
     max_bytes = runtime_settings.max_file_size_gb * 1024 * 1024 * 1024
     export_path: Path | None = None
@@ -301,7 +343,9 @@ async def create_export_endpoint(
     if not payload.incident_id and not payload.evidence_id:
         raise HTTPException(status_code=400, detail="incident_id or evidence_id is required")
     if payload.incident_id and payload.evidence_id:
-        raise HTTPException(status_code=400, detail="Provide either incident_id or evidence_id, not both")
+        raise HTTPException(
+            status_code=400, detail="Provide either incident_id or evidence_id, not both"
+        )
     if payload.incident_id:
         _validate_identifier(payload.incident_id, "incident_id")
         export_path = await asyncio.to_thread(
@@ -309,6 +353,7 @@ async def create_export_endpoint(
             payload.incident_id,
             runtime_settings.evidence_storage_path,
             max_bytes,
+            refresh=True,
         )
     if payload.evidence_id:
         _validate_identifier(payload.evidence_id, "evidence_id")
@@ -323,8 +368,14 @@ async def create_export_endpoint(
             item.name,
             runtime_settings.evidence_storage_path,
             max_bytes,
+            item.hash,
+            item.relative_path,
+            item.job_id,
+            item.hash_algorithm,
         )
-    signature = await asyncio.to_thread(compute_export_signature, str(export_path)) if export_path else None
+    signature = (
+        await asyncio.to_thread(compute_export_signature, str(export_path)) if export_path else None
+    )
     response = build_export_url(payload.incident_id, payload.evidence_id)
     await safe_record_event(
         db,
@@ -372,7 +423,10 @@ async def download_incident_export(
     max_bytes = runtime_settings.max_file_size_gb * 1024 * 1024 * 1024
     safe_incident_id = _validate_identifier(incident_id, "incident_id")
     export_path = await asyncio.to_thread(
-        _resolve_incident_export, safe_incident_id, runtime_settings.evidence_storage_path, max_bytes
+        _resolve_incident_export,
+        safe_incident_id,
+        runtime_settings.evidence_storage_path,
+        max_bytes,
     )
     _require_signature(export_path, signature)
     await safe_record_event(
@@ -425,6 +479,10 @@ async def download_evidence_export(
         item.name,
         runtime_settings.evidence_storage_path,
         max_bytes,
+        item.hash,
+        item.relative_path,
+        item.job_id,
+        item.hash_algorithm,
     )
     _require_signature(export_path, signature)
     await safe_record_event(
@@ -467,22 +525,28 @@ async def list_incident_evidence(
     items, _ = await list_items(db, safe_incident_id)
     return [EvidenceItemOut.model_validate(item) for item in items]
 
+
 from pydantic import BaseModel
+
 
 def _has_duckdb() -> bool:
     try:
         import duckdb  # noqa: F401
+
         return True
     except ImportError:
         return False
 
+
 _HAS_DUCKDB = _has_duckdb()
+
 
 class TimelineResponse(BaseModel):
     data: list[dict]
     total: int
     page: int
     limit: int
+
 
 @router.get("/timeline/{evidence_id}", response_model=TimelineResponse)
 async def get_timeline_data(
@@ -509,15 +573,16 @@ async def get_timeline_data(
     runtime_settings = await get_runtime_settings(db)
     base_path = Path(runtime_settings.evidence_storage_path) / item.incident_id
 
-    # Search for matching file; also check pipeline output path timeline/timeline.jsonl
-    timeline_path: Path | None = None
-    search_candidates = list(base_path.rglob(item.name)) + [
-        base_path / "timeline" / "timeline.jsonl",
-    ]
-    for p in search_candidates:
-        if p.is_file():
-            timeline_path = p
-            break
+    timeline_path = await asyncio.to_thread(
+        resolve_evidence_file,
+        runtime_settings.evidence_storage_path,
+        item.incident_id,
+        item.name,
+        item.hash,
+        item.relative_path,
+        item.job_id,
+        item.hash_algorithm,
+    )
 
     if not timeline_path or not timeline_path.exists():
         raise HTTPException(status_code=404, detail="Timeline file not found on disk")
@@ -529,7 +594,9 @@ async def get_timeline_data(
     if _HAS_DUCKDB and duckdb_store.exists():
         return await asyncio.to_thread(_query_duckdb_store, duckdb_store, q, page, limit)
     elif _HAS_DUCKDB:
-        return await asyncio.to_thread(functools.partial(_query_duckdb, timeline_path, q, page, limit, is_jsonl=is_jsonl))
+        return await asyncio.to_thread(
+            functools.partial(_query_duckdb, timeline_path, q, page, limit, is_jsonl=is_jsonl)
+        )
     else:
         if is_jsonl:
             return _query_jsonl_fallback(timeline_path, q, page, limit)
@@ -563,7 +630,7 @@ def _query_duckdb(
             col_names = [row[0] for row in schema]
             like_val = f"%{q.strip().lower()}%"
             conditions = " OR ".join(
-                f"LOWER(CAST(\"{col.replace(chr(34), chr(34)*2)}\" AS VARCHAR)) LIKE ?"
+                f'LOWER(CAST("{col.replace(chr(34), chr(34)*2)}" AS VARCHAR)) LIKE ?'
                 for col in col_names
             )
             if conditions:
@@ -574,9 +641,7 @@ def _query_duckdb(
         else:
             where_clause = ""
 
-        total = con.execute(
-            f"SELECT COUNT(*) FROM {reader} {where_clause}", params
-        ).fetchone()[0]
+        total = con.execute(f"SELECT COUNT(*) FROM {reader} {where_clause}", params).fetchone()[0]
 
         result = con.execute(
             f"SELECT * FROM {reader} {where_clause} LIMIT {limit} OFFSET {offset}", params
@@ -609,7 +674,7 @@ def _query_duckdb_store(db_path: Path, q: str, page: int, limit: int) -> Timelin
                 col_names = [row[0] for row in schema]
                 like_val = f"%{q.strip().lower()}%"
                 conditions = " OR ".join(
-                    f"LOWER(CAST(\"{col.replace(chr(34), chr(34)*2)}\" AS VARCHAR)) LIKE ?"
+                    f'LOWER(CAST("{col.replace(chr(34), chr(34)*2)}" AS VARCHAR)) LIKE ?'
                     for col in col_names
                 )
                 if conditions:
@@ -643,6 +708,7 @@ def _query_duckdb_store(db_path: Path, q: str, page: int, limit: int) -> Timelin
 def _query_csv_fallback(csv_path: Path, q: str, page: int, limit: int) -> TimelineResponse:
     """Fallback CSV reader for environments without DuckDB."""
     import csv as _csv
+
     results = []
     total_matched = 0
     start_idx = (page - 1) * limit
@@ -668,6 +734,7 @@ def _query_csv_fallback(csv_path: Path, q: str, page: int, limit: int) -> Timeli
 def _query_jsonl_fallback(jsonl_path: Path, q: str, page: int, limit: int) -> TimelineResponse:
     """Fallback JSONL reader for environments without DuckDB. Streams line-by-line."""
     import json as _json
+
     results = []
     total_matched = 0
     start_idx = (page - 1) * limit
@@ -688,7 +755,9 @@ def _query_jsonl_fallback(jsonl_path: Path, q: str, page: int, limit: int) -> Ti
                     if not any(query in str(v).lower() for v in entry.values() if v is not None):
                         continue
                 if start_idx <= total_matched < end_idx:
-                    results.append({k: (str(v) if v is not None else None) for k, v in entry.items()})
+                    results.append(
+                        {k: (str(v) if v is not None else None) for k, v in entry.items()}
+                    )
                 total_matched += 1
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to read timeline: {exc}")
@@ -696,17 +765,16 @@ def _query_jsonl_fallback(jsonl_path: Path, q: str, page: int, limit: int) -> Ti
     return TimelineResponse(data=results, total=total_matched, page=page, limit=limit)
 
 
-
 # ── Super Timeline ─────────────────────────────────────────────────────────────
 
 # Whitelist of sortable columns — maps frontend key to DuckDB column expression.
 # Only these keys are accepted to prevent SQL injection via sort_by.
 _VALID_SORT_COLS: dict[str, str] = {
-    "datetime":  "event_dt",
-    "host":      "host",
-    "source":    "source_short",
-    "type":      "timestamp_desc",
-    "message":   "message",
+    "datetime": "event_dt",
+    "host": "host",
+    "source": "source_short",
+    "type": "timestamp_desc",
+    "message": "message",
 }
 
 
@@ -718,6 +786,7 @@ class SuperTimelineResponse(BaseModel):
     total_pages: int
     hosts: list[str]
     source_shorts: list[str]  # distinct source_short values for filter UI
+    histogram: list[dict] = []
 
 
 @router.get("/super-timeline/{incident_id}", response_model=SuperTimelineResponse)
@@ -727,14 +796,24 @@ async def get_super_timeline_data(
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=100, ge=10, le=1000),
     hosts: str = Query(default="", description="Comma-separated host filter"),
-    source: str = Query(default="", description="Comma-separated source_short filter (EVTX,MFT,SIGMA…)"),
+    source: str = Query(
+        default="", description="Comma-separated source_short filter (EVTX,MFT,SIGMA…)"
+    ),
     date_from: str = Query(default="", description="ISO-8601 start datetime filter"),
     date_to: str = Query(default="", description="ISO-8601 end datetime filter"),
-    sort_by: str = Query(default="datetime", description="Column to sort by (datetime|host|source|type|message)"),
+    sort_by: str = Query(
+        default="datetime", description="Column to sort by (datetime|host|source|type|message)"
+    ),
     sort_dir: str = Query(default="asc", description="Sort direction: asc or desc"),
-    user_filter: str = Query(default="", description="Comma-separated username filter (matches extra.user)"),
-    event_id_filter: str = Query(default="", description="Comma-separated event ID filter (matches extra.event_id)"),
-    rule_filter: str = Query(default="", description="Comma-separated Sigma rule name filter (matches extra.rule_name)"),
+    user_filter: str = Query(
+        default="", description="Comma-separated username filter (matches extra.user)"
+    ),
+    event_id_filter: str = Query(
+        default="", description="Comma-separated event ID filter (matches extra.event_id)"
+    ),
+    rule_filter: str = Query(
+        default="", description="Comma-separated Sigma rule name filter (matches extra.rule_name)"
+    ),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> SuperTimelineResponse:
@@ -765,7 +844,9 @@ async def get_super_timeline_data(
     safe_sort_dir = "DESC" if sort_dir.lower() == "desc" else "ASC"
 
     user_list = [u.strip() for u in user_filter.split(",") if u.strip()] if user_filter else []
-    eid_list  = [e.strip() for e in event_id_filter.split(",") if e.strip()] if event_id_filter else []
+    eid_list = (
+        [e.strip() for e in event_id_filter.split(",") if e.strip()] if event_id_filter else []
+    )
     rule_list = [r.strip() for r in rule_filter.split(",") if r.strip()] if rule_filter else []
 
     return await asyncio.to_thread(
@@ -811,8 +892,9 @@ def _query_super_timeline_duckdb(
     - Source-short filter (IN list, e.g. EVTX, MFT, SIGMA)
     - Date range filter (event_dt >= date_from AND event_dt <= date_to)
     """
-    import duckdb
     import json as _json
+
+    import duckdb
 
     offset = (page - 1) * limit
     con = duckdb.connect(str(duckdb_path), read_only=True)
@@ -833,69 +915,47 @@ def _query_super_timeline_duckdb(
             if row[0]
         ]
 
-        where_parts: list[str] = []
-        params: list = []
+        from app.services.timeline_filters import timeline_where
 
-        # Full-text search — match message, source, timestamp_desc, or extra JSON
-        if q:
-            q_like = f"%{q.lower()}%"
-            where_parts.append(
-                "(LOWER(message) LIKE ? OR LOWER(source) LIKE ?"
-                " OR LOWER(timestamp_desc) LIKE ? OR LOWER(CAST(extra AS VARCHAR)) LIKE ?)"
-            )
-            params.extend([q_like, q_like, q_like, q_like])
+        where_sql, params = timeline_where(
+            q,
+            host_filter,
+            source_filter,
+            date_from,
+            date_to,
+            user_filter or [],
+            event_id_filter or [],
+            rule_filter or [],
+        )
 
-        # Host filter
-        if host_filter:
-            placeholders = ", ".join("?" for _ in host_filter)
-            where_parts.append(f"host IN ({placeholders})")
-            params.extend(host_filter)
+        total = con.execute(f"SELECT COUNT(*) FROM timeline_events {where_sql}", params).fetchone()[
+            0
+        ]
 
-        # Source-short filter
-        if source_filter:
-            placeholders = ", ".join("?" for _ in source_filter)
-            where_parts.append(f"UPPER(source_short) IN ({placeholders})")
-            params.extend(source_filter)
+        # Aggregate the entire filtered result, independently of pagination.
+        import math
+        from datetime import datetime, timedelta, timezone
 
-        # Date range filter
-        if date_from:
-            where_parts.append("event_dt >= ?")
-            params.append(date_from)
-        if date_to:
-            where_parts.append("event_dt <= ?")
-            params.append(date_to)
-
-        # User filter — matches extra.user JSON field
-        if user_filter:
-            user_conditions = " OR ".join(
-                "LOWER(COALESCE(json_extract_string(extra, '$.user'), '')) LIKE ?"
-                for _ in user_filter
-            )
-            where_parts.append(f"({user_conditions})")
-            params.extend(f"%{u.lower().replace('*', '%')}%" for u in user_filter)
-
-        # Event ID filter — matches extra.event_id JSON field
-        if event_id_filter:
-            eid_placeholders = ", ".join("?" for _ in event_id_filter)
-            where_parts.append(
-                f"CAST(COALESCE(json_extract_string(extra, '$.event_id'), '') AS VARCHAR) IN ({eid_placeholders})"
-            )
-            params.extend(event_id_filter)
-
-        # Rule filter — matches extra.rule_name JSON field
-        if rule_filter:
-            rule_conditions = " OR ".join(
-                "LOWER(COALESCE(json_extract_string(extra, '$.rule_name'), '')) LIKE ?"
-                for _ in rule_filter
-            )
-            where_parts.append(f"({rule_conditions})")
-            params.extend(f"%{r.lower().replace('*', '%')}%" for r in rule_filter)
-
-        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
-
-        total = con.execute(
-            f"SELECT COUNT(*) FROM timeline_events {where_sql}", params
+        span = con.execute(
+            f"SELECT epoch(MAX(event_dt)) - epoch(MIN(event_dt)) FROM timeline_events {where_sql}",
+            params,
         ).fetchone()[0]
+        width = max(3600, math.ceil((span or 0) / 80 / 3600) * 3600)
+        buckets = con.execute(
+            f"SELECT floor(epoch(event_dt) / {width}) * {width} AS bucket, COUNT(*) FROM timeline_events {where_sql} GROUP BY bucket ORDER BY bucket",
+            params,
+        ).fetchall()
+        histogram = []
+        for epoch, count in buckets:
+            if epoch is not None:
+                start = datetime.fromtimestamp(epoch, timezone.utc)
+                histogram.append(
+                    {
+                        "start": start.isoformat(),
+                        "end": (start + timedelta(seconds=width, microseconds=-1)).isoformat(),
+                        "count": count,
+                    }
+                )
 
         sort_col = _VALID_SORT_COLS.get(sort_by, "event_dt")
         rows = con.execute(
@@ -911,12 +971,22 @@ def _query_super_timeline_duckdb(
 
         results = []
         for row in rows:
-            row_id, host, job_id, event_dt, message, ts_desc, source_val, source_short, extra_json = row
+            (
+                row_id,
+                host,
+                job_id,
+                event_dt,
+                message,
+                ts_desc,
+                source_val,
+                source_short,
+                extra_json,
+            ) = row
             entry: dict = {
                 "event_seq": row_id,
                 "host": host,
                 "job_id": job_id,
-                "datetime": event_dt.isoformat() if event_dt else None,
+                "datetime": event_dt.isoformat() + "Z" if event_dt else None,
                 "message": message,
                 "timestamp_desc": ts_desc,
                 "source": source_val,
@@ -933,7 +1003,16 @@ def _query_super_timeline_duckdb(
             if extra_json:
                 try:
                     extra = _json.loads(extra_json) if isinstance(extra_json, str) else extra_json
-                    entry.update(extra)
+                    # The merge owns host/job/row identity; parser metadata cannot
+                    # blank it or point a row at a different collection.
+                    entry.update(
+                        {
+                            k: v
+                            for k, v in extra.items()
+                            if v is not None
+                            and k not in {"host", "job_id", "event_seq", "datetime"}
+                        }
+                    )
                 except Exception:
                     pass
             results.append(entry)
@@ -948,6 +1027,7 @@ def _query_super_timeline_duckdb(
             total_pages=total_pages,
             hosts=all_hosts,
             source_shorts=all_source_shorts,
+            histogram=histogram,
         )
     finally:
         con.close()
@@ -956,6 +1036,7 @@ def _query_super_timeline_duckdb(
 def _export_super_timeline_duckdb(
     duckdb_path: Path,
     fmt: str,
+    incident_id: str,
     q: str,
     host_filter: list[str],
     source_filter: list[str],
@@ -969,36 +1050,24 @@ def _export_super_timeline_duckdb(
     import csv
     import io
     import json as _json
+
     import duckdb
 
     con = duckdb.connect(str(duckdb_path), read_only=True)
     try:
-        where_parts: list[str] = []
-        params: list = []
+        from app.services.timeline_filters import timeline_where
 
-        if q:
-            q_like = f"%{q.lower()}%"
-            where_parts.append(
-                "(LOWER(message) LIKE ? OR LOWER(source) LIKE ?"
-                " OR LOWER(timestamp_desc) LIKE ? OR LOWER(CAST(extra AS VARCHAR)) LIKE ?)"
+        where_sql, params = timeline_where(q, host_filter, source_filter, date_from, date_to)
+
+        count, estimated_bytes = con.execute(
+            f"SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(extra AS VARCHAR)) + LENGTH(COALESCE(message, '')) + 1024), 0) FROM timeline_events {where_sql}",
+            params,
+        ).fetchone()
+        if count > 50000 or estimated_bytes > 32 * 1024 * 1024:
+            raise HTTPException(
+                413,
+                "Export exceeds 50,000 events or the size budget; narrow the date, host or search filters",
             )
-            params.extend([q_like, q_like, q_like, q_like])
-        if host_filter:
-            placeholders = ", ".join("?" for _ in host_filter)
-            where_parts.append(f"host IN ({placeholders})")
-            params.extend(host_filter)
-        if source_filter:
-            placeholders = ", ".join("?" for _ in source_filter)
-            where_parts.append(f"UPPER(source_short) IN ({placeholders})")
-            params.extend(source_filter)
-        if date_from:
-            where_parts.append("event_dt >= ?")
-            params.append(date_from)
-        if date_to:
-            where_parts.append("event_dt <= ?")
-            params.append(date_to)
-
-        where_sql = f"WHERE {' AND '.join(where_parts)}" if where_parts else ""
 
         rows = con.execute(
             f"""
@@ -1012,16 +1081,77 @@ def _export_super_timeline_duckdb(
     finally:
         con.close()
 
-    FIELDS = ["#", "datetime", "host", "source_short", "source", "timestamp_desc",
-              "event_id", "rule_name", "user", "display_name", "message", "job_id"]
+    if fmt in {"cef", "leef", "stix"}:
+        from app.services.siem_export_service import render_export
+
+        records: list[dict] = []
+        for row in rows:
+            (
+                row_id,
+                host,
+                job_id,
+                event_dt,
+                message,
+                ts_desc,
+                source_val,
+                source_short,
+                extra_json,
+            ) = row
+            extra: dict = {}
+            if extra_json:
+                try:
+                    extra = (
+                        _json.loads(extra_json) if isinstance(extra_json, str) else dict(extra_json)
+                    )
+                except (TypeError, ValueError, _json.JSONDecodeError):
+                    extra = {}
+            records.append(
+                {
+                    "row_id": row_id,
+                    "host": host,
+                    "job_id": job_id,
+                    "datetime": event_dt.isoformat() + "Z" if event_dt else None,
+                    "message": message,
+                    "timestamp_desc": ts_desc,
+                    "source": source_val,
+                    "source_short": source_short,
+                    "extra": extra,
+                }
+            )
+        return render_export(records, fmt, incident_id)
+
+    FIELDS = [
+        "#",
+        "datetime",
+        "host",
+        "source_short",
+        "source",
+        "timestamp_desc",
+        "event_id",
+        "rule_name",
+        "user",
+        "display_name",
+        "message",
+        "job_id",
+    ]
 
     if fmt == "jsonl":
         buf = io.StringIO()
         for row in rows:
-            row_id, host, job_id, event_dt, message, ts_desc, source_val, source_short, extra_json = row
+            (
+                row_id,
+                host,
+                job_id,
+                event_dt,
+                message,
+                ts_desc,
+                source_val,
+                source_short,
+                extra_json,
+            ) = row
             entry: dict = {
                 "#": row_id,
-                "datetime": event_dt.isoformat() if event_dt else None,
+                "datetime": event_dt.isoformat() + "Z" if event_dt else None,
                 "host": host,
                 "source_short": source_short,
                 "source": source_val,
@@ -1052,7 +1182,7 @@ def _export_super_timeline_duckdb(
         row_id, host, job_id, event_dt, message, ts_desc, source_val, source_short, extra_json = row
         entry = {
             "#": row_id,
-            "datetime": event_dt.isoformat() if event_dt else "",
+            "datetime": event_dt.isoformat() + "Z" if event_dt else "",
             "host": host or "",
             "source_short": source_short or "",
             "source": source_val or "",
@@ -1079,7 +1209,8 @@ def _export_super_timeline_duckdb(
 @router.get("/super-timeline/{incident_id}/export")
 async def export_super_timeline(
     incident_id: str,
-    format: str = Query(default="csv", description="Export format: csv or jsonl"),
+    request: Request,
+    format: str = Query(default="csv", description="Export format: csv, jsonl, cef, leef, or stix"),
     q: str = Query(default=""),
     hosts: str = Query(default=""),
     source: str = Query(default=""),
@@ -1088,10 +1219,14 @@ async def export_super_timeline(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> Response:
-    """Export the super timeline as CSV or JSONL with current filters applied."""
+    """Export the filtered super timeline as CSV, JSONL, CEF, LEEF, or STIX."""
     from app.crud.super_timeline import get_super_timeline_by_incident
 
-    fmt = "jsonl" if format.lower() == "jsonl" else "csv"
+    enforce_expensive_operation_limit(request, "super-timeline-export", limit=6)
+
+    fmt = format.lower().strip()
+    if fmt not in {"csv", "jsonl", "cef", "leef", "stix"}:
+        raise HTTPException(status_code=422, detail="Unsupported export format")
 
     suptl = await get_super_timeline_by_incident(db, incident_id)
     if not suptl or suptl.status != "DONE":
@@ -1111,6 +1246,7 @@ async def export_super_timeline(
             _export_super_timeline_duckdb,
             duckdb_path,
             fmt,
+            incident_id,
             q,
             host_filter,
             source_filter,

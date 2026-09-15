@@ -3,17 +3,18 @@ Tests for the forensics timeline and processing-status endpoints.
 
 Requires DFIR_TEST_DATABASE_URL to be set (skipped otherwise).
 """
+
 from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import select
 
+from app.core.security import get_password_hash
 from app.models.evidence import EvidenceItem
 from app.models.incident import Incident
 from app.models.processing import ProcessingJob
 from app.models.user import User
-from app.core.security import get_password_hash
 
 pytestmark = pytest.mark.asyncio
 
@@ -71,6 +72,7 @@ async def _login(client, username: str = "ADMIN") -> None:
 # Evidence listing endpoints
 # ---------------------------------------------------------------------------
 
+
 class TestEvidenceListing:
     async def test_paginated_evidence_listing_returns_items_and_total(self, client, db_session):
         user = _build_user()
@@ -109,6 +111,7 @@ class TestEvidenceListing:
 # Timeline endpoint
 # ---------------------------------------------------------------------------
 
+
 class TestTimelineEndpoint:
     async def test_404_when_evidence_not_found(self, client, db_session):
         user = _build_user()
@@ -139,6 +142,7 @@ class TestTimelineEndpoint:
 # ---------------------------------------------------------------------------
 # Processing-status endpoint (new: /processing/incident/{id}/status)
 # ---------------------------------------------------------------------------
+
 
 class TestProcessingStatus:
     async def test_404_when_no_processing_job(self, client, db_session):

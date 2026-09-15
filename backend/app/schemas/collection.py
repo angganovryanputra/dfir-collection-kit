@@ -20,6 +20,7 @@ class CollectionStartRequest(BaseModel):
     user has manually changed the OS selector in the UI — without it,
     validate_modules_for_os() will reject the selected modules with HTTP 400.
     """
+
     module_ids: list[str] | None = None
     profile: str | None = None
     agent_ids: list[str] | None = None
@@ -47,6 +48,7 @@ class CollectionPollRequest(BaseModel):
 
 class PerHostJobStatus(BaseModel):
     """Status summary for a single collection job (one per target host)."""
+
     job_id: str
     hostname: str | None = None
     status: str

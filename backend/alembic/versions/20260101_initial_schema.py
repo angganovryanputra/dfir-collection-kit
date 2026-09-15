@@ -5,9 +5,10 @@ Revises:
 Create Date: 2026-01-01 00:00:00.000000
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "initial"
 down_revision = None
@@ -63,9 +64,7 @@ def upgrade() -> None:
             sa.Column("id", sa.String(), nullable=False),
             sa.Column("type", sa.String(), nullable=False),
             sa.Column("status", sa.String(), nullable=False),
-            sa.Column(
-                "target_endpoints", postgresql.ARRAY(sa.String()), nullable=False
-            ),
+            sa.Column("target_endpoints", postgresql.ARRAY(sa.String()), nullable=False),
             sa.Column("operator", sa.String(), nullable=False),
             sa.Column(
                 "created_at",
@@ -90,13 +89,9 @@ def upgrade() -> None:
             sa.Column("id", sa.String(), nullable=False),
             sa.Column("name", sa.String(), nullable=False),
             sa.Column("incident_type", sa.String(), nullable=False),
-            sa.Column(
-                "default_endpoints", postgresql.ARRAY(sa.String()), nullable=False
-            ),
+            sa.Column("default_endpoints", postgresql.ARRAY(sa.String()), nullable=False),
             sa.Column("description", sa.String(), nullable=False),
-            sa.Column(
-                "preflight_checklist", postgresql.ARRAY(sa.String()), nullable=False
-            ),
+            sa.Column("preflight_checklist", postgresql.ARRAY(sa.String()), nullable=False),
             sa.Column(
                 "created_at",
                 sa.DateTime(timezone=True),
@@ -156,9 +151,7 @@ def upgrade() -> None:
             sa.ForeignKeyConstraint(
                 ["incident_id"], ["incidents.id"], name="jobs_incident_id_fkey"
             ),
-            sa.ForeignKeyConstraint(
-                ["agent_id"], ["devices.id"], name="jobs_agent_id_fkey"
-            ),
+            sa.ForeignKeyConstraint(["agent_id"], ["devices.id"], name="jobs_agent_id_fkey"),
             sa.PrimaryKeyConstraint("id", name="jobs_pkey"),
         )
         op.create_index("ix_jobs_incident_id", "jobs", ["incident_id"])
@@ -182,9 +175,7 @@ def upgrade() -> None:
             ),
             sa.PrimaryKeyConstraint("id", name="evidence_folders_pkey"),
         )
-        op.create_index(
-            "ix_evidence_folders_incident_id", "evidence_folders", ["incident_id"]
-        )
+        op.create_index("ix_evidence_folders_incident_id", "evidence_folders", ["incident_id"])
         op.create_index("ix_evidence_folders_type", "evidence_folders", ["type"])
 
     if "evidence_items" not in existing:
@@ -205,9 +196,7 @@ def upgrade() -> None:
             ),
             sa.PrimaryKeyConstraint("id", name="evidence_items_pkey"),
         )
-        op.create_index(
-            "ix_evidence_items_incident_id", "evidence_items", ["incident_id"]
-        )
+        op.create_index("ix_evidence_items_incident_id", "evidence_items", ["incident_id"])
 
     if "chain_of_custody_entries" not in existing:
         op.create_table(

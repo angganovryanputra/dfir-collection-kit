@@ -19,7 +19,7 @@ def ensure_directory(path: Path) -> None:
 
 def safe_join(base: Path, *paths: str) -> Path:
     target = base.joinpath(*paths).resolve()
-    if not str(target).startswith(str(base.resolve())):
+    if not target.is_relative_to(base.resolve()):
         raise HTTPException(status_code=400, detail="Invalid path traversal attempt")
     return target
 
@@ -57,7 +57,10 @@ def extract_zip(zip_path: Path, output_dir: Path) -> list[Path]:
             # Path traversal protection: resolve the target path and confirm it stays
             # within the output directory before extracting anything.
             raw_target = (output_dir / member.filename).resolve()
-            if not str(raw_target).startswith(str(resolved_output_dir) + os.sep) and raw_target != resolved_output_dir:
+            if (
+                not str(raw_target).startswith(str(resolved_output_dir) + os.sep)
+                and raw_target != resolved_output_dir
+            ):
                 raise ValueError("ZIP contains path traversal entry")
 
             if member.is_dir():
@@ -84,10 +87,8 @@ def _normalize_algorithm(value: str | None) -> str:
     if not value:
         return "sha256"
     normalized = value.strip().lower().replace("-", "")
-    if normalized in {"sha256", "sha-256"}:
-        return "sha256"
-    if normalized in {"sha1", "sha-1"}:
-        return "sha1"
+    if normalized in {"md5", "sha1", "sha256", "sha512"}:
+        return normalized
     return "sha256"
 
 

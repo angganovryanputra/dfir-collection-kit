@@ -6,12 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Simple in-memory per-IP rate limiter (GIL-safe for single-process deployments)
-_IP_WINDOW_SEC = 60        # sliding window length
-_IP_MAX_ATTEMPTS = 20      # max login attempts per IP per window
+_IP_WINDOW_SEC = 60  # sliding window length
+_IP_MAX_ATTEMPTS = 20  # max login attempts per IP per window
 _ip_attempt_log: dict[str, list[float]] = defaultdict(list)
 
 # Periodic full-sweep to prevent unbounded growth from IPs that never return
-_CLEANUP_INTERVAL_SEC = 300   # sweep every 5 minutes
+_CLEANUP_INTERVAL_SEC = 300  # sweep every 5 minutes
 _last_cleanup: float = 0.0
 
 
@@ -22,7 +22,11 @@ def _check_ip_rate_limit(client_ip: str) -> None:
 
     # Periodic full-dict sweep: drop IPs whose entry list is empty after pruning
     if now - _last_cleanup > _CLEANUP_INTERVAL_SEC:
-        stale = [ip for ip, ts in _ip_attempt_log.items() if not any(now - t < _IP_WINDOW_SEC for t in ts)]
+        stale = [
+            ip
+            for ip, ts in _ip_attempt_log.items()
+            if not any(now - t < _IP_WINDOW_SEC for t in ts)
+        ]
         for ip in stale:
             del _ip_attempt_log[ip]
         _last_cleanup = now
@@ -38,12 +42,18 @@ def _check_ip_rate_limit(client_ip: str) -> None:
             headers={"Retry-After": str(_IP_WINDOW_SEC)},
         )
 
+
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.core.config import settings
 from app.core.deps import get_current_user, get_db, get_request_token
 from app.core.request_context import get_client_ip
-from app.core.security import create_access_token, verify_password, revoke_token, decode_access_token
+from app.core.security import (
+    create_access_token,
+    decode_access_token,
+    revoke_token,
+    verify_password,
+)
 
 _bearer = HTTPBearer(auto_error=False)
 from app.crud.audit_log import count_recent_login_failures
@@ -85,14 +95,17 @@ async def login(
                 target_id=None,
                 status="failure",
                 message="Login blocked",
-            metadata={"reason": "max_failed_logins", "client_ip": client_ip},
+                metadata={"reason": "max_failed_logins", "client_ip": client_ip},
             )
             # Commit before raising — get_db rolls back on exception, which would
             # otherwise silently discard the failure audit record.
             await db.commit()
             raise HTTPException(
                 status_code=403,
-                detail={"message": "Login failed. Please check your credentials.", "client_ip": client_ip},
+                detail={
+                    "message": "Login failed. Please check your credentials.",
+                    "client_ip": client_ip,
+                },
             )
     if not user or not verify_password(payload.password, user.password_hash):
         await safe_record_event(
@@ -111,7 +124,10 @@ async def login(
         await db.commit()
         raise HTTPException(
             status_code=401,
-            detail={"message": "Login failed. Please check your credentials.", "client_ip": client_ip},
+            detail={
+                "message": "Login failed. Please check your credentials.",
+                "client_ip": client_ip,
+            },
         )
     if user.status.lower() != "active":
         await safe_record_event(
@@ -130,7 +146,10 @@ async def login(
         await db.commit()
         raise HTTPException(
             status_code=403,
-            detail={"message": "Login failed. Please check your credentials.", "client_ip": client_ip},
+            detail={
+                "message": "Login failed. Please check your credentials.",
+                "client_ip": client_ip,
+            },
         )
     if payload.role and user.role != "admin" and payload.role != user.role:
         await safe_record_event(
@@ -153,7 +172,10 @@ async def login(
         await db.commit()
         raise HTTPException(
             status_code=403,
-            detail={"message": "Role selection does not match account role.", "client_ip": client_ip},
+            detail={
+                "message": "Role selection does not match account role.",
+                "client_ip": client_ip,
+            },
         )
     await update_last_login(db, user.id)
     await safe_record_event(

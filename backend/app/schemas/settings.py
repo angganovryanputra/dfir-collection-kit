@@ -1,5 +1,4 @@
-from pydantic import BaseModel, Field, field_serializer, field_validator
-from pydantic import ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 
 class SystemSettingsBase(BaseModel):
@@ -69,6 +68,7 @@ class SystemSettingsCreate(SystemSettingsBase):
 
 class SystemSettingsOut(SystemSettingsBase):
     """Internal schema — includes the real timesketch_token for pipeline use."""
+
     id: str
 
     model_config = ConfigDict(from_attributes=True)
@@ -76,11 +76,16 @@ class SystemSettingsOut(SystemSettingsBase):
 
 class SystemSettingsApiOut(SystemSettingsBase):
     """API response schema — masks timesketch_token so it is never returned in plaintext."""
+
     id: str
 
     @field_serializer(
-        "timesketch_token", "s3_secret_key", "webhook_secret",
-        "ai_api_key", "google_oauth_client_secret", "google_oauth_refresh_token",
+        "timesketch_token",
+        "s3_secret_key",
+        "webhook_secret",
+        "ai_api_key",
+        "google_oauth_client_secret",
+        "google_oauth_refresh_token",
     )
     def _mask_token(self, v: str | None) -> str | None:
         return "***" if v else None

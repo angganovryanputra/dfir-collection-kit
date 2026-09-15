@@ -51,7 +51,6 @@ from app.schemas.job import JobCreate, JobInstruction, JobModule, JobOut, JobSta
 from app.services.audit_log_service import safe_record_event
 from app.services.system_settings_service import get_runtime_settings
 
-
 router = APIRouter()
 
 
@@ -62,11 +61,14 @@ class AgentRegistrationOut(DeviceOut):
 def _token_digest(token: str) -> str:
     from app.core.config import settings
 
-    return hmac.new(settings.SECRET_KEY.encode("utf-8"), token.encode("utf-8"), hashlib.sha256).hexdigest()
+    return hmac.new(
+        settings.SECRET_KEY.encode("utf-8"), token.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
 
 
 def verify_enrollment_secret(agent_token: str | None) -> None:
     from app.core.config import settings
+
     expected = settings.AGENT_SHARED_SECRET or ""
     if not expected or not agent_token or not compare_digest(agent_token, expected):
         raise HTTPException(status_code=401, detail="Invalid enrollment token")
@@ -74,7 +76,9 @@ def verify_enrollment_secret(agent_token: str | None) -> None:
 
 def verify_agent_secret(agent_token: str | None, device) -> None:
     if not device or not device.agent_token_hash or not agent_token:
-        raise HTTPException(status_code=401, detail="Agent must enroll before making authenticated requests")
+        raise HTTPException(
+            status_code=401, detail="Agent must enroll before making authenticated requests"
+        )
     if not compare_digest(_token_digest(agent_token), device.agent_token_hash):
         raise HTTPException(status_code=401, detail="Invalid agent token")
 
@@ -138,7 +142,9 @@ async def register_agent(
             message="Agent re-registered",
             metadata={"hostname": updated.hostname, "os": updated.os},
         )
-        return AgentRegistrationOut.model_validate(updated).model_copy(update={"agent_token": issued_token})
+        return AgentRegistrationOut.model_validate(updated).model_copy(
+            update={"agent_token": issued_token}
+        )
     verify_enrollment_secret(agent_token)
     issued_token = secrets.token_urlsafe(32)
     device = await create_device(db, payload)
@@ -156,7 +162,9 @@ async def register_agent(
         message="Agent registered",
         metadata={"hostname": device.hostname, "os": device.os},
     )
-    return AgentRegistrationOut.model_validate(device).model_copy(update={"agent_token": issued_token})
+    return AgentRegistrationOut.model_validate(device).model_copy(
+        update={"agent_token": issued_token}
+    )
 
 
 @router.post("/{agent_id}/heartbeat", response_model=DeviceOut)
@@ -182,12 +190,19 @@ async def agent_heartbeat(
         target_id=updated.id,
         status="success",
         message="Heartbeat received",
-        metadata={"status": updated.status, "last_seen": updated.last_seen.isoformat() if updated.last_seen else None},
+        metadata={
+            "status": updated.status,
+            "last_seen": updated.last_seen.isoformat() if updated.last_seen else None,
+        },
     )
     return DeviceOut.model_validate(updated)
 
 
-@router.post("/{agent_id}/jobs", response_model=JobOut, dependencies=[Depends(require_roles("operator", "admin"))])
+@router.post(
+    "/{agent_id}/jobs",
+    response_model=JobOut,
+    dependencies=[Depends(require_roles("operator", "admin"))],
+)
 async def create_job_for_agent(
     agent_id: str,
     payload: JobCreate,
@@ -203,7 +218,9 @@ async def create_job_for_agent(
         modules = build_modules(payload.module_ids, device.os if device else None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    output_path = str(Path(runtime_settings.evidence_storage_path) / payload.incident_id / payload.id)
+    output_path = str(
+        Path(runtime_settings.evidence_storage_path) / payload.incident_id / payload.id
+    )
     job = await create_job(db, payload, modules, output_path)
     await safe_record_event(
         db,
@@ -315,7 +332,11 @@ async def update_job_status_endpoint(
 
     status_upper = payload.status.upper() if payload.status else ""
     event_type = "job_updated"
-    if status_upper.startswith("COLLECTING") or status_upper in {"IN_PROGRESS", "RUNNING", "STARTED"}:
+    if status_upper.startswith("COLLECTING") or status_upper in {
+        "IN_PROGRESS",
+        "RUNNING",
+        "STARTED",
+    }:
         event_type = "job_started"
     elif status_upper in {"COMPLETE", "COMPLETED", "COLLECTION_COMPLETE"}:
         event_type = "job_completed"
@@ -340,20 +361,23 @@ async def update_job_status_endpoint(
     def _infer_level(status: str, message: str) -> str:
         s = (status or "").upper()
         m = (message or "").lower()
-        if s in {"FAILED", "ERROR"} or any(w in m for w in ("failed", "error", "all modules failed")):
+        if s in {"FAILED", "ERROR"} or any(
+            w in m for w in ("failed", "error", "all modules failed")
+        ):
             return "error"
         if "warning" in m or "timeout" in m or "retry" in m:
             return "warning"
-        if (
-            s in {"COMPLETE", "COMPLETED", "COLLECTION_COMPLETE"}
-            or any(w in m for w in ("completed", "uploaded", "success", "collection complete"))
+        if s in {"COMPLETE", "COMPLETED", "COLLECTION_COMPLETE"} or any(
+            w in m for w in ("completed", "uploaded", "success", "collection complete")
         ):
             return "success"
         return "info"
 
     log_entries = []
     if payload.message:
-        log_entries.append({"level": _infer_level(payload.status, payload.message), "message": payload.message})
+        log_entries.append(
+            {"level": _infer_level(payload.status, payload.message), "message": payload.message}
+        )
     if payload.log_tail:
         for entry in payload.log_tail:
             log_entries.append({"level": _infer_level(payload.status, entry), "message": entry})
@@ -377,13 +401,14 @@ async def get_job_upload_url(
         raise HTTPException(status_code=404, detail="Job not found")
 
     from app.services.s3_service import get_s3_service
+
     s3_service = await get_s3_service(db)
     if not s3_service:
         raise HTTPException(status_code=400, detail="S3 Object Storage is not enabled")
-    
+
     object_key = f"{job.incident_id}/{job.id}/collection.zip"
     presigned_url = await s3_service.generate_presigned_upload_url(object_key)
-    
+
     return {"url": presigned_url, "method": "PUT"}
 
 
@@ -407,10 +432,11 @@ async def complete_job_upload(
 
     from app.services.s3_service import get_s3_service
     from app.worker import process_s3_upload_task
+
     s3_service = await get_s3_service(db)
     if not s3_service:
         raise HTTPException(status_code=400, detail="S3 Object Storage is not enabled")
-    
+
     # Use the same configured evidence root as the direct-upload path.  The
     # application Settings object intentionally has no STORAGE_PATH alias;
     # using it here made every S3 completion request fail before dispatch.
@@ -426,7 +452,7 @@ async def complete_job_upload(
 
     # Dispatch to Celery
     process_s3_upload_task.delay(job.incident_id, job.id, str(base_path), object_key)
-    
+
     return {"status": "processing"}
 
 
@@ -454,7 +480,9 @@ async def upload_job_evidence(
     # C4: Use safe_join to prevent path traversal
     base_path = safe_join(Path(runtime_settings.evidence_storage_path), job.incident_id, job.id)
     if (base_path / "LOCKED").exists():
-        raise HTTPException(status_code=409, detail="Evidence for this job is locked and cannot be replaced")
+        raise HTTPException(
+            status_code=409, detail="Evidence for this job is locked and cannot be replaced"
+        )
     zip_path = base_path / "collection.zip"
     max_bytes = runtime_settings.max_file_size_gb * 1024 * 1024 * 1024
     size = await asyncio.to_thread(save_upload, file, zip_path, max_bytes)
@@ -478,7 +506,11 @@ async def upload_job_evidence(
 
     manifest_path = base_path / "hashes.sha256"
     await asyncio.to_thread(
-        write_hash_manifest, extracted_files, manifest_path, extracted_dir, runtime_settings.hash_algorithm
+        write_hash_manifest,
+        extracted_files,
+        manifest_path,
+        extracted_dir,
+        runtime_settings.hash_algorithm,
     )
     await safe_record_event(
         db,
@@ -497,10 +529,16 @@ async def upload_job_evidence(
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     chain_log_path = base_path / "chain-of-custody.log"
     await asyncio.to_thread(
-        append_chain_log, chain_log_path, f"{timestamp} | UPLOAD | AGENT {agent_id} | {zip_path.name}"
+        append_chain_log,
+        chain_log_path,
+        f"{timestamp} | UPLOAD | AGENT {agent_id} | {zip_path.name}",
     )
-    chain_log_hash = await asyncio.to_thread(hash_file, chain_log_path, runtime_settings.hash_algorithm)
-    await asyncio.to_thread(append_chain_log, chain_log_path, f"{timestamp} | HASH | {chain_log_hash}")
+    chain_log_hash = await asyncio.to_thread(
+        hash_file, chain_log_path, runtime_settings.hash_algorithm
+    )
+    await asyncio.to_thread(
+        append_chain_log, chain_log_path, f"{timestamp} | HASH | {chain_log_hash}"
+    )
 
     total_size = await asyncio.to_thread(lambda: sum(p.stat().st_size for p in extracted_files))
 
@@ -532,6 +570,9 @@ async def upload_job_evidence(
                 id=f"{job.id}-{idx}",
                 incident_id=job.incident_id,
                 name=item.name,
+                job_id=job.id,
+                relative_path=item.relative_to(base_path.parent).as_posix(),
+                hash_algorithm=runtime_settings.hash_algorithm,
                 type="FILE",
                 size=str(item.stat().st_size),
                 status="HASH_VERIFIED",
@@ -554,21 +595,21 @@ async def upload_job_evidence(
     except Exception as exc:
         logger.error(
             "Evidence DB write failed for job %s (incident %s): %s — rolling back",
-            job_id, job.incident_id, exc, exc_info=True,
+            job_id,
+            job.incident_id,
+            exc,
+            exc_info=True,
         )
         await db.rollback()
         # Remove extracted files so the agent can retry with a clean state
         import shutil
+
         await asyncio.to_thread(shutil.rmtree, str(extracted_dir), ignore_errors=True)
-        raise HTTPException(status_code=500, detail="Evidence processing failed — retry upload") from exc
+        raise HTTPException(
+            status_code=500, detail="Evidence processing failed — retry upload"
+        ) from exc
 
     await asyncio.to_thread(write_lock_marker, base_path / "LOCKED")
-
-    # Auto-trigger parsing pipeline if enabled in settings
-    if runtime_settings.auto_process:
-        from app.services.artifact_parser_service import dispatch_pipeline
-        dispatch_pipeline(job.incident_id, job.id, base_path)
-        logger.info("Processing pipeline triggered for job %s", job.id)
 
     try:
         await create_entry(
@@ -614,4 +655,27 @@ async def upload_job_evidence(
     except Exception as exc:
         logger.warning("CoC entry failed for job %s (COLLECTION COMPLETED): %s", job.id, exc)
 
-    return {"status": "uploaded", "bytes": size}
+    # The worker must only see committed evidence, collection status and CoC.
+    # A broker outage must not turn a successful locked upload into a retry.
+    incident_id = job.incident_id
+    await db.commit()
+    processing_status = "disabled"
+    if runtime_settings.auto_process:
+        from app.crud.processing import create_processing_job, get_processing_job_by_evidence_job_id
+        from app.services.artifact_parser_service import dispatch_pipeline
+
+        proc = await get_processing_job_by_evidence_job_id(db, job_id)
+        if not proc:
+            proc = await create_processing_job(db, f"proc-{job_id}", incident_id, job_id)
+        await db.commit()
+        try:
+            dispatch_pipeline(incident_id, job_id, base_path)
+            processing_status = "queued"
+        except Exception:
+            logger.exception("Evidence saved but processing queue unavailable for %s", job_id)
+            proc.status = "FAILED"
+            proc.error_message = "Evidence uploaded successfully; automatic processing could not be queued. Retry processing."
+            await db.commit()
+            processing_status = "queue_failed"
+
+    return {"status": "uploaded", "bytes": size, "processing_status": processing_status}

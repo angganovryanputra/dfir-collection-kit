@@ -7,6 +7,8 @@ export type SuperTimelineStatusData = {
     host_count: number | null;
     event_count: number | null;
     duckdb_path: string | null;
+    is_stale?: boolean;
+    partial_job_count?: number;
     error_message: string | null;
     started_at: string | null;
     completed_at: string | null;
@@ -37,6 +39,7 @@ export type SuperTimelineResponse = {
     total_pages: number;
     hosts: string[];
     source_shorts: string[];
+    histogram: { start: string; end: string; count: number }[];
 };
 
 export type QuickFilter = {

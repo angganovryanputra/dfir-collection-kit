@@ -33,9 +33,7 @@ async def get_processing_job(db: AsyncSession, id: str) -> ProcessingJob | None:
 async def get_processing_job_by_evidence_job_id(
     db: AsyncSession, job_id: str
 ) -> ProcessingJob | None:
-    result = await db.execute(
-        select(ProcessingJob).where(ProcessingJob.job_id == job_id).limit(1)
-    )
+    result = await db.execute(select(ProcessingJob).where(ProcessingJob.job_id == job_id).limit(1))
     return result.scalar_one_or_none()
 
 
@@ -48,6 +46,7 @@ async def update_processing_job(
     started_at: datetime | None = None,
     completed_at: datetime | None = None,
     error_message: str | None = None,
+    stage_results: dict | None = None,
 ) -> ProcessingJob | None:
     result = await db.execute(select(ProcessingJob).where(ProcessingJob.id == id))
     job = result.scalar_one_or_none()
@@ -63,6 +62,8 @@ async def update_processing_job(
         job.completed_at = completed_at
     if error_message is not None:
         job.error_message = error_message
+    if stage_results is not None:
+        job.stage_results = stage_results
     await db.flush()
     return job
 
@@ -78,8 +79,8 @@ async def list_sigma_hits(
     from sqlalchemy import func, or_
 
     stmt = select(SigmaHit).where(SigmaHit.incident_id == incident_id)
-    count_stmt = select(func.count()).select_from(SigmaHit).where(
-        SigmaHit.incident_id == incident_id
+    count_stmt = (
+        select(func.count()).select_from(SigmaHit).where(SigmaHit.incident_id == incident_id)
     )
 
     if severity:
@@ -114,9 +115,7 @@ async def get_latest_processing_job_by_incident_id(
     return result.scalar_one_or_none()
 
 
-async def count_sigma_hits_by_severity(
-    db: AsyncSession, incident_id: str
-) -> dict[str, int]:
+async def count_sigma_hits_by_severity(db: AsyncSession, incident_id: str) -> dict[str, int]:
     from sqlalchemy import func
 
     result = await db.execute(

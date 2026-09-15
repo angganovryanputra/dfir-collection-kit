@@ -8,6 +8,7 @@ Payloads are signed with HMAC-SHA256 when a webhook_secret is provided.
 The signature is sent as the ``X-DFIR-Signature: sha256=<hex>`` header so
 receivers can verify authenticity (same scheme as GitHub webhooks).
 """
+
 from __future__ import annotations
 
 import hashlib

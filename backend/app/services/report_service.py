@@ -2,6 +2,7 @@
 Incident report generation service.
 Generates a standalone HTML report with all forensic findings.
 """
+
 from __future__ import annotations
 
 import html
@@ -22,9 +23,18 @@ _SEV_COLORS = {
 }
 
 _TACTIC_ORDER = [
-    "initial_access", "execution", "persistence", "privilege_escalation",
-    "defense_evasion", "credential_access", "discovery", "lateral_movement",
-    "collection", "command_and_control", "exfiltration", "impact",
+    "initial_access",
+    "execution",
+    "persistence",
+    "privilege_escalation",
+    "defense_evasion",
+    "credential_access",
+    "discovery",
+    "lateral_movement",
+    "collection",
+    "command_and_control",
+    "exfiltration",
+    "impact",
 ]
 
 
@@ -32,7 +42,7 @@ def _sev_badge(severity: str) -> str:
     color = _SEV_COLORS.get(severity.lower(), "#6b7280")
     return (
         f'<span style="background:{color};color:#fff;padding:2px 8px;'
-        f'border-radius:3px;font-size:11px;font-weight:bold;'
+        f"border-radius:3px;font-size:11px;font-weight:bold;"
         f'text-transform:uppercase">{html.escape(severity)}</span>'
     )
 
@@ -100,15 +110,15 @@ def _css() -> str:
 
 async def generate_incident_report(incident_id: str, db: AsyncSession) -> str:
     """Generate a full HTML incident report. Returns HTML string."""
-    from app.crud.incident import get_incident
+    from app.crud.analytics import list_attack_chains, list_ioc_matches, list_yara_matches
     from app.crud.chain_of_custody import list_entries
     from app.crud.evidence import list_items
+    from app.crud.incident import get_incident
     from app.crud.processing import (
+        count_sigma_hits_by_severity,
         get_latest_processing_job_by_incident_id,
         list_sigma_hits,
-        count_sigma_hits_by_severity,
     )
-    from app.crud.analytics import list_attack_chains, list_ioc_matches, list_yara_matches
 
     # Load data
     incident = await get_incident(db, incident_id)
@@ -170,7 +180,7 @@ async def generate_incident_report(incident_id: str, db: AsyncSession) -> str:
     parts.append("</div></div>")
 
     # Evidence Inventory
-    parts.append('<h2>2. Evidence Inventory</h2>')
+    parts.append("<h2>2. Evidence Inventory</h2>")
     if evidence_items:
         parts.append('<div class="panel"><table><thead><tr>')
         for col in ["Filename", "Type", "Size", "Status", "SHA-256 Hash", "Collected"]:
@@ -190,7 +200,7 @@ async def generate_incident_report(incident_id: str, db: AsyncSession) -> str:
         parts.append('<p class="not-started">No evidence items collected.</p>')
 
     # Sigma Detection
-    parts.append('<h2>3. Sigma Detection Results</h2>')
+    parts.append("<h2>3. Sigma Detection Results</h2>")
     if proc_job:
         total_hits = sum(sigma_counts.values())
         parts.append('<div class="stat-row">')
@@ -225,7 +235,7 @@ async def generate_incident_report(incident_id: str, db: AsyncSession) -> str:
             if len(sigma_hits) > 200:
                 parts.append(
                     f'<tr><td colspan="5" style="color:#6b7280;text-align:center">'
-                    f'{len(sigma_hits) - 200} more hits not shown</td></tr>'
+                    f"{len(sigma_hits) - 200} more hits not shown</td></tr>"
                 )
             parts.append("</tbody></table></div>")
         else:
@@ -234,7 +244,7 @@ async def generate_incident_report(incident_id: str, db: AsyncSession) -> str:
         parts.append('<p class="not-started">Forensics pipeline has not run yet.</p>')
 
     # Attack Chain Reconstruction
-    parts.append('<h2>4. ATT&amp;CK Chain Reconstruction</h2>')
+    parts.append("<h2>4. ATT&amp;CK Chain Reconstruction</h2>")
     if attack_chains:
         for chain in attack_chains:
             sorted_tactics = sorted(
@@ -246,7 +256,7 @@ async def generate_incident_report(incident_id: str, db: AsyncSession) -> str:
                 window = f" | Window: {_fmt_ts(chain.window_start)} – {_fmt_ts(chain.window_end)}"
             parts.append(
                 f'<div class="chain">'
-                f'<h3>{_sev_badge(chain.severity)} &nbsp;{chain.hit_count} hit(s){_h(window)}</h3>'
+                f"<h3>{_sev_badge(chain.severity)} &nbsp;{chain.hit_count} hit(s){_h(window)}</h3>"
             )
             if sorted_tactics:
                 parts.append("<div>")
@@ -266,7 +276,7 @@ async def generate_incident_report(incident_id: str, db: AsyncSession) -> str:
         parts.append('<p class="not-started">Pipeline not run yet.</p>')
 
     # IOC Matches
-    parts.append('<h2>5. IOC Matches</h2>')
+    parts.append("<h2>5. IOC Matches</h2>")
     if ioc_matches:
         parts.append('<div class="panel"><table><thead><tr>')
         for col in ["Type", "IOC Value", "Matched Field", "Source", "Event Time", "Severity"]:
@@ -288,7 +298,7 @@ async def generate_incident_report(incident_id: str, db: AsyncSession) -> str:
         parts.append('<p class="not-started">Pipeline not run yet.</p>')
 
     # YARA Matches
-    parts.append('<h2>6. YARA Scan Results</h2>')
+    parts.append("<h2>6. YARA Scan Results</h2>")
     if yara_matches:
         parts.append('<div class="panel"><table><thead><tr>')
         for col in ["Rule", "Matched File", "File Size", "SHA-256", "Severity"]:
@@ -310,7 +320,7 @@ async def generate_incident_report(incident_id: str, db: AsyncSession) -> str:
         parts.append('<p class="not-started">Pipeline not run yet.</p>')
 
     # Chain of Custody
-    parts.append('<h2>7. Chain of Custody</h2>')
+    parts.append("<h2>7. Chain of Custody</h2>")
     if custody_entries:
         parts.append('<div class="panel"><table><thead><tr>')
         for col in ["#", "Timestamp", "Action", "Actor", "Target"]:

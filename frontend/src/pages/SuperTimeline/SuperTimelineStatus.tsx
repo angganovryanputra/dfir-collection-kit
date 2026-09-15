@@ -37,7 +37,8 @@ export function SuperTimelineStatus({
         );
     }
 
-    if (statusError) {
+    const notBuiltYet = Boolean(statusError && /404|not found|No super timeline/i.test(statusError));
+    if (statusError && !notBuiltYet) {
         return (
             <TacticalPanel title="STATUS ERROR" status="offline">
                 <div className="font-mono text-sm text-destructive py-4">
@@ -47,7 +48,7 @@ export function SuperTimelineStatus({
         );
     }
 
-    if (!isDone && stStatus) {
+    if (!isDone) {
         return (
             <TacticalPanel
                 title="BUILD SUPER TIMELINE"
@@ -55,10 +56,11 @@ export function SuperTimelineStatus({
             >
                 <div className="space-y-5">
                     <p className="font-mono text-sm text-muted-foreground leading-relaxed">
-                        Merge timelines from all processed hosts into a unified
-                        cross-host timeline with lateral movement detection.
+                        {notBuiltYet
+                            ? "No Super Timeline snapshot exists yet. Build it after collection processing completes."
+                            : "Merge timelines from all processed hosts into a unified cross-host timeline with lateral movement detection."}
                     </p>
-                    {isFailed && stStatus.error_message && (
+                    {isFailed && stStatus?.error_message && (
                         <div className="p-3 border border-destructive/40 bg-destructive/10 text-destructive font-mono text-xs">
                             LAST BUILD FAILED: {stStatus.error_message}
                         </div>
@@ -73,7 +75,7 @@ export function SuperTimelineStatus({
                             <Loader2 className="w-5 h-5 animate-spin" />
                             <div>
                                 <div className="font-bold">
-                                    {stStatus.status === "PENDING"
+                                    {stStatus?.status === "PENDING"
                                         ? "QUEUED — WAITING FOR WORKER..."
                                         : "BUILDING SUPER TIMELINE..."}
                                 </div>
@@ -101,6 +103,13 @@ export function SuperTimelineStatus({
     if (isDone && stStatus) {
         return (
             <TacticalPanel title="SUPER TIMELINE STATUS" status="verified">
+                {stStatus.is_stale && (
+                    <p role="status" className="mb-3 text-sm font-mono text-yellow-400">New processing results are available. Rebuild to include them in this snapshot.</p>
+                )}
+                {!!stStatus.partial_job_count && (
+                    <p role="status" className="mb-3 text-sm font-mono text-yellow-400">{stStatus.partial_job_count} processing job(s) have incomplete coverage. Review processing stage results.</p>
+                )}
+                {buildError && <p role="alert" className="mb-3 text-sm text-destructive">{buildError}</p>}
                 <div className="flex items-center justify-between gap-4 flex-wrap">
                     <div className="flex items-center gap-3 flex-wrap">
                         <div className="flex items-center gap-2 px-3 py-2 border border-border/60 bg-secondary/40 rounded-sm font-mono text-xs">

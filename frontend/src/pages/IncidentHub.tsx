@@ -39,13 +39,20 @@ import { useAdaptivePolling } from "@/lib/useAdaptivePolling";
 import { StatusBadge } from "@/components/common/StatusBadge";
 import { SeverityBadge } from "@/components/common/SeverityBadge";
 import { EvidenceIntegrityBadge } from "@/components/common/EvidenceIntegrityBadge";
+import { useToast } from "@/components/ui/use-toast";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface IncidentOut {
     id: string;
+    title?: string | null;
+    description?: string | null;
     type: string;
     status: string;
+    severity?: string;
+    priority?: string;
+    assignee?: string | null;
+    tags?: string[];
     operator: string;
     target_endpoints: string[];
     collection_progress: number;
@@ -58,7 +65,7 @@ interface ProcessingJobOut {
     id: string;
     incident_id: string;
     job_id: string;
-    status: "PENDING" | "RUNNING" | "DONE" | "FAILED";
+    status: "PENDING" | "RUNNING" | "DONE" | "PARTIAL" | "FAILED";
     phase: string | null;
     started_at: string | null;
     completed_at: string | null;
@@ -100,6 +107,7 @@ interface SigmaHitListOut {
     severity_counts: Record<string, number>;
     items: unknown[];
 }
+interface IncidentTask { id: string; title: string; status: "OPEN" | "IN_PROGRESS" | "DONE" | "CANCELLED"; assignee?: string | null; }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -216,6 +224,7 @@ export default function IncidentHub() {
     const navigate = useNavigate();
     const { id: incidentId } = useParams<{ id: string }>();
     const queryClient = useQueryClient();
+    const { toast } = useToast();
     const [isClosing, setIsClosing] = useState(false);
     const [isRetrying, setIsRetrying] = useState(false);
     const [isStartingProc, setIsStartingProc] = useState(false);
@@ -242,7 +251,7 @@ export default function IncidentHub() {
     });
 
     const pollingEnabled = useMemo(() => {
-        return procJob?.status === "RUNNING" || superTimeline?.status === "BUILDING";
+        return procJob?.status === "PENDING" || procJob?.status === "RUNNING" || superTimeline?.status === "PENDING" || superTimeline?.status === "BUILDING";
     }, [procJob?.status, superTimeline?.status]);
 
     useAdaptivePolling({
@@ -269,13 +278,18 @@ export default function IncidentHub() {
     const { data: sigmaHits } = useQuery<SigmaHitListOut | null>({
         queryKey: ["sigma-hits-summary", incidentId],
         queryFn: () => apiGetOrNull<SigmaHitListOut>(`/processing/incident/${incidentId}/sigma-hits?limit=1`),
-        enabled: procJob?.status === "DONE",
+        enabled: procJob?.status === "DONE" || procJob?.status === "PARTIAL",
+    });
+    const { data: incidentTasks = [] } = useQuery<IncidentTask[]>({
+        queryKey: ["incident-tasks", incidentId],
+        queryFn: () => apiGet<IncidentTask[]>(`/platform/incidents/${incidentId}/tasks`),
+        enabled: !!incidentId,
     });
 
     // ── Derived ───────────────────────────────────────────────────────────────
     const evidenceFolder = evidenceFolders?.find(f => f.incident_id === incidentId);
     const collectionDone = incident?.status === "COLLECTION_COMPLETE" || incident?.status === "CLOSED";
-    const procDone = procJob?.status === "DONE";
+    const procDone = procJob?.status === "DONE" || procJob?.status === "PARTIAL";
     const stDone = superTimeline?.status === "DONE";
     const stActive = superTimeline?.status === "BUILDING" || superTimeline?.status === "PENDING";
     const procActive = procJob?.status === "RUNNING" || procJob?.status === "PENDING";
@@ -286,6 +300,9 @@ export default function IncidentHub() {
         try {
             await apiPatch(`/incidents/${incidentId}`, { status: "CLOSED" });
             queryClient.invalidateQueries({ queryKey: ["incident", incidentId] });
+            toast({ title: "Incident closed", description: "Evidence has been locked and the case is now read-only." });
+        } catch (err) {
+            toast({ title: "Unable to close incident", description: err instanceof Error ? err.message : "Closure gate rejected the request.", variant: "destructive" });
         } finally {
             setIsClosing(false);
         }
@@ -318,7 +335,7 @@ export default function IncidentHub() {
         },
         {
             label: "Process",
-            detail: procDone ? "COMPLETE" : procActive ? "IN PROGRESS" : collectionDone ? "READY" : "WAITING FOR COLLECTION",
+            detail: procJob?.status === "PARTIAL" ? "PARTIAL — REVIEW COVERAGE" : procDone ? "COMPLETE" : procActive ? "IN PROGRESS" : collectionDone ? "READY" : "WAITING FOR COLLECTION",
             state: procDone ? "done" : procActive ? "active" : collectionDone ? "ready" : "blocked",
             onClick: !procJob && collectionDone ? handleStartProcessing : () => navigate(`/incidents/${incidentId}/processing`),
         },
@@ -342,7 +359,7 @@ export default function IncidentHub() {
     return (
         <AppLayout
             title={incident.id}
-            subtitle={`${incident.type.replace(/_/g, " ")} INCIDENT`}
+            subtitle={`${incident.title || incident.type.replace(/_/g, " ")} · ${incident.type.replace(/_/g, " ")} INCIDENT`}
             headerActions={
                 <div className="flex items-center gap-2">
                     <Button variant="ghost" size="sm" onClick={() => navigate("/dashboard")} className="text-[10px] h-8 tracking-widest font-bold font-mono text-muted-foreground hover:text-foreground">
@@ -373,6 +390,8 @@ export default function IncidentHub() {
                     <div className="flex items-center gap-4 font-mono text-[9px] text-muted-foreground uppercase tracking-wider">
                         <span>OPERATOR: <span className="text-foreground font-bold">{incident.operator}</span></span>
                         <span>TARGETS: <span className="text-foreground font-bold">{incident.target_endpoints.length}</span></span>
+                        {incident.assignee && <span>ASSIGNEE: <span className="text-foreground font-bold">{incident.assignee}</span></span>}
+                        {incident.priority && <span className="text-primary font-bold">{incident.priority}</span>}
                     </div>
                 </div>
 
@@ -461,7 +480,7 @@ export default function IncidentHub() {
                             </div>
                         </TacticalPanel>
 
-                        <TacticalPanel title="THREAT_INDEX" className="lg:col-span-1">
+                            <TacticalPanel title="THREAT_INDEX" className="lg:col-span-1">
                             <div className="flex flex-col gap-3">
                                 {sigmaHits ? (
                                     <>
@@ -562,6 +581,15 @@ export default function IncidentHub() {
                                         <Button variant="ghost" size="sm" className="w-full justify-start text-[10px] font-bold gap-2 h-9 text-muted-foreground tracking-widest" onClick={() => navigate(`/chain-of-custody?incident_id=${incidentId}`)}>
                                             <FileText className="w-4 h-4" /> CHAIN OF CUSTODY
                                         </Button>
+                                        <Button variant="ghost" size="sm" className="w-full justify-start text-[10px] font-bold gap-2 h-9 text-muted-foreground tracking-widest" onClick={() => navigate(`/incidents/${incidentId}/hypotheses`)}>
+                                            <Brain className="w-4 h-4" /> HYPOTHESES
+                                        </Button>
+                                        <Button variant="ghost" size="sm" className="w-full justify-start text-[10px] font-bold gap-2 h-9 text-muted-foreground tracking-widest" onClick={() => navigate(`/incidents/${incidentId}/legal-holds`)}>
+                                            <Lock className="w-4 h-4" /> LEGAL HOLD
+                                        </Button>
+                                        <Button variant="ghost" size="sm" className="w-full justify-start text-[10px] font-bold gap-2 h-9 text-muted-foreground tracking-widest" onClick={() => navigate(`/incidents/${incidentId}/siem-export`)}>
+                                            <ExternalLink className="w-4 h-4" /> EXPORT / INTEGRATIONS
+                                        </Button>
                                     </div>
                                     
                                     <div className="pt-4 border-t border-border/20">
@@ -570,6 +598,12 @@ export default function IncidentHub() {
                                             <Printer className="w-3.5 h-3.5" /> GENERATE FINAL REPORT
                                         </Button>
                                     </div>
+                                </div>
+                            </TacticalPanel>
+                            <TacticalPanel title="INVESTIGATION_TASKS" className="lg:col-span-1">
+                                <div className="font-mono text-xs space-y-2">
+                                    <div className="flex justify-between"><span className="text-muted-foreground">OPEN / ACTIVE</span><span className="font-bold text-primary">{incidentTasks.filter(t => t.status !== "DONE" && t.status !== "CANCELLED").length}</span></div>
+                                    <Button variant="ghost" size="sm" className="w-full h-8 text-[9px] tracking-widest" onClick={() => navigate(`/incidents/${incidentId}/tasks`)}>OPEN TASK WORKSPACE</Button>
                                 </div>
                             </TacticalPanel>
 

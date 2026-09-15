@@ -14,4 +14,6 @@ class Collector(Base):
     name: Mapped[str] = mapped_column(String, index=True)
     endpoint: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String)
-    last_heartbeat: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_heartbeat: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

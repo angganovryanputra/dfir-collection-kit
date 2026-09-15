@@ -5,9 +5,9 @@ from app.api.v1.endpoints import (
     agent_commands,
     agents,
     ai_analysis,
+    audit_logs,
     auth,
     case_management,
-    audit_logs,
     chain_of_custody,
     collectors,
     devices,
@@ -32,7 +32,9 @@ api_router.include_router(incidents.router, prefix="/incidents", tags=["incident
 api_router.include_router(devices.router, prefix="/devices", tags=["devices"])
 api_router.include_router(templates.router, prefix="/templates", tags=["templates"])
 api_router.include_router(evidence.router, prefix="/evidence", tags=["evidence"])
-api_router.include_router(chain_of_custody.router, prefix="/chain-of-custody", tags=["chain-of-custody"])
+api_router.include_router(
+    chain_of_custody.router, prefix="/chain-of-custody", tags=["chain-of-custody"]
+)
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(collectors.router, prefix="/collectors", tags=["collectors"])
 api_router.include_router(settings.router, prefix="/settings", tags=["settings"])

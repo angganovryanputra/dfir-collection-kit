@@ -63,7 +63,9 @@ async def client(engine, clear_db) -> AsyncGenerator[AsyncClient, None]:
     async with AsyncClient(
         # Secure session cookies must be exercised over HTTPS, just as they are
         # behind the production reverse proxy.
-        transport=ASGITransport(app=app), base_url="https://test", follow_redirects=True
+        transport=ASGITransport(app=app),
+        base_url="https://test",
+        follow_redirects=True,
     ) as async_client:
         yield async_client
     app.dependency_overrides.clear()

@@ -44,12 +44,13 @@ interface ProcessingJobOut {
     id: string;
     incident_id: string;
     job_id: string;
-    status: "PENDING" | "RUNNING" | "DONE" | "FAILED";
+    status: "PENDING" | "RUNNING" | "DONE" | "PARTIAL" | "FAILED";
     phase: string | null;
     started_at: string | null;
     completed_at: string | null;
     error_message: string | null;
     created_at: string;
+    stage_results?: Record<string, { status: string; reason?: string }>;
 }
 
 const PHASES = [
@@ -82,14 +83,22 @@ const PHASES = [
 function phaseStatus(
     phase: ProcessingJobOut["phase"],
     jobStatus: ProcessingJobOut["status"],
-    phaseId: string
-): "pending" | "active" | "complete" | "failed" {
+    phaseId: string,
+    reports?: ProcessingJobOut["stage_results"],
+): "pending" | "active" | "complete" | "failed" | "partial" | "skipped" {
     const order = ["parsing", "sigma", "timeline", "analytics"];
     const current = phase ? order.indexOf(phase) : -1;
     const idx = order.indexOf(phaseId);
 
     if (jobStatus === "FAILED" && current === idx) return "failed";
-    if (jobStatus === "DONE") return "complete";
+    const prefix = phaseId === "parsing" ? "parser:" : phaseId === "timeline" ? "timeline" : `${phaseId}:`;
+    const statuses = Object.entries(reports ?? {}).filter(([key]) => key.startsWith(prefix)).map(([, report]) => report.status);
+    if (statuses.includes("FAILED")) return "failed";
+    if (jobStatus !== "RUNNING" || current > idx) {
+        if (statuses.some(status => status === "NOT_CONFIGURED" || status === "PARTIAL")) return "partial";
+        if (statuses.length && statuses.every(status => status === "SKIPPED")) return "skipped";
+    }
+    if (jobStatus === "DONE" || jobStatus === "PARTIAL") return "complete";
     if (current > idx) return "complete";
     if (current === idx && jobStatus === "RUNNING") return "active";
     return "pending";
@@ -118,7 +127,7 @@ export default function ProcessingStatus() {
     });
 
     const isRunning = job?.status === "RUNNING" || job?.status === "PENDING";
-    const isDone = job?.status === "DONE";
+    const isDone = job?.status === "DONE" || job?.status === "PARTIAL";
     const isFailed = job?.status === "FAILED";
 
     useAdaptivePolling({
@@ -193,7 +202,7 @@ export default function ProcessingStatus() {
         setIsStarting(true);
         setStartError(null);
         try {
-            await apiPost(`/processing/incident/${incidentId}/trigger`, {});
+            await apiPost(`/processing/incident/${incidentId}/trigger${isDone ? "?force=true" : ""}`, {});
             await refetch();
         } catch (err) {
             const msg = err instanceof Error ? err.message : "Failed to start pipeline";
@@ -225,6 +234,23 @@ export default function ProcessingStatus() {
             }
         >
             <div className="p-6 flex flex-col gap-6 max-w-3xl mx-auto w-full">
+                {isDone && (role === "admin" || role === "operator") && (
+                    <Button variant="outline" disabled={isStarting} onClick={handleStartProcessing}>
+                        {isStarting ? "QUEUEING…" : "REPROCESS EVIDENCE"}
+                    </Button>
+                )}
+                {job?.stage_results && (
+                    <TacticalPanel title="PROCESSING COVERAGE" status={job.status === "DONE" ? "verified" : "warning"}>
+                        <p className="text-xs text-muted-foreground mb-3">Review parser and analytics coverage before treating a timeline as complete.</p>
+                        <div className="space-y-1">
+                            {Object.entries(job.stage_results).map(([name, result]) => (
+                                <div key={name} className="font-mono text-[11px] border-b border-border/30 py-1">
+                                    {name}: {result.status}{result.reason ? ` — ${result.reason}` : ""}
+                                </div>
+                            ))}
+                        </div>
+                    </TacticalPanel>
+                )}
                 {/* Pre-flight Check Panel — shown to admin/operator when tools are missing */}
                 {preflight && !preflight.ready && preflight.warnings.length > 0 && (
                     <TacticalPanel title="PRE-FLIGHT CHECK" status="warning">
@@ -363,7 +389,7 @@ export default function ProcessingStatus() {
                     <div className="space-y-4">
                         {PHASES.map((p) => {
                             const st = job
-                                ? phaseStatus(job.phase, job.status, p.id)
+                                ? phaseStatus(job.phase, job.status, p.id, job.stage_results)
                                 : "pending";
                             const toolMissing = (() => {
                                 if (!preflight) return false;
@@ -390,8 +416,8 @@ export default function ProcessingStatus() {
                                             <CheckCircle2 className="w-4 h-4 text-primary" />
                                         ) : st === "active" ? (
                                             <Activity className="w-4 h-4 text-primary animate-pulse" />
-                                        ) : st === "failed" ? (
-                                            <AlertTriangle className="w-4 h-4 text-destructive" />
+                                        ) : st === "failed" || st === "partial" ? (
+                                            <AlertTriangle className={`w-4 h-4 ${st === "partial" ? "text-yellow-400" : "text-destructive"}`} />
                                         ) : (
                                             <div className="w-4 h-4 rounded-full border border-muted-foreground/40" />
                                         )}
@@ -406,7 +432,7 @@ export default function ProcessingStatus() {
                                         {toolMissing && (
                                             <div className="flex items-center gap-1 mt-1 text-yellow-500/80 text-xs">
                                                 <Info className="w-3 h-3 shrink-0" />
-                                                <span>{p.toolName} not configured — phase will complete with 0 results</span>
+                                                <span>{p.toolName} not configured — coverage is incomplete; zero results do not mean no threats</span>
                                             </div>
                                         )}
                                     </div>

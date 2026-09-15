@@ -174,9 +174,11 @@ export function SuperTimelineFilters({
 
                 <div className="flex items-center gap-2 bg-secondary/20 px-2 py-1 rounded-sm border border-border/40">
                     <CalendarRange className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                    <span className="font-mono text-[10px] text-muted-foreground">UTC</span>
                     <input
                         type="datetime-local"
                         value={dateFrom}
+                        aria-label="Start time (UTC)"
                         onChange={(e) => setDateFrom(e.target.value)}
                         className="h-6 px-1 bg-transparent font-mono text-[10px] focus:outline-none text-foreground w-[150px]"
                     />
@@ -184,6 +186,7 @@ export function SuperTimelineFilters({
                     <input
                         type="datetime-local"
                         value={dateTo}
+                        aria-label="End time (UTC)"
                         onChange={(e) => setDateTo(e.target.value)}
                         className="h-6 px-1 bg-transparent font-mono text-[10px] focus:outline-none text-foreground w-[150px]"
                     />

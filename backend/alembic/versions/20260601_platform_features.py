@@ -8,8 +8,10 @@ Revision ID: 20260601_platform_features
 Revises: 20260503_device_datetime_fix
 Create Date: 2026-06-01 00:00:00.000000
 """
+
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
 from alembic import op
 
 revision = "20260601_platform_features"
@@ -173,9 +175,7 @@ def downgrade() -> None:
     op.drop_table("legal_holds")
     op.drop_index("ix_threat_hunt_queries_name", table_name="threat_hunt_queries")
     op.drop_table("threat_hunt_queries")
-    op.drop_index(
-        "ix_scheduled_collections_incident_id", table_name="scheduled_collections"
-    )
+    op.drop_index("ix_scheduled_collections_incident_id", table_name="scheduled_collections")
     op.drop_table("scheduled_collections")
     op.drop_index("ix_attack_hypotheses_incident_id", table_name="attack_hypotheses")
     op.drop_table("attack_hypotheses")

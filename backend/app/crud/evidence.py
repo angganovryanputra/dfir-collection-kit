@@ -1,9 +1,8 @@
-from sqlalchemy import select, update, func
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.evidence import EvidenceFolder, EvidenceItem
 from app.schemas.evidence import EvidenceFolderCreate, EvidenceItemCreate
-
 
 
 async def list_folders(
@@ -36,7 +35,7 @@ async def list_items(
     if incident_id:
         stmt = stmt.where(EvidenceItem.incident_id == incident_id)
         count_stmt = count_stmt.where(EvidenceItem.incident_id == incident_id)
-    
+
     total_result = await db.execute(count_stmt)
     total = total_result.scalar_one()
 
@@ -72,7 +71,5 @@ async def lock_evidence_for_incident(db: AsyncSession, incident_id: str) -> None
         .values(status="LOCKED")
     )
     await db.execute(
-        update(EvidenceItem)
-        .where(EvidenceItem.incident_id == incident_id)
-        .values(status="LOCKED")
+        update(EvidenceItem).where(EvidenceItem.incident_id == incident_id).values(status="LOCKED")
     )

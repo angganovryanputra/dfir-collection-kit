@@ -1,9 +1,9 @@
-from datetime import datetime, timedelta, timezone
-from typing import Optional
 import hashlib
 import hmac
 import threading
 import time
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 from uuid import uuid4
 
 import bcrypt
@@ -101,7 +101,9 @@ def create_access_token(
     expires_delta: Optional[timedelta] = None,
     claims: dict | None = None,
 ) -> tuple[str, datetime]:
-    expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
+    expire = datetime.now(timezone.utc) + (
+        expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
     jti = uuid4().hex  # unique per-token ID for revocation tracking
     to_encode: dict = {"sub": subject, "exp": expire, "jti": jti}
     if claims:

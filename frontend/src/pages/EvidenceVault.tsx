@@ -317,9 +317,9 @@ export default function EvidenceVault() {
       title="EVIDENCE VAULT" 
       subtitle="CRYPTOGRAPHIC STORAGE SECTOR"
     >
-      <div className="flex h-full overflow-hidden">
+      <div className="flex flex-col md:flex-row h-full min-h-[700px] overflow-hidden">
         {/* Sidebar - Case Folders */}
-        <aside className="w-72 border-r border-border/40 bg-card/30 flex flex-col shrink-0">
+        <aside className="w-full max-h-36 md:max-h-none md:w-72 border-r border-border/40 bg-card/30 flex flex-col shrink-0">
           <div className="p-4 border-b border-border/40 flex items-center justify-between">
             <h2 className="font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-2">
               <Database className="w-3.5 h-3.5" /> Case Sectors
@@ -369,7 +369,7 @@ export default function EvidenceVault() {
 
         {/* Main View - Artifact List */}
         <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-background/40">
-          <header className="p-6 border-b border-border/40 flex items-center justify-between gap-6 shrink-0 bg-card/20">
+          <header className="p-4 md:p-6 border-b border-border/40 flex flex-wrap items-center justify-between gap-4 shrink-0 bg-card/20">
             <div className="flex items-center gap-4 flex-1">
               <div className="p-2 bg-primary/10 rounded-sm border border-primary/20">
                 <FolderLock className="w-5 h-5 text-primary" />
@@ -390,7 +390,7 @@ export default function EvidenceVault() {
               </div>
             </div>
             
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <div className="relative w-64">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground/60" />
                 <input

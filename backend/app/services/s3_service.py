@@ -4,9 +4,9 @@ import os
 from typing import Optional
 
 import aioboto3
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services.system_settings_service import get_runtime_settings
-from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,9 @@ _MULTIPART_PART_SIZE = 8 * 1024 * 1024
 
 
 class S3Service:
-    def __init__(self, endpoint_url: str, access_key: str, secret_key: str, bucket: str, region: str):
+    def __init__(
+        self, endpoint_url: str, access_key: str, secret_key: str, bucket: str, region: str
+    ):
         self.endpoint_url = endpoint_url
         self.access_key = access_key
         self.secret_key = secret_key
@@ -47,7 +49,9 @@ class S3Service:
                 logger.error("Error generating presigned upload URL: %s", e)
                 raise
 
-    async def generate_presigned_download_url(self, object_name: str, expiration: int = 3600) -> str:
+    async def generate_presigned_download_url(
+        self, object_name: str, expiration: int = 3600
+    ) -> str:
         async with self._client() as s3_client:
             try:
                 response = await s3_client.generate_presigned_url(

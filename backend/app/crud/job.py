@@ -5,7 +5,6 @@ from app.models.incident import Incident
 from app.models.job import Job
 from app.schemas.job import JobCreate
 
-
 # Status values are written by agents, S3 ingestion, and demo fixtures.  Keep
 # their accepted terminal forms in one place so a completed acquisition cannot
 # be mistaken for an active job by a later workflow stage.
@@ -55,7 +54,9 @@ async def sync_incident_collection_status(db: AsyncSession, incident_id: str) ->
     return incident
 
 
-async def create_job(db: AsyncSession, payload: JobCreate, modules: list[dict], output_path: str) -> Job:
+async def create_job(
+    db: AsyncSession, payload: JobCreate, modules: list[dict], output_path: str
+) -> Job:
     job = Job(
         id=payload.id,
         incident_id=payload.incident_id,
@@ -75,7 +76,9 @@ async def get_job(db: AsyncSession, job_id: str) -> Job | None:
 
 
 async def list_jobs_for_incident(db: AsyncSession, incident_id: str) -> list[Job]:
-    result = await db.execute(select(Job).where(Job.incident_id == incident_id).order_by(Job.created_at.desc()))
+    result = await db.execute(
+        select(Job).where(Job.incident_id == incident_id).order_by(Job.created_at.desc())
+    )
     return list(result.scalars().all())
 
 
@@ -97,7 +100,9 @@ async def get_next_job_for_agent(db: AsyncSession, agent_id: str) -> Job | None:
     return job
 
 
-async def update_job_status(db: AsyncSession, job_id: str, status: str, message: str | None = None) -> Job | None:
+async def update_job_status(
+    db: AsyncSession, job_id: str, status: str, message: str | None = None
+) -> Job | None:
     result = await db.execute(select(Job).where(Job.id == job_id))
     job = result.scalar_one_or_none()
     if not job:
@@ -111,8 +116,8 @@ async def update_job_status(db: AsyncSession, job_id: str, status: str, message:
 
 async def count_active_jobs(db: AsyncSession) -> int:
     result = await db.execute(
-        select(func.count()).select_from(Job).where(
-            func.lower(Job.status).not_in(TERMINAL_JOB_STATUSES)
-        )
+        select(func.count())
+        .select_from(Job)
+        .where(func.lower(Job.status).not_in(TERMINAL_JOB_STATUSES))
     )
     return int(result.scalar_one())

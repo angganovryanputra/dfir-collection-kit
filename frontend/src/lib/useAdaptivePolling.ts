@@ -3,8 +3,9 @@ import { useEffect, useRef } from "react";
 type AdaptivePollingOptions = {
   enabled: boolean;
   onPoll: () => Promise<string | undefined>;
-  initialInterval: number;
-  maxInterval: number;
+  initialInterval?: number;
+  maxInterval?: number;
+  backoffFactor?: number;
 };
 
 /**
@@ -15,8 +16,9 @@ type AdaptivePollingOptions = {
 export function useAdaptivePolling({
   enabled,
   onPoll,
-  initialInterval,
-  maxInterval,
+  initialInterval = 5_000,
+  maxInterval = 30_000,
+  backoffFactor = 2,
 }: AdaptivePollingOptions): void {
   const onPollRef = useRef(onPoll);
 
@@ -30,8 +32,10 @@ export function useAdaptivePolling({
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let previousFingerprint: string | undefined;
-    let interval = Math.max(1_000, initialInterval);
-    const maximum = Math.max(interval, maxInterval);
+    const initial = Number.isFinite(initialInterval) ? Math.max(1_000, initialInterval) : 5_000;
+    let interval = initial;
+    const maximum = Number.isFinite(maxInterval) ? Math.max(initial, maxInterval) : 30_000;
+    const factor = Number.isFinite(backoffFactor) ? Math.max(1, backoffFactor) : 2;
 
     const schedule = () => {
       if (!cancelled) timer = setTimeout(poll, interval);
@@ -42,13 +46,13 @@ export function useAdaptivePolling({
         const fingerprint = await onPollRef.current();
         if (cancelled) return;
         interval = fingerprint === previousFingerprint
-          ? Math.min(maximum, interval * 2)
-          : Math.max(1_000, initialInterval);
+          ? Math.min(maximum, interval * factor)
+          : initial;
         previousFingerprint = fingerprint;
       } catch {
         if (cancelled) return;
         // A temporary failure should reduce pressure on an unavailable API.
-        interval = Math.min(maximum, interval * 2);
+        interval = Math.min(maximum, interval * factor);
       }
       schedule();
     };
@@ -58,5 +62,5 @@ export function useAdaptivePolling({
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [enabled, initialInterval, maxInterval]);
+  }, [enabled, initialInterval, maxInterval, backoffFactor]);
 }

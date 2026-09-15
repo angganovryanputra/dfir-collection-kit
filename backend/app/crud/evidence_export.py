@@ -5,5 +5,7 @@ def build_export_url(incident_id: str | None, evidence_id: str | None) -> Eviden
     if evidence_id:
         return EvidenceExportResponse(download_url=f"/api/v1/evidence/exports/{evidence_id}")
     if incident_id:
-        return EvidenceExportResponse(download_url=f"/api/v1/evidence/exports/incident/{incident_id}")
+        return EvidenceExportResponse(
+            download_url=f"/api/v1/evidence/exports/incident/{incident_id}"
+        )
     return EvidenceExportResponse(download_url="/api/v1/evidence/exports")

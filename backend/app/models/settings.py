@@ -46,5 +46,9 @@ class SystemSettings(Base):
     ai_api_key: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     ai_api_url: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
     google_oauth_client_id: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
-    google_oauth_client_secret: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
-    google_oauth_refresh_token: Mapped[str | None] = mapped_column(String, nullable=True, default=None)
+    google_oauth_client_secret: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )
+    google_oauth_refresh_token: Mapped[str | None] = mapped_column(
+        String, nullable=True, default=None
+    )

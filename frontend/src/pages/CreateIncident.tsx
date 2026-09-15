@@ -36,6 +36,10 @@ export default function CreateIncident() {
   const template = location.state?.template as TemplateData | undefined;
 
   const [incidentType, setIncidentType] = useState<IncidentType | null>(null);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [severity, setSeverity] = useState("MEDIUM");
+  const [priority, setPriority] = useState("P2");
   const [endpoints, setEndpoints] = useState<string[]>([]);
   const [newEndpoint, setNewEndpoint] = useState("");
   const [operatorName, setOperatorName] = useState("");
@@ -48,6 +52,8 @@ export default function CreateIncident() {
   useEffect(() => {
     if (template) {
       setIncidentType(template.incidentType);
+      setTitle(template.name);
+      setDescription(template.description || "");
       setEndpoints([...template.defaultEndpoints]);
       setCustomChecklist([...template.preflightChecklist]);
     }
@@ -90,6 +96,10 @@ export default function CreateIncident() {
       await apiPost("/incidents", {
         id: incidentId,
         type: incidentType,
+        title: title.trim() || null,
+        description: description.trim() || null,
+        severity,
+        priority,
         status: "PENDING",
         template_id: template?.id ?? null,
         target_endpoints: endpoints,
@@ -173,6 +183,33 @@ export default function CreateIncident() {
                 <div className="font-mono text-sm text-foreground">
                   {new Date().toISOString()}
                 </div>
+              </div>
+            </div>
+          </TacticalPanel>
+
+          <TacticalPanel title="CASE TRIAGE">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <FormLabel>Case title</FormLabel>
+                <Input value={title} onChange={e => setTitle(e.target.value)} placeholder="e.g. Suspected ransomware on finance workstation" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <FormLabel>Severity</FormLabel>
+                  <select value={severity} onChange={e => setSeverity(e.target.value)} className="h-9 w-full rounded-sm border border-input bg-background px-2 text-xs font-mono">
+                    {['CRITICAL','HIGH','MEDIUM','LOW','INFORMATIONAL'].map(v => <option key={v}>{v}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <FormLabel>Priority</FormLabel>
+                  <select value={priority} onChange={e => setPriority(e.target.value)} className="h-9 w-full rounded-sm border border-input bg-background px-2 text-xs font-mono">
+                    {['P0','P1','P2','P3'].map(v => <option key={v}>{v}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="md:col-span-2">
+                <FormLabel>Description</FormLabel>
+                <textarea value={description} onChange={e => setDescription(e.target.value)} rows={3} placeholder="Initial scope, impact, and triage context" className="w-full rounded-sm border border-input bg-background p-2 text-xs font-mono" />
               </div>
             </div>
           </TacticalPanel>

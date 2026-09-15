@@ -6,9 +6,10 @@ Create Date: 2026-04-01 00:00:00.000000
 """
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy import text
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "20260401_processing_pipeline"
 down_revision = "20260303_concurrency_limit"

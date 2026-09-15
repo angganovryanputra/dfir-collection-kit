@@ -99,6 +99,26 @@ async def test_viewer_denied_for_write_endpoint(client, db_session):
     assert result.scalar_one_or_none() is not None
 
 
+async def test_viewer_cannot_prepare_evidence_export(client, db_session):
+    user = build_user("VIEWER_EXPORT", "viewer", "secret")
+    db_session.add(user)
+    await db_session.commit()
+    login = await client.post("/api/v1/auth/login", json={"username": "VIEWER_EXPORT", "password": "secret"})
+    assert login.status_code == 200
+    response = await client.post("/api/v1/evidence/exports", json={"incident_id": "INC-TEST-EXPORT"})
+    assert response.status_code == 403
+
+
+async def test_viewer_cannot_trigger_outbound_threat_enrichment(client, db_session):
+    user = build_user("VIEWER_TI", "viewer", "secret")
+    db_session.add(user)
+    await db_session.commit()
+    login = await client.post("/api/v1/auth/login", json={"username": "VIEWER_TI", "password": "secret"})
+    assert login.status_code == 200
+    response = await client.post("/api/v1/threat-intel/enrich", json={"ioc_type": "domain", "ioc_value": "example.com"})
+    assert response.status_code == 403
+
+
 async def test_incident_creation_records_audit(client, db_session):
     user = build_user("OPERATOR", "operator", "secret")
     db_session.add(user)

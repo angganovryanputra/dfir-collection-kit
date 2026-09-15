@@ -1,4 +1,5 @@
 """Convert parsed EZ Tools CSVs, Sigma hits, and Linux text logs to Timesketch JSONL format."""
+
 from __future__ import annotations
 
 import asyncio
@@ -8,6 +9,9 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+
+from app.services.enrichment_service import enrich_event
+from app.services.timeline_schema import UnifiedEvent, serialise_event
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +24,15 @@ _SOURCE_MAPS: dict[str, dict] = {
         "source": "Windows Event Log",
         "source_short": "EVTX",
         "message_cols": ["MapDescription", "PayloadData1", "Description"],
-        "extra_cols": ["EventId", "Channel", "Computer", "UserName", "EventRecordId",
-                       "PayloadData2", "PayloadData3"],
+        "extra_cols": [
+            "EventId",
+            "Channel",
+            "Computer",
+            "UserName",
+            "EventRecordId",
+            "PayloadData2",
+            "PayloadData3",
+        ],
     },
     "mft": {
         "timestamp_cols": ["Created0x10", "LastModified0x10", "SourceCreated"],
@@ -29,8 +40,14 @@ _SOURCE_MAPS: dict[str, dict] = {
         "source": "NTFS Master File Table",
         "source_short": "MFT",
         "message_cols": ["FullPath", "FileName"],
-        "extra_cols": ["FileSize", "IsDirectory", "LastModified0x10", "LastAccess0x10",
-                       "LastAttrChange0x10", "EntryNumber"],
+        "extra_cols": [
+            "FileSize",
+            "IsDirectory",
+            "LastModified0x10",
+            "LastAccess0x10",
+            "LastAttrChange0x10",
+            "EntryNumber",
+        ],
     },
     "usnjrnl": {
         "timestamp_cols": ["UpdateTimestamp", "TimeStamp"],
@@ -98,7 +115,7 @@ _SOURCE_MAPS: dict[str, dict] = {
         "extra_cols": ["RunCount", "GUID"],
     },
     "firewall_rules": {
-        "timestamp_cols": [],   # no timestamps — static rules
+        "timestamp_cols": [],  # no timestamps — static rules
         "timestamp_desc": "Firewall Rule",
         "source": "Windows Firewall Rules",
         "source_short": "FWRULE",
@@ -113,8 +130,12 @@ _SOURCE_MAPS: dict[str, dict] = {
         "source_short": "SRUM",
         "message_cols": ["ExeInfo", "AppId"],
         "extra_cols": [
-            "FaceTime", "BackgroundBytesRead", "BackgroundBytesWritten",
-            "ForegroundBytesRead", "ForegroundBytesWritten", "UserId",
+            "FaceTime",
+            "BackgroundBytesRead",
+            "BackgroundBytesWritten",
+            "ForegroundBytesRead",
+            "ForegroundBytesWritten",
+            "UserId",
         ],
     },
     # AppCompatCacheParser CSV output (parsed/shimcache/)
@@ -246,8 +267,18 @@ _JOURNAL_RE = re.compile(
 _AUDIT_TS_RE = re.compile(r"msg=audit\((?P<epoch>\d+)\.\d+:\d+\)")
 
 _MONTH_MAP = {
-    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
-    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+    "Jan": 1,
+    "Feb": 2,
+    "Mar": 3,
+    "Apr": 4,
+    "May": 5,
+    "Jun": 6,
+    "Jul": 7,
+    "Aug": 8,
+    "Sep": 9,
+    "Oct": 10,
+    "Nov": 11,
+    "Dec": 12,
 }
 
 
@@ -258,13 +289,17 @@ def _syslog_ts_to_iso(month: str, day: str, time_str: str) -> str | None:
         if not m:
             return None
         year = datetime.now(timezone.utc).year
-        dt = datetime(year, m, int(day), *[int(p) for p in time_str.split(":")], tzinfo=timezone.utc)
+        dt = datetime(
+            year, m, int(day), *[int(p) for p in time_str.split(":")], tzinfo=timezone.utc
+        )
         return dt.isoformat()
     except (ValueError, TypeError):
         return None
 
 
-def _linux_syslog_to_entries(log_path: Path, incident_id: str, source_label: str, source_short: str) -> list[dict]:
+def _linux_syslog_to_entries(
+    log_path: Path, incident_id: str, source_label: str, source_short: str
+) -> list[dict]:
     """Parse syslog/auth.log text file into timeline entries."""
     entries: list[dict] = []
     try:
@@ -279,17 +314,19 @@ def _linux_syslog_to_entries(log_path: Path, incident_id: str, source_label: str
                 if m:
                     ts_iso = _parse_timestamp(m.group("timestamp"))
                     if ts_iso:
-                        entries.append({
-                            "message": m.group("message"),
-                            "datetime": ts_iso,
-                            "timestamp_desc": source_label,
-                            "source": source_label,
-                            "source_short": source_short,
-                            "incident_id": incident_id,
-                            "hostname": m.group("host"),
-                            "process": m.group("process"),
-                            "pid": m.group("pid") or "",
-                        })
+                        entries.append(
+                            {
+                                "message": m.group("message"),
+                                "datetime": ts_iso,
+                                "timestamp_desc": source_label,
+                                "source": source_label,
+                                "source_short": source_short,
+                                "incident_id": incident_id,
+                                "hostname": m.group("host"),
+                                "process": m.group("process"),
+                                "pid": m.group("pid") or "",
+                            }
+                        )
                     continue
 
                 # Try classic syslog format
@@ -297,17 +334,19 @@ def _linux_syslog_to_entries(log_path: Path, incident_id: str, source_label: str
                 if m:
                     ts_iso = _syslog_ts_to_iso(m.group("month"), m.group("day"), m.group("time"))
                     if ts_iso:
-                        entries.append({
-                            "message": m.group("message"),
-                            "datetime": ts_iso,
-                            "timestamp_desc": source_label,
-                            "source": source_label,
-                            "source_short": source_short,
-                            "incident_id": incident_id,
-                            "hostname": m.group("host"),
-                            "process": m.group("process"),
-                            "pid": m.group("pid") or "",
-                        })
+                        entries.append(
+                            {
+                                "message": m.group("message"),
+                                "datetime": ts_iso,
+                                "timestamp_desc": source_label,
+                                "source": source_label,
+                                "source_short": source_short,
+                                "incident_id": incident_id,
+                                "hostname": m.group("host"),
+                                "process": m.group("process"),
+                                "pid": m.group("pid") or "",
+                            }
+                        )
     except (OSError, UnicodeDecodeError) as exc:
         logger.warning("Failed to parse %s: %s", log_path.name, exc)
     return entries
@@ -345,22 +384,26 @@ def _linux_audit_to_entries(log_path: Path, incident_id: str) -> list[dict]:
                     if fm:
                         msg_parts.append(f"{field}={fm.group(1)}")
 
-                entries.append({
-                    "message": " | ".join(msg_parts),
-                    "datetime": ts_iso,
-                    "timestamp_desc": "Audit Event",
-                    "source": "Linux Audit Log",
-                    "source_short": "AUDIT",
-                    "incident_id": incident_id,
-                    "audit_type": audit_type,
-                    "raw": line[:300],
-                })
+                entries.append(
+                    {
+                        "message": " | ".join(msg_parts),
+                        "datetime": ts_iso,
+                        "timestamp_desc": "Audit Event",
+                        "source": "Linux Audit Log",
+                        "source_short": "AUDIT",
+                        "incident_id": incident_id,
+                        "audit_type": audit_type,
+                        "raw": line[:300],
+                    }
+                )
     except (OSError, UnicodeDecodeError) as exc:
         logger.warning("Failed to parse audit.log %s: %s", log_path.name, exc)
     return entries
 
 
-def _linux_bash_history_to_entries(history_path: Path, incident_id: str, shell: str = "bash") -> list[dict]:
+def _linux_bash_history_to_entries(
+    history_path: Path, incident_id: str, shell: str = "bash"
+) -> list[dict]:
     """Parse bash/zsh history files into timeline entries.
 
     Supports both plain (no timestamps) and extended_history format
@@ -392,16 +435,18 @@ def _linux_bash_history_to_entries(history_path: Path, incident_id: str, shell: 
                 if not cmd:
                     continue
 
-                entries.append({
-                    "message": cmd,
-                    "datetime": ts_iso,
-                    "timestamp_desc": f"{shell.capitalize()} Command",
-                    "source": f"Linux {shell.capitalize()} History",
-                    "source_short": shell.upper(),
-                    "incident_id": incident_id,
-                    "shell": shell,
-                    "user": history_path.parts[-2] if len(history_path.parts) >= 2 else "",
-                })
+                entries.append(
+                    {
+                        "message": cmd,
+                        "datetime": ts_iso,
+                        "timestamp_desc": f"{shell.capitalize()} Command",
+                        "source": f"Linux {shell.capitalize()} History",
+                        "source_short": shell.upper(),
+                        "incident_id": incident_id,
+                        "shell": shell,
+                        "user": history_path.parts[-2] if len(history_path.parts) >= 2 else "",
+                    }
+                )
     except (OSError, UnicodeDecodeError) as exc:
         logger.warning("Failed to parse %s history %s: %s", shell, history_path.name, exc)
     return entries
@@ -428,7 +473,9 @@ def _linux_wtmp_to_entries(wtmp_path: Path, incident_id: str) -> list[dict]:
                 try:
                     mon = _MONTH_MAP.get(m.group("month"), 1)
                     dt = datetime(
-                        int(m.group("year")), mon, int(m.group("mday")),
+                        int(m.group("year")),
+                        mon,
+                        int(m.group("mday")),
                         *[int(p) for p in m.group("time").split(":")],
                         tzinfo=timezone.utc,
                     )
@@ -440,18 +487,20 @@ def _linux_wtmp_to_entries(wtmp_path: Path, incident_id: str) -> list[dict]:
                     source_short = "WTMP_SYS"
                 else:
                     source_short = "WTMP"
-                entries.append({
-                    "message": f"{user} logged in from {m.group('host')} on {m.group('tty')}",
-                    "datetime": ts_iso,
-                    "timestamp_desc": "Login Event",
-                    "source": "Linux wtmp (last)",
-                    "source_short": source_short,
-                    "incident_id": incident_id,
-                    "username": user,
-                    "tty": m.group("tty"),
-                    "remote_host": m.group("host"),
-                    "status": (m.group("status") or "").strip(),
-                })
+                entries.append(
+                    {
+                        "message": f"{user} logged in from {m.group('host')} on {m.group('tty')}",
+                        "datetime": ts_iso,
+                        "timestamp_desc": "Login Event",
+                        "source": "Linux wtmp (last)",
+                        "source_short": source_short,
+                        "incident_id": incident_id,
+                        "username": user,
+                        "tty": m.group("tty"),
+                        "remote_host": m.group("host"),
+                        "status": (m.group("status") or "").strip(),
+                    }
+                )
     except (OSError, UnicodeDecodeError) as exc:
         logger.warning("Failed to parse wtmp %s: %s", wtmp_path.name, exc)
     return entries
@@ -478,15 +527,17 @@ def _windows_text_artifacts_to_entries(extracted_dir: Path, incident_id: str) ->
                         cmd = line.strip()
                         if not cmd:
                             continue
-                        all_entries.append({
-                            "message": cmd,
-                            "datetime": "1970-01-01T00:00:00+00:00",  # no timestamps in plain history
-                            "timestamp_desc": "PowerShell Command",
-                            "source": "Windows PowerShell History",
-                            "source_short": "PSHIST",
-                            "incident_id": incident_id,
-                            "username": user,
-                        })
+                        all_entries.append(
+                            {
+                                "message": cmd,
+                                "datetime": "1970-01-01T00:00:00+00:00",  # no timestamps in plain history
+                                "timestamp_desc": "PowerShell Command",
+                                "source": "Windows PowerShell History",
+                                "source_short": "PSHIST",
+                                "incident_id": incident_id,
+                                "username": user,
+                            }
+                        )
             except (OSError, UnicodeDecodeError) as exc:
                 logger.warning("PowerShell history parse failed %s: %s", hist_file.name, exc)
         if all_entries:
@@ -503,7 +554,7 @@ def _windows_text_artifacts_to_entries(extracted_dir: Path, incident_id: str) ->
                     for line in fh:
                         line = line.rstrip()
                         if line.startswith("#Fields:"):
-                            fields = line[len("#Fields:"):].strip().split()
+                            fields = line[len("#Fields:") :].strip().split()
                             continue
                         if line.startswith("#") or not line:
                             continue
@@ -526,18 +577,20 @@ def _windows_text_artifacts_to_entries(extracted_dir: Path, incident_id: str) ->
                         proto = row.get("protocol", "-")
                         src = f"{row.get('src-ip', '-')}:{row.get('src-port', '-')}"
                         dst = f"{row.get('dst-ip', '-')}:{row.get('dst-port', '-')}"
-                        fw_entries.append({
-                            "message": f"{action} {proto} {src} → {dst}",
-                            "datetime": ts_iso,
-                            "timestamp_desc": "Firewall Packet",
-                            "source": "Windows Firewall Log",
-                            "source_short": "FWLOG",
-                            "incident_id": incident_id,
-                            "action": action,
-                            "protocol": proto,
-                            "src_ip": row.get("src-ip", ""),
-                            "dst_ip": row.get("dst-ip", ""),
-                        })
+                        fw_entries.append(
+                            {
+                                "message": f"{action} {proto} {src} → {dst}",
+                                "datetime": ts_iso,
+                                "timestamp_desc": "Firewall Packet",
+                                "source": "Windows Firewall Log",
+                                "source_short": "FWLOG",
+                                "incident_id": incident_id,
+                                "action": action,
+                                "protocol": proto,
+                                "src_ip": row.get("src-ip", ""),
+                                "dst_ip": row.get("dst-ip", ""),
+                            }
+                        )
             except (OSError, UnicodeDecodeError) as exc:
                 logger.warning("Firewall log parse failed %s: %s", log_file.name, exc)
         if fw_entries:
@@ -562,18 +615,20 @@ def _windows_text_artifacts_to_entries(extracted_dir: Path, incident_id: str) ->
                         if not dt:
                             continue
                         job_name = row.get("DisplayName", "").strip() or "BITS Job"
-                        bits_entries.append({
-                            "message": f"BITS: {job_name} [{row.get('JobState', '')}]",
-                            "datetime": dt,
-                            "timestamp_desc": ts_desc,
-                            "source": "Windows BITS Jobs",
-                            "source_short": "BITS",
-                            "incident_id": incident_id,
-                            "jobid": row.get("JobId", ""),
-                            "jobstate": row.get("JobState", ""),
-                            "owneraccount": row.get("OwnerAccount", ""),
-                            "display_name": job_name,
-                        })
+                        bits_entries.append(
+                            {
+                                "message": f"BITS: {job_name} [{row.get('JobState', '')}]",
+                                "datetime": dt,
+                                "timestamp_desc": ts_desc,
+                                "source": "Windows BITS Jobs",
+                                "source_short": "BITS",
+                                "incident_id": incident_id,
+                                "jobid": row.get("JobId", ""),
+                                "jobstate": row.get("JobState", ""),
+                                "owneraccount": row.get("OwnerAccount", ""),
+                                "display_name": job_name,
+                            }
+                        )
                         break
         except (OSError, csv.Error) as exc:
             logger.warning("BITS jobs CSV parse failed: %s", exc)
@@ -596,18 +651,20 @@ def _windows_text_artifacts_to_entries(extracted_dir: Path, incident_id: str) ->
                         continue
                     program = row.get("Program", "").strip()
                     run_count = row.get("RunCount", "").strip()
-                    ua_entries.append({
-                        "message": f"UserAssist: {program} (runs: {run_count})",
-                        "datetime": dt,
-                        "timestamp_desc": "Program Executed (UserAssist)",
-                        "source": "Windows UserAssist",
-                        "source_short": "USERASSIST",
-                        "incident_id": incident_id,
-                        "program": program,
-                        "runcount": run_count,
-                        "guid": row.get("GUID", ""),
-                        "display_name": program,
-                    })
+                    ua_entries.append(
+                        {
+                            "message": f"UserAssist: {program} (runs: {run_count})",
+                            "datetime": dt,
+                            "timestamp_desc": "Program Executed (UserAssist)",
+                            "source": "Windows UserAssist",
+                            "source_short": "USERASSIST",
+                            "incident_id": incident_id,
+                            "program": program,
+                            "runcount": run_count,
+                            "guid": row.get("GUID", ""),
+                            "display_name": program,
+                        }
+                    )
         except (OSError, csv.Error) as exc:
             logger.warning("UserAssist CSV parse failed: %s", exc)
         if ua_entries:
@@ -622,9 +679,7 @@ def _windows_text_artifacts_to_entries(extracted_dir: Path, incident_id: str) ->
         sc_entries: list[dict] = []
         try:
             with shimcache_txt.open(encoding="utf-8", errors="replace", newline="") as fh:
-                reader = csv.DictReader(
-                    (line for line in fh if not line.startswith("#"))
-                )
+                reader = csv.DictReader((line for line in fh if not line.startswith("#")))
                 if reader.fieldnames and "Path" in reader.fieldnames:
                     for row in reader:
                         dt = _parse_timestamp(row.get("LastModifiedUTC", "").strip())
@@ -634,17 +689,19 @@ def _windows_text_artifacts_to_entries(extracted_dir: Path, incident_id: str) ->
                         if not path:
                             continue
                         exec_flag = row.get("Executed", "Unknown").strip()
-                        sc_entries.append({
-                            "message": f"ShimCache: {path}",
-                            "datetime": dt,
-                            "timestamp_desc": "ShimCache Entry (File Modified)",
-                            "source": "Windows ShimCache (AppCompatCache)",
-                            "source_short": "SHIMCACHE",
-                            "incident_id": incident_id,
-                            "path": path,
-                            "executed": exec_flag,
-                            "display_name": path,
-                        })
+                        sc_entries.append(
+                            {
+                                "message": f"ShimCache: {path}",
+                                "datetime": dt,
+                                "timestamp_desc": "ShimCache Entry (File Modified)",
+                                "source": "Windows ShimCache (AppCompatCache)",
+                                "source_short": "SHIMCACHE",
+                                "incident_id": incident_id,
+                                "path": path,
+                                "executed": exec_flag,
+                                "display_name": path,
+                            }
+                        )
         except (OSError, csv.Error) as exc:
             logger.warning("ShimCache txt parse failed: %s", exc)
         if sc_entries:
@@ -708,17 +765,19 @@ def _linux_lastlog_to_entries(log_path: Path, incident_id: str) -> list[dict]:
                 user = m.group("user")
                 port = m.group("port") or ""
                 from_host = m.group("from") or ""
-                entries.append({
-                    "message": f"Last login: {user} from {from_host} on {port}".strip(),
-                    "datetime": ts_iso,
-                    "timestamp_desc": "Last Login",
-                    "source": "Linux lastlog",
-                    "source_short": "LASTLOG",
-                    "incident_id": incident_id,
-                    "username": user,
-                    "tty": port,
-                    "remote_host": from_host,
-                })
+                entries.append(
+                    {
+                        "message": f"Last login: {user} from {from_host} on {port}".strip(),
+                        "datetime": ts_iso,
+                        "timestamp_desc": "Last Login",
+                        "source": "Linux lastlog",
+                        "source_short": "LASTLOG",
+                        "incident_id": incident_id,
+                        "username": user,
+                        "tty": port,
+                        "remote_host": from_host,
+                    }
+                )
     except (OSError, UnicodeDecodeError) as exc:
         logger.warning("Failed to parse lastlog %s: %s", log_path.name, exc)
     return entries
@@ -750,17 +809,19 @@ def _linux_package_history_to_entries(log_dir: Path, incident_id: str) -> list[d
                         continue
                     action = m.group("action")
                     pkg = m.group("pkg")
-                    file_entries.append({
-                        "message": f"dpkg {action}: {pkg}",
-                        "datetime": dt,
-                        "timestamp_desc": f"Package {action.capitalize()}",
-                        "source": "Linux dpkg Log",
-                        "source_short": "DPKG",
-                        "incident_id": incident_id,
-                        "package": pkg,
-                        "action": action,
-                        "display_name": pkg,
-                    })
+                    file_entries.append(
+                        {
+                            "message": f"dpkg {action}: {pkg}",
+                            "datetime": dt,
+                            "timestamp_desc": f"Package {action.capitalize()}",
+                            "source": "Linux dpkg Log",
+                            "source_short": "DPKG",
+                            "incident_id": incident_id,
+                            "package": pkg,
+                            "action": action,
+                            "display_name": pkg,
+                        }
+                    )
             elif "yum" in name or "dnf" in name:
                 for line in lines:
                     m = _YUM_RE.match(line.rstrip())
@@ -780,17 +841,19 @@ def _linux_package_history_to_entries(log_dir: Path, incident_id: str) -> list[d
                     action = m.group("action")
                     pkg = m.group("pkg")
                     mgr = "dnf" if "dnf" in name else "yum"
-                    file_entries.append({
-                        "message": f"{mgr} {action}: {pkg}",
-                        "datetime": dt,
-                        "timestamp_desc": f"Package {action}",
-                        "source": f"Linux {mgr.upper()} Log",
-                        "source_short": mgr.upper(),
-                        "incident_id": incident_id,
-                        "package": pkg,
-                        "action": action,
-                        "display_name": pkg,
-                    })
+                    file_entries.append(
+                        {
+                            "message": f"{mgr} {action}: {pkg}",
+                            "datetime": dt,
+                            "timestamp_desc": f"Package {action}",
+                            "source": f"Linux {mgr.upper()} Log",
+                            "source_short": mgr.upper(),
+                            "incident_id": incident_id,
+                            "package": pkg,
+                            "action": action,
+                            "display_name": pkg,
+                        }
+                    )
             elif "apt" in name or "history" in name:
                 # Block-based format: Start-Date → Commandline → Install/Upgrade/Remove/Purge
                 current_dt: str | None = None
@@ -810,16 +873,18 @@ def _linux_package_history_to_entries(log_dir: Path, incident_id: str) -> list[d
                     if m_act and current_dt:
                         action_name = line.split(":")[0]
                         pkgs = m_act.group("pkgs").strip()
-                        file_entries.append({
-                            "message": f"apt {action_name}: {pkgs[:100]}",
-                            "datetime": current_dt,
-                            "timestamp_desc": f"Package {action_name}",
-                            "source": "Linux APT History",
-                            "source_short": "APT",
-                            "incident_id": incident_id,
-                            "commandline": current_cmd,
-                            "packages": pkgs[:200],
-                        })
+                        file_entries.append(
+                            {
+                                "message": f"apt {action_name}: {pkgs[:100]}",
+                                "datetime": current_dt,
+                                "timestamp_desc": f"Package {action_name}",
+                                "source": "Linux APT History",
+                                "source_short": "APT",
+                                "incident_id": incident_id,
+                                "commandline": current_cmd,
+                                "packages": pkgs[:200],
+                            }
+                        )
         except (OSError, UnicodeDecodeError) as exc:
             logger.warning("Package history parse failed (%s): %s", log_file.name, exc)
             continue
@@ -845,6 +910,7 @@ def _macos_artifacts_to_entries(extracted_dir: Path, incident_id: str) -> list[d
 
     try:
         import sqlite3
+
         # CFAbsoluteTime epoch offset: seconds between 1970-01-01 and 2001-01-01
         _CF_EPOCH_OFFSET = 978307200
 
@@ -871,18 +937,22 @@ def _macos_artifacts_to_entries(extracted_dir: Path, incident_id: str) -> list[d
             except (TypeError, ValueError, OSError):
                 continue
             url = (data_url or "").strip()
-            entries.append({
-                "message": f"Quarantine download: {url}" if url else f"Quarantine event via {agent}",
-                "datetime": dt,
-                "timestamp_desc": "File Downloaded (Quarantine)",
-                "source": "macOS Quarantine Events",
-                "source_short": "QUARANTINE",
-                "incident_id": incident_id,
-                "agent": (agent or "").strip(),
-                "data_url": url,
-                "origin_url": (origin_url or "").strip(),
-                "display_name": url or agent or "",
-            })
+            entries.append(
+                {
+                    "message": (
+                        f"Quarantine download: {url}" if url else f"Quarantine event via {agent}"
+                    ),
+                    "datetime": dt,
+                    "timestamp_desc": "File Downloaded (Quarantine)",
+                    "source": "macOS Quarantine Events",
+                    "source_short": "QUARANTINE",
+                    "incident_id": incident_id,
+                    "agent": (agent or "").strip(),
+                    "data_url": url,
+                    "origin_url": (origin_url or "").strip(),
+                    "display_name": url or agent or "",
+                }
+            )
     except ImportError:
         logger.debug("sqlite3 not available — skipping macOS quarantine events")
     except (OSError, Exception) as exc:
@@ -1016,19 +1086,21 @@ def _agent_parsed_to_entries(extracted_dir: Path, incident_id: str) -> list[dict
                         continue
                     exe = row.get("ExeName", "").strip()
                     run_count = row.get("RunCount", "").strip()
-                    entries.append({
-                        "datetime": dt,
-                        "timestamp_desc": "Program Last Executed (Prefetch)",
-                        "source": "Windows Prefetch",
-                        "source_short": "PREFETCH",
-                        "message": f"{exe} executed (run count: {run_count})",
-                        "incident_id": incident_id,
-                        "ExeName": exe,
-                        "RunCount": run_count,
-                        "PrefetchHash": row.get("PrefetchHash", ""),
-                        "Version": row.get("Version", ""),
-                        "display_name": exe,
-                    })
+                    entries.append(
+                        {
+                            "datetime": dt,
+                            "timestamp_desc": "Program Last Executed (Prefetch)",
+                            "source": "Windows Prefetch",
+                            "source_short": "PREFETCH",
+                            "message": f"{exe} executed (run count: {run_count})",
+                            "incident_id": incident_id,
+                            "ExeName": exe,
+                            "RunCount": run_count,
+                            "PrefetchHash": row.get("PrefetchHash", ""),
+                            "Version": row.get("Version", ""),
+                            "display_name": exe,
+                        }
+                    )
                     count += 1
         except OSError as exc:
             logger.warning("agent_parsed/prefetch: %s", exc)
@@ -1048,20 +1120,22 @@ def _agent_parsed_to_entries(extracted_dir: Path, incident_id: str) -> list[dict
                         if ts:
                             dt = _parse_timestamp(ts)
                             if dt:
-                                entries.append({
-                                    "datetime": dt,
-                                    "timestamp_desc": f"LNK {ts_col.replace('Target', '')}",
-                                    "source": "Windows LNK Files",
-                                    "source_short": "LNK",
-                                    "message": f"LNK → {target}",
-                                    "incident_id": incident_id,
-                                    "LNKPath": row.get("LNKPath", ""),
-                                    "TargetPath": target,
-                                    "TargetSize": row.get("TargetSize", ""),
-                                    "WorkingDir": row.get("WorkingDir", ""),
-                                    "Arguments": row.get("Arguments", ""),
-                                    "display_name": target,
-                                })
+                                entries.append(
+                                    {
+                                        "datetime": dt,
+                                        "timestamp_desc": f"LNK {ts_col.replace('Target', '')}",
+                                        "source": "Windows LNK Files",
+                                        "source_short": "LNK",
+                                        "message": f"LNK → {target}",
+                                        "incident_id": incident_id,
+                                        "LNKPath": row.get("LNKPath", ""),
+                                        "TargetPath": target,
+                                        "TargetSize": row.get("TargetSize", ""),
+                                        "WorkingDir": row.get("WorkingDir", ""),
+                                        "Arguments": row.get("Arguments", ""),
+                                        "display_name": target,
+                                    }
+                                )
                                 count += 1
                                 break
         except OSError as exc:
@@ -1087,19 +1161,21 @@ def _agent_parsed_to_entries(extracted_dir: Path, incident_id: str) -> list[dict
                             dt = _parse_timestamp(ts)
                             if not dt:
                                 continue
-                            entries.append({
-                                "datetime": dt,
-                                "timestamp_desc": f"{browser} URL Visit",
-                                "source": f"{browser} Browser History",
-                                "source_short": "BROWSER",
-                                "message": f"{url} ({title})" if title else url,
-                                "incident_id": incident_id,
-                                "URL": url,
-                                "Title": title,
-                                "VisitCount": row.get("VisitCount", ""),
-                                "Browser": browser,
-                                "display_name": url,
-                            })
+                            entries.append(
+                                {
+                                    "datetime": dt,
+                                    "timestamp_desc": f"{browser} URL Visit",
+                                    "source": f"{browser} Browser History",
+                                    "source_short": "BROWSER",
+                                    "message": f"{url} ({title})" if title else url,
+                                    "incident_id": incident_id,
+                                    "URL": url,
+                                    "Title": title,
+                                    "VisitCount": row.get("VisitCount", ""),
+                                    "Browser": browser,
+                                    "display_name": url,
+                                }
+                            )
                             count += 1
                             break
             except OSError as exc:
@@ -1187,8 +1263,7 @@ def _sort_and_finalize(timeline_path: Path, timeline_dir: Path) -> int:
         path_str = str(timeline_path).replace("\\", "/")
         tmp_str = str(sorted_tmp).replace("\\", "/")
         con = duckdb.connect()
-        con.execute(
-            f"""
+        con.execute(f"""
             COPY (
                 SELECT * FROM read_json_auto(
                     '{path_str}', format='newline_delimited', ignore_errors=true
@@ -1197,8 +1272,7 @@ def _sort_and_finalize(timeline_path: Path, timeline_dir: Path) -> int:
             )
             TO '{tmp_str}'
             (FORMAT JSON, ARRAY FALSE)
-            """
-        )
+            """)
         count = con.execute(
             f"SELECT COUNT(*) FROM read_json_auto('{tmp_str}', format='newline_delimited', ignore_errors=true)"
         ).fetchone()[0]
@@ -1232,13 +1306,32 @@ async def export_to_jsonl(
     timeline_dir.mkdir(parents=True, exist_ok=True)
     timeline_path = timeline_dir / "timeline.jsonl"
     count = 0
+    duplicate_count = 0
 
     try:
         with timeline_path.open("w", encoding="utf-8") as fh:
-            def _write_batch(entries: list[dict]) -> int:
-                for entry in entries:
-                    fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
-                return len(entries)
+            seen_fingerprints: set[str] = set()
+
+            def _write_batch(entries: list[dict], provenance: str = "native") -> int:
+                nonlocal duplicate_count
+                written = 0
+                for row_number, entry in enumerate(entries, start=1):
+                    entry = dict(entry)
+                    entry.setdefault("job_id", timeline_dir.parent.name)
+                    entry.setdefault("source_artifact", provenance)
+                    entry.setdefault("source_row", row_number)
+                    # Every parser feeds the same normalisation boundary.  This
+                    # preserves parser-specific fields under raw_data while
+                    # making exports, filtering, and correlation consistent.
+                    unified = enrich_event(UnifiedEvent.from_timeline_entry(entry, incident_id))
+                    fingerprint = unified.fingerprint()
+                    if fingerprint in seen_fingerprints:
+                        duplicate_count += 1
+                        continue
+                    seen_fingerprints.add(fingerprint)
+                    fh.write(serialise_event(unified) + "\n")
+                    written += 1
+                return written
 
             # EZ Tools CSVs — one batch per file
             if parsed_dir.exists():
@@ -1246,49 +1339,57 @@ async def export_to_jsonl(
                     if not source_dir.is_dir():
                         continue
                     source_key = source_dir.name
-                    for csv_file in sorted(source_dir.glob("*.csv")):
+                    for csv_file in sorted(source_dir.rglob("*.csv")):
                         entries = _csv_to_entries(csv_file, source_key, incident_id)
-                        batch_count = _write_batch(entries)
+                        batch_count = _write_batch(
+                            entries, csv_file.relative_to(parsed_dir).as_posix()
+                        )
                         count += batch_count
                         logger.info(
                             "Timeline: %d entries from %s/%s",
-                            batch_count, source_key, csv_file.name,
+                            batch_count,
+                            source_key,
+                            csv_file.name,
                         )
 
             # Linux/Windows text logs and agent-parsed outputs
             extracted_dir = parsed_dir.parent / "extracted"
             if extracted_dir.exists():
                 linux_entries = _linux_logs_to_entries(extracted_dir, incident_id)
-                count += _write_batch(linux_entries)
+                count += _write_batch(linux_entries, "native:linux-logs")
                 if linux_entries:
                     logger.info("Linux log entries: %d total", len(linux_entries))
 
-                windows_text_entries = _windows_text_artifacts_to_entries(extracted_dir, incident_id)
-                count += _write_batch(windows_text_entries)
+                windows_text_entries = _windows_text_artifacts_to_entries(
+                    extracted_dir, incident_id
+                )
+                count += _write_batch(windows_text_entries, "native:windows-text")
                 if windows_text_entries:
-                    logger.info("Windows text artifact entries: %d total", len(windows_text_entries))
+                    logger.info(
+                        "Windows text artifact entries: %d total", len(windows_text_entries)
+                    )
 
                 agent_entries = _agent_parsed_to_entries(extracted_dir, incident_id)
-                count += _write_batch(agent_entries)
+                count += _write_batch(agent_entries, "native:agent-parsed")
                 if agent_entries:
                     logger.info("Agent-parsed entries: %d total", len(agent_entries))
 
                 # Linux package manager logs (dpkg, apt, yum/dnf)
                 pkg_log_dir = extracted_dir / "logs" / "linux" / "package_history"
                 pkg_entries = _linux_package_history_to_entries(pkg_log_dir, incident_id)
-                count += _write_batch(pkg_entries)
+                count += _write_batch(pkg_entries, "native:packages")
                 if pkg_entries:
                     logger.info("Linux package history entries: %d total", len(pkg_entries))
 
                 # macOS quarantine events (SQLite)
                 macos_entries = _macos_artifacts_to_entries(extracted_dir, incident_id)
-                count += _write_batch(macos_entries)
+                count += _write_batch(macos_entries, "native:macos")
                 if macos_entries:
                     logger.info("macOS artifact entries: %d total", len(macos_entries))
 
             # Sigma hits
             sigma_entries = _sigma_hits_to_entries(sigma_dir, incident_id)
-            count += _write_batch(sigma_entries)
+            count += _write_batch(sigma_entries, "sigma:chainsaw_hits.json")
 
     except OSError as exc:
         logger.error("Failed to write timeline.jsonl: %s", exc)
@@ -1326,12 +1427,10 @@ def _build_duckdb_store(timeline_path: Path, timeline_dir: Path) -> None:
         con = duckdb.connect(str(db_path))
         try:
             path_str = str(timeline_path).replace("\\", "/")
-            con.execute(
-                f"""
+            con.execute(f"""
                 CREATE TABLE timeline_events AS
                 SELECT * FROM read_json_auto('{path_str}', ignore_errors=true)
-                """
-            )
+                """)
             count = con.execute("SELECT COUNT(*) FROM timeline_events").fetchone()[0]
             logger.info("DuckDB store built: %d rows → %s", count, db_path)
         finally:
@@ -1357,8 +1456,8 @@ async def push_to_timesketch(
     Requires: pip install timesketch-import-client
     """
     try:
-        from timesketch_import_client import importer  # type: ignore[import]
         from timesketch_api_client import config as ts_config  # type: ignore[import]
+        from timesketch_import_client import importer  # type: ignore[import]
     except ImportError:
         return {"success": False, "error": "timesketch-import-client not installed"}
 

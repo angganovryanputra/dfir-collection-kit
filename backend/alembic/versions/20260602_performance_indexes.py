@@ -11,6 +11,7 @@ Revision ID: 20260602_performance_indexes
 Revises: 20260601_platform_features
 Create Date: 2026-06-02 00:00:00.000000
 """
+
 from alembic import op
 
 revision = "20260602_performance_indexes"

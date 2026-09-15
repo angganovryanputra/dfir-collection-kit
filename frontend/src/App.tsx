@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ThemeProvider } from "next-themes";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import React, { Suspense } from "react";
-import { getStoredAuth, isSessionValid } from "@/lib/auth";
+import { getStoredAuth, getStoredRole, isSessionValid } from "@/lib/auth";
 import { EvidenceProvider } from "@/context/EvidenceContext";
 import { PageErrorBoundary } from "@/components/common/PageErrorBoundary";
 
@@ -35,6 +35,7 @@ const IncidentReport       = React.lazy(() => import("./pages/IncidentReport"));
 const Collectors           = React.lazy(() => import("./pages/Collectors"));
 const UserManagement       = React.lazy(() => import("./pages/UserManagement"));
 const HypothesisBuilder    = React.lazy(() => import("./pages/HypothesisBuilder"));
+const IncidentTasks        = React.lazy(() => import("./pages/IncidentTasks"));
 const LegalHolds           = React.lazy(() => import("./pages/LegalHolds"));
 const ThreatHuntLibrary    = React.lazy(() => import("./pages/ThreatHuntLibrary"));
 const CustomModules        = React.lazy(() => import("./pages/CustomModules"));
@@ -102,6 +103,16 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+/** Client-side UX guard; the API remains the authoritative authorization layer. */
+function RoleRoute({ roles, children }: { roles: string[]; children: React.ReactNode }) {
+  const role = getStoredRole();
+  const location = useLocation();
+  if (!role || !roles.includes(role)) {
+    return <Navigate to="/dashboard" state={{ denied: true, from: location.pathname }} replace />;
+  }
+  return <>{children}</>;
+}
+
 /** Resets the per-page boundary when navigating to a different route. */
 function RouteBoundary({ children }: { children: React.ReactNode }) {
   const location = useLocation();
@@ -126,19 +137,19 @@ const App = () => {
 
                 {/* Protected routes */}
                 <Route path="/dashboard" element={<ProtectedRoute><RouteBoundary><Dashboard /></RouteBoundary></ProtectedRoute>} />
-                <Route path="/incidents/create" element={<ProtectedRoute><RouteBoundary><CreateIncident /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/incidents/create" element={<ProtectedRoute><RoleRoute roles={["admin", "operator"]}><RouteBoundary><CreateIncident /></RouteBoundary></RoleRoute></ProtectedRoute>} />
                 <Route path="/incidents/:id" element={<ProtectedRoute><RouteBoundary><IncidentHub /></RouteBoundary></ProtectedRoute>} />
-                <Route path="/incidents/:id/setup" element={<ProtectedRoute><RouteBoundary><CollectionSetup /></RouteBoundary></ProtectedRoute>} />
-                <Route path="/incidents/:id/collect" element={<ProtectedRoute><RouteBoundary><CollectionExecution /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/incidents/:id/setup" element={<ProtectedRoute><RoleRoute roles={["admin", "operator"]}><RouteBoundary><CollectionSetup /></RouteBoundary></RoleRoute></ProtectedRoute>} />
+                <Route path="/incidents/:id/collect" element={<ProtectedRoute><RoleRoute roles={["admin", "operator"]}><RouteBoundary><CollectionExecution /></RouteBoundary></RoleRoute></ProtectedRoute>} />
                 <Route path="/evidence" element={<ProtectedRoute><RouteBoundary><EvidenceVault /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/evidence/:id" element={<ProtectedRoute><RouteBoundary><EvidenceVault /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/chain-of-custody" element={<ProtectedRoute><RouteBoundary><ChainOfCustody /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/collectors" element={<ProtectedRoute><RouteBoundary><Collectors /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/devices" element={<ProtectedRoute><RouteBoundary><Devices /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incident-templates" element={<ProtectedRoute><RouteBoundary><IncidentTemplates /></RouteBoundary></ProtectedRoute>} />
-                <Route path="/admin/settings" element={<ProtectedRoute><RouteBoundary><AdminSettings /></RouteBoundary></ProtectedRoute>} />
-                <Route path="/admin/users" element={<ProtectedRoute><RouteBoundary><UserManagement /></RouteBoundary></ProtectedRoute>} />
-                <Route path="/incidents/:id/processing" element={<ProtectedRoute><RouteBoundary><ProcessingStatus /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/admin/settings" element={<ProtectedRoute><RoleRoute roles={["admin"]}><RouteBoundary><AdminSettings /></RouteBoundary></RoleRoute></ProtectedRoute>} />
+                <Route path="/admin/users" element={<ProtectedRoute><RoleRoute roles={["admin"]}><RouteBoundary><UserManagement /></RouteBoundary></RoleRoute></ProtectedRoute>} />
+                <Route path="/incidents/:id/processing" element={<ProtectedRoute><RoleRoute roles={["admin", "operator"]}><RouteBoundary><ProcessingStatus /></RouteBoundary></RoleRoute></ProtectedRoute>} />
                 <Route path="/incidents/:id/sigma-hits" element={<ProtectedRoute><RouteBoundary><SigmaHits /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/attack-chains" element={<ProtectedRoute><RouteBoundary><AttackChains /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/ioc-matches" element={<ProtectedRoute><RouteBoundary><IOCMatches /></RouteBoundary></ProtectedRoute>} />
@@ -146,15 +157,16 @@ const App = () => {
                 <Route path="/incidents/:id/super-timeline" element={<ProtectedRoute><RouteBoundary><SuperTimeline /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/report" element={<ProtectedRoute><RouteBoundary><IncidentReport /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/hypotheses" element={<ProtectedRoute><RouteBoundary><HypothesisBuilder /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/incidents/:id/tasks" element={<ProtectedRoute><RouteBoundary><IncidentTasks /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/legal-holds" element={<ProtectedRoute><RouteBoundary><LegalHolds /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/scheduled" element={<ProtectedRoute><RouteBoundary><ScheduledCollections /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/scheduled-collections" element={<ProtectedRoute><RouteBoundary><ScheduledCollections /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/threat-hunt" element={<ProtectedRoute><RouteBoundary><ThreatHuntLibrary /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/admin/custom-modules" element={<ProtectedRoute><RouteBoundary><CustomModules /></RouteBoundary></ProtectedRoute>} />
-                <Route path="/admin/audit-log" element={<ProtectedRoute><RouteBoundary><AuditLog /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/admin/audit-log" element={<ProtectedRoute><RoleRoute roles={["admin"]}><RouteBoundary><AuditLog /></RouteBoundary></RoleRoute></ProtectedRoute>} />
                 <Route path="/correlate" element={<ProtectedRoute><RouteBoundary><CorrelationView /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/agents/:agentId/console" element={<ProtectedRoute><RouteBoundary><AgentConsole /></RouteBoundary></ProtectedRoute>} />
-                <Route path="/threat-intel" element={<ProtectedRoute><RouteBoundary><ThreatIntel /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/threat-intel" element={<ProtectedRoute><RoleRoute roles={["admin", "operator"]}><RouteBoundary><ThreatIntel /></RouteBoundary></RoleRoute></ProtectedRoute>} />
                 <Route path="/incidents/:id/siem-export" element={<ProtectedRoute><RouteBoundary><SIEMExport /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/incidents/:id/ai-analysis" element={<ProtectedRoute><RouteBoundary><AIAnalysis /></RouteBoundary></ProtectedRoute>} />
 

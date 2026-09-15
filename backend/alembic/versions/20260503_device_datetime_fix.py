@@ -4,7 +4,9 @@ Revision ID: 20260503_device_datetime_fix
 Revises: 20260502_notifications_and_binary
 Create Date: 2026-05-03 00:00:00.000000
 """
+
 import sqlalchemy as sa
+
 from alembic import op
 
 revision = "20260503_device_datetime_fix"

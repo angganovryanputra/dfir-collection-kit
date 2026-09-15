@@ -1,10 +1,28 @@
 """Pydantic v2 schemas for SuperTimeline and LateralMovement."""
+
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class TimelineBookmark(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    eventHash: str = Field(min_length=1, max_length=128)
+    note: str = Field(default="", max_length=10000)
+    createdAt: str = Field(max_length=64)
+    datetime: str = Field(max_length=64)
+    host: str = Field(max_length=1024)
+    message: str = Field(max_length=10000)
+    source_short: str = Field(max_length=128)
+
+
+class TimelineAnnotationPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    bookmark: TimelineBookmark | None = None
+    tag: Literal["confirmed", "suspicious", "interesting", "fp"] | None = None
 
 
 class SuperTimelineOut(BaseModel):
@@ -22,6 +40,8 @@ class SuperTimelineOut(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     created_at: datetime
+    is_stale: bool = False
+    partial_job_count: int = 0
 
 
 class LateralMovementOut(BaseModel):

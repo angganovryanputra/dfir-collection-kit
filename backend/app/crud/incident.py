@@ -30,11 +30,15 @@ async def list_incidents(
             or_(
                 Incident.id.ilike(f"%{search}%"),
                 Incident.operator.ilike(f"%{search}%"),
+                Incident.title.ilike(f"%{search}%"),
+                Incident.description.ilike(f"%{search}%"),
             )
         )
     total: int = (await db.scalar(select(func.count()).select_from(q.subquery()))) or 0
     incidents = list(
-        (await db.execute(q.order_by(Incident.updated_at.desc()).offset(offset).limit(limit))).scalars()
+        (
+            await db.execute(q.order_by(Incident.updated_at.desc()).offset(offset).limit(limit))
+        ).scalars()
     )
     return incidents, total
 
@@ -51,7 +55,9 @@ async def create_incident(db: AsyncSession, payload: IncidentCreate) -> Incident
     return incident
 
 
-async def update_incident(db: AsyncSession, incident_id: str, payload: IncidentUpdate) -> Incident | None:
+async def update_incident(
+    db: AsyncSession, incident_id: str, payload: IncidentUpdate
+) -> Incident | None:
     result = await db.execute(select(Incident).where(Incident.id == incident_id))
     incident = result.scalar_one_or_none()
     if not incident:

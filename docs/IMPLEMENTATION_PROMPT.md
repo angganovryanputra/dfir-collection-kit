@@ -1174,7 +1174,4 @@ Paste prompt langsung ke chat.
 
 ---
 
-Mau saya bantu:
-1. **Refine prompt** untuk area spesifik?
-2. **Breakdown prompt** yang lebih kecil untuk fokus per session?
-3. **Tambahkan test cases** ke prompt?
+

@@ -11,6 +11,8 @@ type CorrelationResult = {
   incident_ids: string[];
   row_count: number;
   rows: Record<string, unknown>[];
+  truncated?: boolean;
+  unavailable_incident_ids?: string[];
 };
 
 export default function CorrelationView() {
@@ -52,6 +54,9 @@ export default function CorrelationView() {
         `/platform/correlate-timelines?${params.toString()}`
       );
       setResult(data);
+      if (data.truncated || data.unavailable_incident_ids?.length) {
+        toast({ title: "Partial correlation coverage", description: `${data.truncated ? "Showing the first 500 events. " : ""}${data.unavailable_incident_ids?.length ? `Unavailable: ${data.unavailable_incident_ids.join(", ")}` : ""}` });
+      }
     } catch {
       toast({ title: "Correlation failed — ensure super timelines exist for all incidents", variant: "destructive" });
     } finally {

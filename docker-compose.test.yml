@@ -34,4 +34,5 @@ services:
         condition: service_healthy
     command: >-
       /bin/sh -ec "pip install --no-cache-dir pytest pytest-asyncio pytest-cov httpx &&
+      alembic upgrade head &&
       python -m pytest tests -q"

@@ -4,9 +4,9 @@
  * Fetches incident metadata, super-timeline status, lateral movements,
  * sigma hits, evidence folders and renders a structured print-friendly report.
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
@@ -24,7 +24,7 @@ import {
     FileText,
     Loader2,
 } from "lucide-react";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPut } from "@/lib/api";
 import { getStoredAuth } from "@/lib/auth";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -41,9 +41,11 @@ interface IncidentOut {
     updated_at: string;
 }
 
+interface IncidentNoteOut { incident_id: string; content: string; updated_by: string; updated_at: string; }
+
 interface ProcessingJobOut {
     id: string;
-    status: "PENDING" | "RUNNING" | "DONE" | "FAILED";
+    status: "PENDING" | "RUNNING" | "DONE" | "PARTIAL" | "FAILED";
     phase: string | null;
     started_at: string | null;
     completed_at: string | null;
@@ -99,18 +101,6 @@ function fmtTs(ts: string | null | undefined): string {
     return new Date(ts).toLocaleString();
 }
 
-function NOTES_KEY(id: string) {
-    return `dfir_report_notes_${id}`;
-}
-
-function loadNotes(id: string): string {
-    try { return localStorage.getItem(NOTES_KEY(id)) ?? ""; } catch { return ""; }
-}
-
-function saveNotes(id: string, notes: string): void {
-    try { localStorage.setItem(NOTES_KEY(id), notes); } catch { /* ignore */ }
-}
-
 function StatusBadge({ status }: { status: string }) {
     const cls =
         status === "DONE" || status === "COLLECTION_COMPLETE"
@@ -146,7 +136,8 @@ export default function IncidentReport() {
     const navigate = useNavigate();
     const { id: incidentId } = useParams<{ id: string }>();
     const auth = getStoredAuth();
-    const [notes, setNotes] = useState(() => loadNotes(incidentId ?? ""));
+    const queryClient = useQueryClient();
+    const [notes, setNotes] = useState("");
 
     // ── Data fetching ─────────────────────────────────────────────────────────
 
@@ -154,6 +145,17 @@ export default function IncidentReport() {
         queryKey: ["incident", incidentId],
         queryFn: () => apiGet<IncidentOut>(`/incidents/${incidentId}`),
         enabled: !!incidentId,
+    });
+
+    const { data: sharedNote } = useQuery<IncidentNoteOut | null>({
+        queryKey: ["incident-note", incidentId],
+        queryFn: () => apiGet<IncidentNoteOut | null>(`/platform/incidents/${incidentId}/notes`),
+        enabled: !!incidentId,
+    });
+    useEffect(() => { if (sharedNote) setNotes(sharedNote.content); }, [sharedNote]);
+    const saveNote = useMutation({
+        mutationFn: () => apiPut(`/platform/incidents/${incidentId}/notes`, { content: notes }),
+        onSuccess: () => queryClient.invalidateQueries({ queryKey: ["incident-note", incidentId] }),
     });
 
     const { data: processingJob } = useQuery<ProcessingJobOut | null>({
@@ -200,7 +202,7 @@ export default function IncidentReport() {
         queryKey: ["evidence-folders-report", incidentId],
         queryFn: async () => {
             try {
-                return await apiGet<EvidenceFolderOut[]>(`/evidence/folders/${incidentId}`);
+                return await apiGet<EvidenceFolderOut[]>(`/evidence/folders?incident_id=${encodeURIComponent(incidentId!)}`);
             } catch {
                 return [];
             }
@@ -242,7 +244,7 @@ export default function IncidentReport() {
     const collectionDone =
         incident?.status === "COLLECTION_COMPLETE" ||
         incident?.status === "ANALYSIS_COMPLETE";
-    const processingDone = processingJob?.status === "DONE";
+    const processingDone = processingJob?.status === "DONE" || processingJob?.status === "PARTIAL";
     const stDone = stStatus?.status === "DONE";
 
     const generatedAt = new Date().toLocaleString();
@@ -303,6 +305,11 @@ export default function IncidentReport() {
                 }
             >
                 <div className="p-6 flex flex-col gap-5 max-w-4xl mx-auto">
+                    {processingJob?.status === "PARTIAL" && (
+                        <p role="status" className="border border-yellow-500/40 bg-yellow-500/10 p-3 font-mono text-sm text-yellow-400">
+                            Processing coverage is partial. Missing or unconfigured tools may leave evidence unexamined; review processing coverage before drawing conclusions.
+                        </p>
+                    )}
 
                     {/* ── Report Header ──────────────────────────────────── */}
                     <div className="print-section">
@@ -576,13 +583,14 @@ export default function IncidentReport() {
                         <TacticalPanel title="ANALYST NOTES">
                             <textarea
                                 value={notes}
-                                onChange={(e) => {
-                                    setNotes(e.target.value);
-                                    saveNotes(incidentId ?? "", e.target.value);
-                                }}
-                                placeholder="Add analyst notes here (stored locally, not synced)..."
+                                onChange={(e) => setNotes(e.target.value)}
+                                placeholder="Add shared investigator notes..."
                                 className="w-full h-32 bg-background border border-input rounded-sm font-mono text-xs p-3 focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground resize-y"
                             />
+                            <div className="mt-2 flex items-center justify-between">
+                                <span className="text-[9px] text-muted-foreground font-mono">{sharedNote ? `LAST UPDATED ${fmtTs(sharedNote.updated_at)}` : "NOT YET SAVED"}</span>
+                                <Button size="sm" variant="tactical" disabled={saveNote.isPending} onClick={() => saveNote.mutate()}>{saveNote.isPending ? "SAVING..." : "SAVE NOTES"}</Button>
+                            </div>
                         </TacticalPanel>
                     </div>
 

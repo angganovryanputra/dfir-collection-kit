@@ -187,14 +187,12 @@ export function SuperTimelineTable({
                         {hasSeverity && (
                             <SeverityBadge severity={severity} iconOnly className="mt-0.5 h-4 w-4 shrink-0" />
                         )}
-                        <SafeText 
-                            text={highlighted ? undefined : String(row["message"] ?? row["description"] ?? "—")}
+                        {highlighted ? <span className="text-[11px] text-foreground/90 leading-tight font-sans break-all">{highlighted}</span> : <SafeText
+                            text={String(row["message"] ?? row["description"] ?? "—")}
                             className="text-[11px] text-foreground/90 leading-tight font-sans"
                             truncate={500}
                             monospace={false}
-                        >
-                            {highlighted}
-                        </SafeText>
+                        />}
                     </div>
                 );
             }
@@ -274,7 +272,7 @@ export function SuperTimelineTable({
                 columns={columns}
                 height="auto"
                 rowHeight={38}
-                className="flex-1"
+                className="flex-1 min-h-[240px]"
                 loading={loading}
                 error={error}
                 onRowClick={(e, row, idx) => onRowClick(e, row, idx)}

@@ -12,15 +12,27 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
 from app.core.modules import build_modules, get_profile_modules, normalize_os_name
-from app.crud.collection_log import create_log_entries, delete_logs_for_incident, list_logs
 from app.crud.chain_of_custody import create_entry
+from app.crud.collection_log import create_log_entries, delete_logs_for_incident, list_logs
 from app.crud.evidence import has_evidence_for_incident, lock_evidence_for_incident
-from app.crud.incident import create_incident, delete_incident, get_incident, list_incidents, update_incident
+from app.crud.incident import (
+    create_incident,
+    delete_incident,
+    get_incident,
+    list_incidents,
+    update_incident,
+)
 from app.crud.job import count_active_jobs, create_job, list_jobs_for_incident
 from app.models.device import Device
 from app.models.user import User
 from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
-from app.schemas.collection import CollectionLogEntry, CollectionStartRequest, CollectionStartResponse, CollectionStatusResponse, PerHostJobStatus
+from app.schemas.collection import (
+    CollectionLogEntry,
+    CollectionStartRequest,
+    CollectionStartResponse,
+    CollectionStatusResponse,
+    PerHostJobStatus,
+)
 from app.schemas.incident import IncidentCreate, IncidentOut, IncidentUpdate
 from app.schemas.job import JobCreate
 from app.services.audit_log_service import safe_record_event
@@ -58,15 +70,19 @@ async def get_incidents(
     offset: int = Query(default=0, ge=0),
     status: str | None = Query(default=None, description="Filter by status, e.g. ACTIVE"),
     incident_type: str | None = Query(default=None, description="Filter by type"),
-    search: str | None = Query(default=None, description="Search incident ID or operator"),
+    search: str | None = Query(default=None, description="Search incident ID, title, description or operator"),
     operator: str | None = Query(default=None, description="Exact operator username"),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> IncidentListOut:
     incidents, total = await list_incidents(
-        db, limit=limit, offset=offset,
-        status=status, incident_type=incident_type,
-        search=search, operator=operator,
+        db,
+        limit=limit,
+        offset=offset,
+        status=status,
+        incident_type=incident_type,
+        search=search,
+        operator=operator,
     )
     return IncidentListOut(total=total, items=[IncidentOut.model_validate(i) for i in incidents])
 
@@ -83,7 +99,9 @@ async def get_incident_endpoint(
     return IncidentOut.model_validate(incident)
 
 
-@router.post("/", response_model=IncidentOut, dependencies=[Depends(require_roles("operator", "admin"))])
+@router.post(
+    "/", response_model=IncidentOut, dependencies=[Depends(require_roles("operator", "admin"))]
+)
 async def create_incident_endpoint(
     payload: IncidentCreate,
     db: AsyncSession = Depends(get_db),
@@ -204,9 +222,12 @@ async def start_collection_endpoint(
             ),
         )
     except Exception as exc:
-        logger.warning("CoC entry failed for incident %s (COLLECTION STARTED): %s", incident_id, exc)
+        logger.warning(
+            "CoC entry failed for incident %s (COLLECTION STARTED): %s", incident_id, exc
+        )
 
     import re as _re
+
     from app.crud.job import get_job
 
     # Resolve effective OS:
@@ -223,9 +244,7 @@ async def start_collection_endpoint(
             os_name = normalized_override
             logger.debug("OS override from request payload: %s", os_name)
     elif target_hostnames:
-        result_os = await db.execute(
-            select(Device).where(Device.hostname == target_hostnames[0])
-        )
+        result_os = await db.execute(select(Device).where(Device.hostname == target_hostnames[0]))
         first_device = result_os.scalar_one_or_none()
         if first_device and first_device.os:
             normalized = normalize_os_name(first_device.os)
@@ -251,18 +270,21 @@ async def start_collection_endpoint(
     custom_modules_by_os: dict[str, list[dict]] = {}
     try:
         from app.models.platform_features import CustomModule
+
         custom_result = await db.execute(
             select(CustomModule).where(
                 CustomModule.enabled == True,  # noqa: E712
             )
         )
         for cm in custom_result.scalars():
-            custom_modules_by_os.setdefault(cm.os, []).append({
-                "module_id": cm.id,
-                "output_relpath": cm.output_relpath,
-                "params": {},
-                "command": cm.command,
-            })
+            custom_modules_by_os.setdefault(cm.os, []).append(
+                {
+                    "module_id": cm.id,
+                    "output_relpath": cm.output_relpath,
+                    "params": {},
+                    "command": cm.command,
+                }
+            )
         modules.extend(custom_modules_by_os.get(os_name or "windows", []))
     except Exception as _cex:
         logger.debug("Custom module fetch failed (non-fatal): %s", _cex)
@@ -275,14 +297,10 @@ async def start_collection_endpoint(
 
     # Resolve target devices: explicit agent_ids > hostnames from incident > none
     if payload.agent_ids:
-        dev_result = await db.execute(
-            select(Device).where(Device.id.in_(payload.agent_ids))
-        )
+        dev_result = await db.execute(select(Device).where(Device.id.in_(payload.agent_ids)))
         devices = list(dev_result.scalars().all())
     elif target_hostnames:
-        dev_result = await db.execute(
-            select(Device).where(Device.hostname.in_(target_hostnames))
-        )
+        dev_result = await db.execute(select(Device).where(Device.hostname.in_(target_hostnames)))
         devices = list(dev_result.scalars().all())
     else:
         devices = []
@@ -425,21 +443,21 @@ async def poll_collection_endpoint(
             agent_ids = [j.agent_id for j in jobs if j.agent_id]
             hostname_map: dict[str, str] = {}
             if agent_ids:
-                dev_result = await db.execute(
-                    select(Device).where(Device.id.in_(agent_ids))
-                )
+                dev_result = await db.execute(select(Device).where(Device.id.in_(agent_ids)))
                 for dev in dev_result.scalars():
                     hostname_map[dev.id] = dev.hostname
 
             for job in jobs:
                 hostname = hostname_map.get(job.agent_id or "") if job.agent_id else None
-                per_host.append(PerHostJobStatus(
-                    job_id=job.id,
-                    hostname=hostname,
-                    status=job.status,
-                    module_count=len(job.modules) if job.modules else 0,
-                    message=job.message,
-                ))
+                per_host.append(
+                    PerHostJobStatus(
+                        job_id=job.id,
+                        hostname=hostname,
+                        status=job.status,
+                        module_count=len(job.modules) if job.modules else 0,
+                        message=job.message,
+                    )
+                )
     except Exception as _exc:
         logger.debug("Per-host job status lookup failed (non-fatal): %s", _exc)
 
@@ -530,6 +548,33 @@ async def update_incident_endpoint(
                 detail=f"Invalid status transition: {current.status} → {payload.status}",
             )
     if payload.status == "CLOSED":
+        # Closing is a case-management gate: background acquisition/analysis must
+        # be settled first so the final CoC and report represent a stable snapshot.
+        jobs = await list_jobs_for_incident(db, incident_id)
+        active_jobs = [j.id for j in jobs if str(j.status).lower() in {"pending", "running"}]
+        if active_jobs:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Cannot close incident while {len(active_jobs)} collection job(s) are active",
+            )
+        from app.models.platform_features import IncidentTask
+        open_tasks = await db.scalar(
+            select(IncidentTask.id).where(
+                IncidentTask.incident_id == incident_id,
+                IncidentTask.status.in_(["OPEN", "IN_PROGRESS"]),
+            ).limit(1)
+        )
+        if open_tasks:
+            raise HTTPException(status_code=409, detail="Cannot close incident with open investigation tasks")
+        from app.crud.processing import get_latest_processing_job_by_incident_id
+        from app.crud.super_timeline import get_super_timeline_by_incident
+
+        proc = await get_latest_processing_job_by_incident_id(db, incident_id)
+        if proc and str(proc.status).upper() in {"PENDING", "RUNNING"}:
+            raise HTTPException(status_code=409, detail="Cannot close incident while processing is active")
+        timeline = await get_super_timeline_by_incident(db, incident_id)
+        if timeline and str(timeline.status).upper() in {"PENDING", "BUILDING"}:
+            raise HTTPException(status_code=409, detail="Cannot close incident while Super Timeline is building")
         await lock_evidence_for_incident(db, incident_id)
     incident = await update_incident(db, incident_id, payload)
     if not incident:
@@ -557,6 +602,7 @@ async def _render_pdf(html_content: str) -> bytes:
     def _do_render(html_str: str) -> bytes:
         try:
             from weasyprint import HTML as WeasyHTML  # type: ignore[import]
+
             return WeasyHTML(string=html_str).write_pdf()
         except ImportError:
             raise RuntimeError("weasyprint not installed")
@@ -585,6 +631,7 @@ async def get_incident_report(
     current_user: User = Depends(get_current_user),
 ) -> Response:
     from app.services.report_service import generate_incident_report
+
     try:
         html_content = await generate_incident_report(incident_id, db)
     except ValueError as exc:
@@ -636,11 +683,14 @@ async def delete_incident_endpoint(
 
     # Block deletion if an active legal hold exists for this incident
     from app.models.platform_features import LegalHold
+
     hold_result = await db.execute(
-        select(LegalHold.id).where(
+        select(LegalHold.id)
+        .where(
             LegalHold.incident_id == incident_id,
             LegalHold.status == "ACTIVE",
-        ).limit(1)
+        )
+        .limit(1)
     )
     if hold_result.scalar_one_or_none():
         raise HTTPException(

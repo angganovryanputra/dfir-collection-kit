@@ -5,11 +5,12 @@ Regression tests for the June 2026 platform security audit fixes:
   - Threat intel POST /enrich validates IOC values (P1)
   - Outbound TLS verification is on by default for MISP/TheHive (P1)
 """
+
 import pytest
 from fastapi import HTTPException
 
-
 # ── Agent command endpoint authentication (P0) ──────────────────────────────
+
 
 def _set_agent_token(monkeypatch, value: str) -> None:
     from app.api.v1.endpoints.agents import _token_digest
@@ -28,6 +29,7 @@ def _set_agent_token(monkeypatch, value: str) -> None:
 
 async def test_poll_rejects_missing_token(monkeypatch):
     from app.api.v1.endpoints.agent_commands import poll_for_command
+
     _set_agent_token(monkeypatch, "unit-test-agent-token")
     with pytest.raises(HTTPException) as exc:
         await poll_for_command("AGT-TEST", agent_token=None, db=None)
@@ -36,6 +38,7 @@ async def test_poll_rejects_missing_token(monkeypatch):
 
 async def test_poll_rejects_wrong_token(monkeypatch):
     from app.api.v1.endpoints.agent_commands import poll_for_command
+
     _set_agent_token(monkeypatch, "unit-test-agent-token")
     with pytest.raises(HTTPException) as exc:
         await poll_for_command("AGT-TEST", agent_token="wrong", db=None)
@@ -44,6 +47,7 @@ async def test_poll_rejects_wrong_token(monkeypatch):
 
 async def test_poll_accepts_valid_token(monkeypatch):
     from app.api.v1.endpoints.agent_commands import poll_for_command
+
     _set_agent_token(monkeypatch, "unit-test-agent-token")
     result = await poll_for_command("AGT-EMPTY", agent_token="unit-test-agent-token", db=None)
     assert result == {}
@@ -51,6 +55,7 @@ async def test_poll_accepts_valid_token(monkeypatch):
 
 async def test_result_rejects_missing_token(monkeypatch):
     from app.api.v1.endpoints.agent_commands import post_command_result
+
     _set_agent_token(monkeypatch, "unit-test-agent-token")
     with pytest.raises(HTTPException) as exc:
         await post_command_result("CMD-X", {"output": "x"}, agent_token=None)
@@ -64,7 +69,10 @@ async def test_result_accepts_valid_token_no_subscriber(monkeypatch):
     _command_agents["CMD-NOSUB"] = "AGT-TEST"
     try:
         result = await post_command_result(
-            "CMD-NOSUB", {"output": "x", "exit_code": 0}, agent_token="unit-test-agent-token", db=None
+            "CMD-NOSUB",
+            {"output": "x", "exit_code": 0},
+            agent_token="unit-test-agent-token",
+            db=None,
         )
         assert result == {"status": "no_subscriber"}
     finally:
@@ -73,8 +81,10 @@ async def test_result_accepts_valid_token_no_subscriber(monkeypatch):
 
 # ── AI endpoint incident_id validation (P0) ─────────────────────────────────
 
+
 def test_ai_incident_id_rejects_traversal():
     from app.api.v1.endpoints.ai_analysis import _validate_incident_id
+
     for bad in ("../other", "a/b", "..", "x" * 129, "inc id", "inc\x00"):
         with pytest.raises(HTTPException) as exc:
             _validate_incident_id(bad)
@@ -83,19 +93,23 @@ def test_ai_incident_id_rejects_traversal():
 
 def test_ai_incident_id_accepts_valid():
     from app.api.v1.endpoints.ai_analysis import _validate_incident_id
+
     assert _validate_incident_id("INC-MOCK-SUPERTL") == "INC-MOCK-SUPERTL"
     assert _validate_incident_id("inc_2026_001") == "inc_2026_001"
 
 
 def test_ai_disclaimer_present():
     from app.api.v1.endpoints.ai_analysis import _AI_DISCLAIMER
+
     assert "analyst validation" in _AI_DISCLAIMER.lower()
 
 
 # ── Threat intel IOC validation (P1) ────────────────────────────────────────
 
+
 def test_ioc_hash_validation():
     from app.api.v1.endpoints.threat_intel import _validate_ioc
+
     _validate_ioc("hash", "d41d8cd98f00b204e9800998ecf8427e")  # valid MD5
     _validate_ioc("hash", "a" * 64)  # valid SHA256
     for bad in ("../etc/passwd", "zz" * 20, "abc", "a" * 65):
@@ -105,6 +119,7 @@ def test_ioc_hash_validation():
 
 def test_ioc_ip_validation():
     from app.api.v1.endpoints.threat_intel import _validate_ioc
+
     _validate_ioc("ip", "10.0.0.1")
     for bad in ("10.0.0", "evil.com/../x", "1.2.3.4.5"):
         with pytest.raises(HTTPException):
@@ -113,6 +128,7 @@ def test_ioc_ip_validation():
 
 def test_ioc_domain_validation():
     from app.api.v1.endpoints.threat_intel import _validate_ioc
+
     _validate_ioc("domain", "evil-domain.example.com")
     for bad in ("a/b.com", "x", "dom ain.com"):
         with pytest.raises(HTTPException):
@@ -121,6 +137,7 @@ def test_ioc_domain_validation():
 
 def test_ioc_url_rejects_control_chars():
     from app.api.v1.endpoints.threat_intel import _validate_ioc
+
     _validate_ioc("url", "https://example.com/path?q=1")
     with pytest.raises(HTTPException):
         _validate_ioc("url", "https://example.com/\r\nHost: evil")
@@ -130,5 +147,6 @@ def test_ioc_url_rejects_control_chars():
 
 def test_ioc_unknown_type_rejected():
     from app.api.v1.endpoints.threat_intel import _validate_ioc
+
     with pytest.raises(HTTPException):
         _validate_ioc("email", "a@b.com")

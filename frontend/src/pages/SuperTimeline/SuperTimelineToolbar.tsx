@@ -15,18 +15,20 @@ interface SuperTimelineToolbarProps {
     setShowBookmarks: (v: boolean) => void;
     bookmarkCount: number;
     onExport: () => void;
+    exportFormat: "csv" | "jsonl" | "cef" | "leef" | "stix";
+    setExportFormat: (format: "csv" | "jsonl" | "cef" | "leef" | "stix") => void;
     isExporting: boolean;
     activeFilterCount: number;
     totalEvents: number;
 }
 
 export function SuperTimelineToolbar({
-    visibleCols, toggleCol, showBookmarks, setShowBookmarks, bookmarkCount, onExport, isExporting, activeFilterCount, totalEvents
+    visibleCols, toggleCol, showBookmarks, setShowBookmarks, bookmarkCount, onExport, exportFormat, setExportFormat, isExporting, activeFilterCount, totalEvents
 }: SuperTimelineToolbarProps) {
     const [showColPicker, setShowColPicker] = React.useState(false);
 
     return (
-        <div className="flex items-center justify-between gap-4 py-2 border-b border-border/40 shrink-0">
+        <div className="flex flex-wrap items-center justify-between gap-4 py-2 border-b border-border/40 shrink-0">
             <div className="flex items-center gap-4">
                 <div className="flex items-center gap-2">
                     <Button
@@ -82,6 +84,20 @@ export function SuperTimelineToolbar({
             </div>
 
             <div className="flex items-center gap-2">
+                <label className="sr-only" htmlFor="timeline-export-format">Export format</label>
+                <select
+                    id="timeline-export-format"
+                    value={exportFormat}
+                    onChange={(event) => setExportFormat(event.target.value as typeof exportFormat)}
+                    disabled={isExporting || totalEvents === 0}
+                    className="h-8 rounded-sm border border-primary/20 bg-background px-2 font-mono text-[10px] text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                >
+                    <option value="csv">CSV</option>
+                    <option value="jsonl">JSONL</option>
+                    <option value="cef">CEF</option>
+                    <option value="leef">LEEF</option>
+                    <option value="stix">STIX 2.1</option>
+                </select>
                 <Button
                     variant="outline"
                     size="sm"
@@ -90,7 +106,7 @@ export function SuperTimelineToolbar({
                     className="h-8 gap-2 font-mono text-[10px] border-primary/20 text-primary/80 hover:bg-primary/5"
                 >
                     <Download className="w-3.5 h-3.5" />
-                    {isExporting ? "EXPORTING..." : "EXPORT CSV"}
+                    {isExporting ? "EXPORTING..." : `EXPORT ${exportFormat.toUpperCase()}`}
                 </Button>
             </div>
         </div>

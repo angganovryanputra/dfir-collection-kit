@@ -29,3 +29,6 @@ class EvidenceItem(Base):
     status: Mapped[str] = mapped_column(String)
     hash: Mapped[str] = mapped_column(String)
     collected_at: Mapped[str] = mapped_column(String)
+    job_id: Mapped[str | None] = mapped_column(String, nullable=True, index=True)
+    relative_path: Mapped[str | None] = mapped_column(String, nullable=True)
+    hash_algorithm: Mapped[str | None] = mapped_column(String, nullable=True)

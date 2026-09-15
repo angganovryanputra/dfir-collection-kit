@@ -6,7 +6,9 @@ from app.models.chain_of_custody import ChainOfCustodyEntry
 from app.schemas.chain_of_custody import ChainOfCustodyEntryCreate
 
 
-async def list_entries(db: AsyncSession, incident_id: str | None = None) -> list[ChainOfCustodyEntry]:
+async def list_entries(
+    db: AsyncSession, incident_id: str | None = None
+) -> list[ChainOfCustodyEntry]:
     stmt = select(ChainOfCustodyEntry)
     if incident_id:
         stmt = stmt.where(ChainOfCustodyEntry.incident_id == incident_id)
@@ -28,13 +30,17 @@ def verify_entries(entries: list[ChainOfCustodyEntry]) -> None:
         )
         if entry.previous_hash != previous_hash or entry.entry_hash != expected_hash:
             raise ValueError("Chain-of-custody integrity check failed")
-        if entry.entry_signature and entry.entry_signature != compute_chain_signature(entry.entry_hash):
+        if entry.entry_signature and entry.entry_signature != compute_chain_signature(
+            entry.entry_hash
+        ):
             raise ValueError("Chain-of-custody signature check failed")
         previous_hash = entry.entry_hash
 
 
 async def create_entry(db: AsyncSession, payload: ChainOfCustodyEntryCreate) -> ChainOfCustodyEntry:
-    existing = await db.execute(select(ChainOfCustodyEntry).where(ChainOfCustodyEntry.id == payload.id))
+    existing = await db.execute(
+        select(ChainOfCustodyEntry).where(ChainOfCustodyEntry.id == payload.id)
+    )
     if existing.scalar_one_or_none():
         raise ValueError("Chain-of-custody entry already exists")
     last_entry = await db.execute(

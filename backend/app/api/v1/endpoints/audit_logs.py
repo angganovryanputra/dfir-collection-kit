@@ -15,7 +15,9 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/", response_model=AuditLogListResponse, dependencies=[Depends(require_roles("admin"))])
+@router.get(
+    "/", response_model=AuditLogListResponse, dependencies=[Depends(require_roles("admin"))]
+)
 async def get_audit_logs(
     db: AsyncSession = Depends(get_db),
     event_type: str | None = Query(default=None),

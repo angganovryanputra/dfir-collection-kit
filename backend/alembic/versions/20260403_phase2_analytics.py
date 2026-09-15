@@ -6,8 +6,9 @@ Create Date: 2026-04-03 00:00:00.000000
 """
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "20260403_phase2_analytics"
 down_revision = "20260402_processing_settings"
@@ -69,12 +70,8 @@ def upgrade() -> None:
                 nullable=False,
                 server_default="{}",
             ),
-            sa.Column(
-                "graph_nodes", postgresql.JSONB(), nullable=False, server_default="[]"
-            ),
-            sa.Column(
-                "graph_edges", postgresql.JSONB(), nullable=False, server_default="[]"
-            ),
+            sa.Column("graph_nodes", postgresql.JSONB(), nullable=False, server_default="[]"),
+            sa.Column("graph_edges", postgresql.JSONB(), nullable=False, server_default="[]"),
             sa.Column("hit_count", sa.Integer(), nullable=False, server_default="0"),
             sa.Column(
                 "severity",
@@ -88,9 +85,7 @@ def upgrade() -> None:
                 nullable=False,
                 server_default="{}",
             ),
-            sa.Column(
-                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
-            ),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         )
         _create_index_if_missing("ix_attack_chains_incident_id", "attack_chains", ["incident_id"])
 
@@ -103,9 +98,7 @@ def upgrade() -> None:
             sa.Column("description", sa.Text(), nullable=True),
             sa.Column("source", sa.String(), nullable=True),
             sa.Column("severity", sa.String(), nullable=False, server_default="high"),
-            sa.Column(
-                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
-            ),
+            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
             sa.Column("created_by", sa.String(), nullable=True),
         )
         _create_index_if_missing("ix_ioc_type_value", "ioc_indicators", ["ioc_type", "value"])
@@ -135,12 +128,12 @@ def upgrade() -> None:
             sa.Column("event_timestamp", sa.DateTime(timezone=True), nullable=True),
             sa.Column("event_data", postgresql.JSONB(), nullable=False, server_default="{}"),
             sa.Column("severity", sa.String(), nullable=False, server_default="high"),
-            sa.Column(
-                "detected_at", sa.DateTime(timezone=True), server_default=sa.func.now()
-            ),
+            sa.Column("detected_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         )
         _create_index_if_missing("ix_ioc_matches_incident_id", "ioc_matches", ["incident_id"])
-        _create_index_if_missing("ix_ioc_matches_incident_type", "ioc_matches", ["incident_id", "ioc_type"])
+        _create_index_if_missing(
+            "ix_ioc_matches_incident_type", "ioc_matches", ["incident_id", "ioc_type"]
+        )
 
     if "yara_matches" not in existing:
         op.create_table(
@@ -160,9 +153,7 @@ def upgrade() -> None:
             sa.Column("file_sha256", sa.String(), nullable=True),
             sa.Column("strings", postgresql.JSONB(), nullable=False, server_default="[]"),
             sa.Column("severity", sa.String(), nullable=False, server_default="high"),
-            sa.Column(
-                "detected_at", sa.DateTime(timezone=True), server_default=sa.func.now()
-            ),
+            sa.Column("detected_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
         )
         _create_index_if_missing("ix_yara_matches_incident_id", "yara_matches", ["incident_id"])
 

@@ -5,8 +5,10 @@ Scans files in the extracted/ evidence directory against YARA rules.
 Requires: pip install yara-python
 Rules directory: configurable, defaults to /opt/yara-rules
 """
+
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import uuid
@@ -18,10 +20,33 @@ logger = logging.getLogger(__name__)
 
 # Extensions to scan (skip obviously uninteresting files)
 _SCAN_EXTENSIONS = {
-    ".exe", ".dll", ".sys", ".bat", ".ps1", ".vbs", ".js", ".wsf",
-    ".lnk", ".hta", ".scr", ".com", ".pif", ".jar", ".zip", ".7z",
-    ".rar", ".doc", ".docm", ".xls", ".xlsm", ".ppt", ".pptm",
-    ".pdf", ".iso", ".img", ".bin",
+    ".exe",
+    ".dll",
+    ".sys",
+    ".bat",
+    ".ps1",
+    ".vbs",
+    ".js",
+    ".wsf",
+    ".lnk",
+    ".hta",
+    ".scr",
+    ".com",
+    ".pif",
+    ".jar",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".doc",
+    ".docm",
+    ".xls",
+    ".xlsm",
+    ".ppt",
+    ".pptm",
+    ".pdf",
+    ".iso",
+    ".img",
+    ".bin",
 }
 # Max file size to scan (50 MB — avoid scanning huge raw images)
 _MAX_SCAN_BYTES = 50 * 1024 * 1024
@@ -74,26 +99,31 @@ async def run_yara_scan(
     extracted_dir: Path,
     yara_rules_path: str,
     db: AsyncSession,
+    *,
+    report: dict | None = None,
 ) -> int:
     """
     Scan files in extracted_dir against YARA rules.
     Returns number of matches stored.
     """
-    from app.models.analytics import YaraMatch
     from sqlalchemy import delete
 
-    rules = _load_rules(yara_rules_path)
+    from app.models.analytics import YaraMatch
+
+    report = report if report is not None else {}
+    report.update(status="SUCCESS", scanned=0, skipped=0)
+    rules = await asyncio.to_thread(_load_rules, yara_rules_path)
     if rules is None:
-        return 0
+        raise RuntimeError(
+            "Configured YARA rules could not be loaded; verify yara-python and rule syntax"
+        )
 
     if not extracted_dir.exists():
         logger.info("extracted/ dir not found — skipping YARA scan")
         return 0
 
     # Clear previous YARA matches for this processing job
-    await db.execute(
-        delete(YaraMatch).where(YaraMatch.processing_job_id == processing_job_id)
-    )
+    await db.execute(delete(YaraMatch).where(YaraMatch.processing_job_id == processing_job_id))
 
     records: list[YaraMatch] = []
 
@@ -101,24 +131,26 @@ async def run_yara_scan(
         if not file_path.is_file():
             continue
         if file_path.suffix.lower() not in _SCAN_EXTENSIONS:
+            report["skipped"] += 1
             continue
         try:
             file_size = file_path.stat().st_size
         except OSError:
-            continue
+            raise
         if file_size > _MAX_SCAN_BYTES:
+            report["skipped"] += 1
             continue
 
         try:
-            matches = rules.match(str(file_path))
+            matches = await asyncio.to_thread(rules.match, str(file_path), timeout=60)
+            report["scanned"] += 1
         except Exception as exc:
-            logger.debug("YARA scan error on %s: %s", file_path.name, exc)
-            continue
+            raise RuntimeError(f"YARA failed on {file_path.name}: {exc}") from exc
 
         if not matches:
             continue
 
-        sha256 = _sha256_file(file_path)
+        sha256 = await asyncio.to_thread(_sha256_file, file_path)
         rel_path = str(file_path.relative_to(extracted_dir))
 
         for match in matches:
@@ -126,11 +158,13 @@ async def run_yara_scan(
             strings_info: list[dict] = []
             for string_match in match.strings:
                 for instance in string_match.instances:
-                    strings_info.append({
-                        "offset": instance.offset,
-                        "name": string_match.identifier,
-                        "data": instance.matched_data.hex(),
-                    })
+                    strings_info.append(
+                        {
+                            "offset": instance.offset,
+                            "name": string_match.identifier,
+                            "data": instance.matched_data.hex(),
+                        }
+                    )
                     if len(strings_info) >= 20:
                         break
                 if len(strings_info) >= 20:
@@ -155,5 +189,9 @@ async def run_yara_scan(
         db.add_all(records)
         await db.flush()
 
+    if report["skipped"]:
+        report.update(
+            status="PARTIAL", reason="File type/50 MB size policy excludes some artifacts"
+        )
     logger.info("YARA scan complete for incident %s: %d file matches", incident_id, len(records))
     return len(records)

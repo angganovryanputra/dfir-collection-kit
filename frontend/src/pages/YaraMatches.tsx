@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { useEvidence } from "@/context/EvidenceContext";
 import { 
     ChevronLeft, ChevronRight, ShieldCheck, Bug, AlertTriangle, 
-    Search, Pin, FileCode, Hash, HardDrive, ExternalLink, Activity
+    Search, Pin, FileCode, Hash, HardDrive, ExternalLink, Activity, Loader2
 } from "lucide-react";
 import { apiGet } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -129,7 +129,7 @@ export default function YaraMatches() {
                                 "text-[11px] font-bold uppercase tracking-tight",
                                 total > 0 ? "text-red-400" : "text-green-400"
                             )}>
-                                {total > 0 ? "Malicious Artifacts Detected" : "System Integrity Verified"}
+                                {isLoading ? "Loading scan results" : total > 0 ? "Artifacts requiring review" : "No matches recorded — verify scan coverage"}
                             </div>
                             <div className="text-[10px] text-muted-foreground leading-tight mt-0.5">
                                 {total > 0 
@@ -144,7 +144,7 @@ export default function YaraMatches() {
                             <div className="text-[9px] text-muted-foreground uppercase font-bold tracking-tighter">Scanner Status</div>
                             <div className="flex items-center gap-2">
                                 <span className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-                                <span className="font-mono text-[10px] font-bold">ENGINE_ACTIVE</span>
+                                <span className="font-mono text-[10px] font-bold">RECORDED RESULTS</span>
                             </div>
                         </div>
                         <Button variant="ghost" size="sm" className="h-7 text-[8px] border border-border/40" onClick={() => navigate(`/incidents/${incidentId}/setup`)}>

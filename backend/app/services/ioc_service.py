@@ -4,6 +4,7 @@ IOC matching service.
 Loads all IOCIndicator records, scans the incident timeline JSONL for values
 matching known bad IPs, domains, hashes, and URLs, then stores IOCMatch records.
 """
+
 from __future__ import annotations
 
 import ipaddress
@@ -40,7 +41,13 @@ def _extract_observables(event: dict) -> dict[str, list[tuple[str, str]]]:
     Extract observable values from a timeline event dict.
     Returns {ioc_type: [(field_name, value), ...]}
     """
-    observables: dict[str, list[tuple[str, str]]] = {"ip": [], "domain": [], "sha256": [], "md5": [], "sha1": []}
+    observables: dict[str, list[tuple[str, str]]] = {
+        "ip": [],
+        "domain": [],
+        "sha256": [],
+        "md5": [],
+        "sha1": [],
+    }
 
     for field, val in event.items():
         if not isinstance(val, str) or not val:
@@ -75,8 +82,9 @@ async def run_ioc_matching(
     Scan timeline.jsonl against known IOC indicators.
     Returns number of matches stored.
     """
-    from app.models.analytics import IOCIndicator, IOCMatch
     from sqlalchemy import delete, select
+
+    from app.models.analytics import IOCIndicator, IOCMatch
 
     timeline_path = timeline_dir / "timeline.jsonl"
     if not timeline_path.exists():
@@ -97,9 +105,7 @@ async def run_ioc_matching(
         indicator_map[key] = ind
 
     # Clear previous matches for this processing job
-    await db.execute(
-        delete(IOCMatch).where(IOCMatch.processing_job_id == processing_job_id)
-    )
+    await db.execute(delete(IOCMatch).where(IOCMatch.processing_job_id == processing_job_id))
 
     matches: list[IOCMatch] = []
     matched_keys: set[str] = set()  # deduplicate per (indicator_id, field, value)
@@ -160,7 +166,7 @@ async def run_ioc_matching(
 
     except OSError as exc:
         logger.error("Failed to read timeline for IOC matching: %s", exc)
-        return 0
+        raise
 
     if matches:
         db.add_all(matches)
@@ -168,6 +174,8 @@ async def run_ioc_matching(
 
     logger.info(
         "IOC matching complete for incident %s: %d matches from %d indicators",
-        incident_id, len(matches), len(indicators),
+        incident_id,
+        len(matches),
+        len(indicators),
     )
     return len(matches)
