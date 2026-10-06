@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"fmt"
 	"math/big"
+	"os/exec"
+	"runtime"
 	"sync"
 	"time"
 
@@ -120,11 +122,54 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	// Main event loop with OPSEC jitter.
 	// Instead of fixed-interval tickers (trivially fingerprintable as C2
-	// beaconing), we add ±30 % randomisation to every sleep.
+	// 1. Background heartbeat routine ensures the agent constantly reports ONLINE
+	// status, even during lengthy evidence collection runs.
+	go func() {
+		lastHb := time.Now()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(jitteredDuration(1*time.Second, 50)):
+			}
+			hbInterval := jitteredDuration(
+				time.Duration(a.config.HeartbeatInterval)*time.Second,
+				a.config.JitterPercent,
+			)
+			if time.Since(lastHb) >= hbInterval {
+				if err := a.heartbeat(ctx); err != nil {
+					logging.Error("Heartbeat failed: %v", err)
+				}
+				lastHb = time.Now()
+			}
+		}
+	}()
 
-	lastHeartbeat := time.Now()
+	// 2. Background live command routine ensures analyst commands from the console
+	// execute with sub-5s latency without waiting for collection jobs to finish.
+	go func() {
+		lastCmd := time.Now()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(jitteredDuration(1*time.Second, 50)):
+			}
+			cmdInterval := jitteredDuration(
+				time.Duration(a.config.CommandPollInterval)*time.Second,
+				a.config.JitterPercent,
+			)
+			if time.Since(lastCmd) >= cmdInterval {
+				if err := a.pollAndExecuteCommand(ctx); err != nil {
+					logging.Error("Live command execution failed: %v", err)
+				}
+				lastCmd = time.Now()
+			}
+		}
+	}()
+
+	// 3. Main collection job loop
 	lastPoll := time.Now()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -133,33 +178,17 @@ func (a *Agent) Run(ctx context.Context) error {
 		default:
 		}
 
-		now := time.Now()
-
-		// Heartbeat with jitter
-		hbInterval := jitteredDuration(
-			time.Duration(a.config.HeartbeatInterval)*time.Second,
-			a.config.JitterPercent,
-		)
-		if now.Sub(lastHeartbeat) >= hbInterval {
-			if err := a.heartbeat(ctx); err != nil {
-				logging.Error("Heartbeat failed: %v", err)
-			}
-			lastHeartbeat = time.Now()
-		}
-
-		// Job poll with jitter
 		pollInterval := jitteredDuration(
 			time.Duration(a.config.PollInterval)*time.Second,
 			a.config.JitterPercent,
 		)
-		if now.Sub(lastPoll) >= pollInterval {
+		if time.Since(lastPoll) >= pollInterval {
 			if err := a.pollAndExecuteJob(ctx); err != nil {
 				logging.Error("Job execution failed: %v", err)
 			}
 			lastPoll = time.Now()
 		}
 
-		// Short sleep to avoid busy-waiting; also jittered
 		time.Sleep(jitteredDuration(1*time.Second, 50))
 	}
 }
@@ -170,6 +199,68 @@ func (a *Agent) Run(ctx context.Context) error {
 func (a *Agent) heartbeat(ctx context.Context) error {
 	logging.Debug("Sending heartbeat (state=%s)", a.getState())
 	return a.apiClient.Heartbeat(ctx)
+}
+
+// pollAndExecuteCommand checks for pending ad-hoc commands from the analyst console and executes them
+func (a *Agent) pollAndExecuteCommand(ctx context.Context) error {
+	cmdInst, err := a.apiClient.PollCommand(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to poll command: %w", err)
+	}
+	if cmdInst == nil {
+		return nil
+	}
+
+	logging.Info("Executing live command [%s]: %s", cmdInst.CommandID, cmdInst.Cmd)
+
+	timeoutSec := cmdInst.TimeoutSec
+	if timeoutSec <= 0 || timeoutSec > 300 {
+		timeoutSec = 30
+	}
+	cmdCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSec)*time.Second)
+	defer cancel()
+
+	var execCmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		execCmd = exec.CommandContext(cmdCtx, "cmd.exe", "/C", cmdInst.Cmd)
+	} else {
+		execCmd = exec.CommandContext(cmdCtx, "sh", "-c", cmdInst.Cmd)
+	}
+
+	out, runErr := execCmd.CombinedOutput()
+	exitCode := 0
+	outputStr := string(out)
+
+	if runErr != nil {
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else if cmdCtx.Err() == context.DeadlineExceeded {
+			exitCode = 124
+			if outputStr != "" {
+				outputStr += "\n"
+			}
+			outputStr += fmt.Sprintf("Command timed out after %d seconds", timeoutSec)
+		} else {
+			exitCode = 1
+			if outputStr != "" {
+				outputStr += "\n"
+			}
+			outputStr += fmt.Sprintf("Command execution error: %v", runErr)
+		}
+	}
+
+	// Cap output to 500KB to stay safely below backend limit (1MB)
+	const maxOutputBytes = 500 * 1024
+	if len(outputStr) > maxOutputBytes {
+		outputStr = outputStr[:maxOutputBytes] + "\n... [output truncated at 500KB] ..."
+	}
+
+	if postErr := a.apiClient.PostCommandResult(ctx, cmdInst.CommandID, exitCode, outputStr); postErr != nil {
+		return fmt.Errorf("failed to post command result [%s]: %w", cmdInst.CommandID, postErr)
+	}
+
+	logging.Info("Command [%s] completed (exit_code=%d)", cmdInst.CommandID, exitCode)
+	return nil
 }
 
 // pollAndExecuteJob checks for new jobs and executes them

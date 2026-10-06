@@ -16,25 +16,48 @@ from app.services.system_settings_service import get_runtime_settings
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-_VALID_OS = {"windows", "linux", "macos"}
+_VALID_OS = {"windows", "linux", "macos", "darwin"}
 _VALID_ARCH = {"amd64", "arm64", "x86"}
+
+
+def _candidate_filenames(os_lower: str, arch_lower: str) -> list[str]:
+    norm_os = "macos" if os_lower in {"macos", "darwin"} else os_lower
+    candidates: list[str] = []
+
+    if norm_os == "windows":
+        candidates.extend([
+            f"dfir-agent-{norm_os}-{arch_lower}.exe",
+            f"agent-{norm_os}-{arch_lower}.exe",
+        ])
+        if arch_lower in {"amd64", "x86"}:
+            candidates.extend(["dfir-agent.exe", "agent.exe"])
+    elif norm_os == "linux":
+        candidates.extend([
+            f"dfir-agent-{norm_os}-{arch_lower}",
+            f"agent-{norm_os}-{arch_lower}",
+        ])
+        if arch_lower == "amd64":
+            candidates.extend(["dfir-agent-linux", "agent-linux"])
+        elif arch_lower == "arm64":
+            candidates.extend(["dfir-agent-linux-arm64", "agent-linux-arm64"])
+    elif norm_os == "macos":
+        candidates.extend([
+            f"dfir-agent-darwin-{arch_lower}",
+            f"dfir-agent-macos-{arch_lower}",
+            f"agent-darwin-{arch_lower}",
+            f"agent-macos-{arch_lower}",
+        ])
+    return candidates
 
 
 @router.get("/download")
 async def download_agent_binary(
-    os: str = Query(..., description="Target OS: windows or linux"),
+    os: str = Query(..., description="Target OS: windows, linux, or macos"),
     arch: str = Query(default="amd64", description="Architecture: amd64, arm64, or x86"),
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> FileResponse:
-    """Download the pre-built agent binary for the given OS and architecture.
-
-    Binaries must be placed in the directory configured via Settings → Agent Binary Path.
-    Expected filenames:
-      agent-windows-amd64.exe
-      agent-linux-amd64
-      agent-linux-arm64
-    """
+    """Download the pre-built agent binary for the given OS and architecture."""
     os_lower = os.lower().strip()
     arch_lower = arch.lower().strip()
 
@@ -55,9 +78,7 @@ async def download_agent_binary(
     if not binary_base:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Agent binary path not configured. " "Set it in Admin Settings → Agent Binary Path."
-            ),
+            detail="Agent binary path not configured. Set it in Admin Settings → Agent Binary Path.",
         )
 
     binary_dir = Path(binary_base)
@@ -67,14 +88,7 @@ async def download_agent_binary(
             detail=f"Agent binary directory not found: {binary_base}",
         )
 
-    ext = ".exe" if os_lower == "windows" else ""
-    # Accept both naming conventions:
-    #   dfir-agent-<os>-<arch>.exe  (Makefile output)
-    #   agent-<os>-<arch>.exe       (legacy)
-    candidates = [
-        f"dfir-agent-{os_lower}-{arch_lower}{ext}",
-        f"agent-{os_lower}-{arch_lower}{ext}",
-    ]
+    candidates = _candidate_filenames(os_lower, arch_lower)
     binary_path = None
     filename = candidates[0]
     for candidate in candidates:
@@ -89,8 +103,8 @@ async def download_agent_binary(
             status_code=404,
             detail=(
                 f"Binary not found in {binary_base}. "
-                f"Build with: cd agent && make {os_lower}  "
-                f"then copy the binary here."
+                f"Searched candidates: {', '.join(candidates)}. "
+                f"Build with Makefile targets (e.g. make agent-all) then copy binaries there."
             ),
         )
 
@@ -112,15 +126,42 @@ async def get_agent_info(
     binary_base = getattr(runtime, "agent_binary_path", None) or ""
 
     if not binary_base or not Path(binary_base).is_dir():
-        return {"configured": False, "available": []}
+        return {
+            "configured": False,
+            "available": [],
+            "windows_amd64": False,
+            "linux_amd64": False,
+            "linux_arm64": False,
+            "macos_arm64": False,
+            "macos_amd64": False,
+        }
 
     binary_dir = Path(binary_base)
-    available = []
-    for os_name in _VALID_OS:
-        for arch in _VALID_ARCH:
-            ext = ".exe" if os_name == "windows" else ""
-            fname = f"agent-{os_name}-{arch}{ext}"
+    available: list[dict] = []
+    found_targets: set[str] = set()
+
+    check_targets = [
+        ("windows", "amd64"),
+        ("linux", "amd64"),
+        ("linux", "arm64"),
+        ("macos", "arm64"),
+        ("macos", "amd64"),
+    ]
+
+    for os_name, arch in check_targets:
+        for fname in _candidate_filenames(os_name, arch):
             if (binary_dir / fname).exists():
                 available.append({"os": os_name, "arch": arch, "filename": fname})
+                found_targets.add(f"{os_name}_{arch}")
+                break
 
-    return {"configured": True, "binary_path": binary_base, "available": available}
+    return {
+        "configured": True,
+        "binary_path": binary_base,
+        "available": available,
+        "windows_amd64": "windows_amd64" in found_targets,
+        "linux_amd64": "linux_amd64" in found_targets,
+        "linux_arm64": "linux_arm64" in found_targets,
+        "macos_arm64": "macos_arm64" in found_targets,
+        "macos_amd64": "macos_amd64" in found_targets,
+    }

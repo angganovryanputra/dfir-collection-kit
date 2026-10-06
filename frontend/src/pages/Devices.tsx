@@ -108,6 +108,9 @@ const mapDevice = (device: DeviceResponse): Device => ({
 interface AgentBinaryInfo {
   windows_amd64: boolean;
   linux_amd64: boolean;
+  linux_arm64?: boolean;
+  macos_arm64?: boolean;
+  macos_amd64?: boolean;
 }
 
 type FilterStatus = "all" | "online" | "offline" | "degraded" | "pending";
@@ -421,7 +424,12 @@ export default function Devices() {
                     Agent binary downloads not configured. Set <span className="text-foreground">agent_binary_path</span> in System Config.
                   </div>
                 )}
-                {agentBinaryInfoQuery.data && !agentBinaryInfoQuery.data.windows_amd64 && !agentBinaryInfoQuery.data.linux_amd64 && (
+                {agentBinaryInfoQuery.data &&
+                  !agentBinaryInfoQuery.data.windows_amd64 &&
+                  !agentBinaryInfoQuery.data.linux_amd64 &&
+                  !agentBinaryInfoQuery.data.linux_arm64 &&
+                  !agentBinaryInfoQuery.data.macos_arm64 &&
+                  !agentBinaryInfoQuery.data.macos_amd64 && (
                   <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
                     <Info className="w-4 h-4" />
                     No agent binaries available. Place pre-built binaries in the configured <span className="text-foreground">agent_binary_path</span> directory.
@@ -432,7 +440,7 @@ export default function Devices() {
                     variant="secondary"
                     size="sm"
                     disabled={isDownloadingAgent["windows-amd64"]}
-                    onClick={() => void downloadAgentBinary("windows", "amd64", "agent-windows-amd64.exe")}
+                    onClick={() => void downloadAgentBinary("windows", "amd64", "dfir-agent.exe")}
                   >
                     {isDownloadingAgent["windows-amd64"]
                       ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -446,13 +454,55 @@ export default function Devices() {
                     variant="secondary"
                     size="sm"
                     disabled={isDownloadingAgent["linux-amd64"]}
-                    onClick={() => void downloadAgentBinary("linux", "amd64", "agent-linux-amd64")}
+                    onClick={() => void downloadAgentBinary("linux", "amd64", "dfir-agent-linux")}
                   >
                     {isDownloadingAgent["linux-amd64"]
                       ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                       : <Download className="w-4 h-4 mr-2" />
                     }
                     LINUX x64
+                  </Button>
+                )}
+                {agentBinaryInfoQuery.data?.linux_arm64 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={isDownloadingAgent["linux-arm64"]}
+                    onClick={() => void downloadAgentBinary("linux", "arm64", "dfir-agent-linux-arm64")}
+                  >
+                    {isDownloadingAgent["linux-arm64"]
+                      ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      : <Download className="w-4 h-4 mr-2" />
+                    }
+                    LINUX ARM64
+                  </Button>
+                )}
+                {agentBinaryInfoQuery.data?.macos_arm64 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={isDownloadingAgent["macos-arm64"]}
+                    onClick={() => void downloadAgentBinary("macos", "arm64", "dfir-agent-darwin-arm64")}
+                  >
+                    {isDownloadingAgent["macos-arm64"]
+                      ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      : <Download className="w-4 h-4 mr-2" />
+                    }
+                    macOS APPLE SILICON
+                  </Button>
+                )}
+                {agentBinaryInfoQuery.data?.macos_amd64 && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    disabled={isDownloadingAgent["macos-amd64"]}
+                    onClick={() => void downloadAgentBinary("macos", "amd64", "dfir-agent-darwin-amd64")}
+                  >
+                    {isDownloadingAgent["macos-amd64"]
+                      ? <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      : <Download className="w-4 h-4 mr-2" />
+                    }
+                    macOS INTEL
                   </Button>
                 )}
                 {agentDownloadError && (
@@ -520,9 +570,11 @@ export default function Devices() {
                         <div className="text-muted-foreground">Execute the agent binary. It will register itself and appear in this device list within 60 seconds.</div>
                         <div className="p-2 bg-background border border-border text-primary text-[11px] whitespace-nowrap overflow-x-auto mt-1">
                           <div className="text-muted-foreground/60 mb-1"># Windows (run as Administrator)</div>
-                          <div>.\agent-windows-amd64.exe</div>
+                          <div>.\dfir-agent.exe</div>
                           <div className="text-muted-foreground/60 mt-2 mb-1"># Linux (run as root or with sudo)</div>
-                          <div>chmod +x agent-linux-amd64 && sudo ./agent-linux-amd64</div>
+                          <div>chmod +x dfir-agent-linux && sudo ./dfir-agent-linux</div>
+                          <div className="text-muted-foreground/60 mt-2 mb-1"># macOS (grant Full Disk Access in Settings, then run as root)</div>
+                          <div>chmod +x dfir-agent-darwin-* && sudo ./dfir-agent-darwin-arm64</div>
                         </div>
                       </div>
                     </div>

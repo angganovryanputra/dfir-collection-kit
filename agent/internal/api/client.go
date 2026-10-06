@@ -538,6 +538,69 @@ func (c *Client) uploadToS3(ctx context.Context, jobID, zipPath, presignedURL, m
 	return nil
 }
 
+// ── Live command management ────────────────────────────────────────────────────
+
+// CommandInstruction represents a real-time command dispatched by an analyst from the console.
+type CommandInstruction struct {
+	CommandID  string `json:"command_id"`
+	Cmd        string `json:"cmd"`
+	TimeoutSec int    `json:"timeout_sec"`
+}
+
+// CommandResultPayload represents the execution output and exit code sent back to backend.
+type CommandResultPayload struct {
+	Output   string `json:"output"`
+	ExitCode int    `json:"exit_code"`
+}
+
+// PollCommand checks if there is a pending live command for this agent.
+func (c *Client) PollCommand(ctx context.Context) (*CommandInstruction, error) {
+	if err := validateID(c.config.AgentID); err != nil {
+		return nil, fmt.Errorf("PollCommand: %w", err)
+	}
+	resp, err := c.makeRequest(ctx, "GET", "/agent-commands/poll/"+c.config.AgentID, nil, "")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusNoContent {
+		return nil, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("PollCommand: HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	var cmd CommandInstruction
+	if err := json.NewDecoder(resp.Body).Decode(&cmd); err != nil {
+		return nil, fmt.Errorf("PollCommand decode: %w", err)
+	}
+	if cmd.CommandID == "" || cmd.Cmd == "" {
+		return nil, nil
+	}
+	return &cmd, nil
+}
+
+// PostCommandResult posts the execution result of a live command back to the backend.
+func (c *Client) PostCommandResult(ctx context.Context, commandID string, exitCode int, output string) error {
+	if err := validateID(commandID); err != nil {
+		return fmt.Errorf("PostCommandResult: %w", err)
+	}
+	payload := CommandResultPayload{
+		Output:   output,
+		ExitCode: exitCode,
+	}
+	resp, err := c.makeRequest(ctx, "POST", "/agent-commands/result/"+commandID, payload, "")
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("PostCommandResult: HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 func detectLocalIP() string {

@@ -32,17 +32,18 @@ import (
 )
 
 const (
-	DefaultHeartbeatInterval = 30
-	DefaultPollInterval      = 15
-	DefaultJitterPercent     = 30
-	DefaultConnectTimeoutSec = 10
-	DefaultUploadTimeoutMin  = 120  // 2 hours — enough for large evidence ZIPs on WAN
-	DefaultMaxRetries        = 0    // 0 = retry forever until registration succeeds
-	DefaultRetryIntervalSec  = 15
-	AgentIDFile              = "agent_id.json"
-	AgentTokenFile           = "agent_token"
-	DefaultBackendURL        = "https://localhost/api/v1"
-	ConfigFileName           = "dfir-agent.conf"
+	DefaultHeartbeatInterval   = 30
+	DefaultPollInterval        = 15
+	DefaultCommandPollInterval = 3
+	DefaultJitterPercent       = 30
+	DefaultConnectTimeoutSec   = 10
+	DefaultUploadTimeoutMin    = 120  // 2 hours — enough for large evidence ZIPs on WAN
+	DefaultMaxRetries          = 0    // 0 = retry forever until registration succeeds
+	DefaultRetryIntervalSec    = 15
+	AgentIDFile                = "agent_id.json"
+	AgentTokenFile             = "agent_token"
+	DefaultBackendURL          = "https://localhost/api/v1"
+	ConfigFileName             = "dfir-agent.conf"
 )
 
 // Config holds all agent configuration.
@@ -60,9 +61,10 @@ type Config struct {
 	AgentVersion      string
 
 	// Poll / heartbeat timing
-	HeartbeatInterval int
-	PollInterval      int
-	JitterPercent     int // ±% randomisation for OPSEC
+	HeartbeatInterval   int
+	PollInterval        int
+	CommandPollInterval int
+	JitterPercent       int // ±% randomisation for OPSEC
 
 	// Network / TLS (enterprise critical)
 	TLSSkipVerify bool   // accept self-signed / corp-intercepted TLS
@@ -192,6 +194,9 @@ func Load(f *Flags) (*Config, error) {
 
 	// ── Secret (required) ────────────────────────────────────────────────────
 	secret := str(f.Secret, "secret", "DFIR_AGENT_SECRET", "")
+	if secret == "" {
+		secret = str(nil, "shared_secret", "AGENT_SHARED_SECRET", "")
+	}
 
 	// ── Portable data directory ───────────────────────────────────────────────
 	// Priority: --data-dir flag → config data_dir → DFIR_DATA_DIR env
@@ -225,8 +230,13 @@ func Load(f *Flags) (*Config, error) {
 		return nil, fmt.Errorf("agent ID: %w", err)
 	}
 
+	backendURL := str(f.Backend, "backend", "DFIR_BACKEND_URL", "")
+	if backendURL == "" {
+		backendURL = str(nil, "server_url", "DFIR_SERVER_URL", DefaultBackendURL)
+	}
+
 	return &Config{
-		BackendURL:        str(f.Backend, "backend", "DFIR_BACKEND_URL", DefaultBackendURL),
+		BackendURL:        backendURL,
 		AgentSharedSecret: secret,
 		AgentToken:        agentToken,
 		AgentID:           agentID,
@@ -236,9 +246,10 @@ func Load(f *Flags) (*Config, error) {
 		OS:                detectOSName(),
 		OSVersion:         detectOSVersion(),
 		AgentVersion:      "1.0.0",
-		HeartbeatInterval: DefaultHeartbeatInterval,
-		PollInterval:      DefaultPollInterval,
-		JitterPercent:     DefaultJitterPercent,
+		HeartbeatInterval:   DefaultHeartbeatInterval,
+		PollInterval:        DefaultPollInterval,
+		CommandPollInterval: intv(nil, "command_poll_interval", "DFIR_COMMAND_POLL_INTERVAL", DefaultCommandPollInterval),
+		JitterPercent:       DefaultJitterPercent,
 
 		TLSSkipVerify:    boolv(f.TLSSkipVerify, "tls_skip_verify", "DFIR_TLS_SKIP_VERIFY", false),
 		TLSCACertPath:    str(f.CACert, "ca_cert", "DFIR_TLS_CA_CERT", ""),
@@ -298,9 +309,10 @@ func LoadDryRun(f *Flags) (*Config, error) {
 		OS:                detectOSName(),
 		OSVersion:         detectOSVersion(),
 		AgentVersion:      "1.0.0",
-		HeartbeatInterval: DefaultHeartbeatInterval,
-		PollInterval:      DefaultPollInterval,
-		JitterPercent:     DefaultJitterPercent,
+		HeartbeatInterval:   DefaultHeartbeatInterval,
+		PollInterval:        DefaultPollInterval,
+		CommandPollInterval: DefaultCommandPollInterval,
+		JitterPercent:       DefaultJitterPercent,
 		DataDir:           dataDir,
 		UploadTimeoutMin:  DefaultUploadTimeoutMin,
 		RetryIntervalSec:  DefaultRetryIntervalSec,

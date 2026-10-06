@@ -23,7 +23,7 @@ func IsAdmin() bool {
 		return value == "true"
 	}
 
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == "linux" || runtime.GOOS == "darwin" {
 		return os.Geteuid() == 0
 	}
 

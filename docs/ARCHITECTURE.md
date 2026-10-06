@@ -281,25 +281,69 @@ Any tampering with a CoC entry will cause verification to fail.
 
 ## Agent Architecture (Go)
 
+The Go agent is designed with a **concurrent multi-loop architecture** to guarantee that long-running collection jobs never impact agent responsiveness or dashboard status.
+
+### Concurrency Model
+
+Upon startup, the agent initializes three distinct, concurrent goroutines:
+
+1. **Heartbeat Loop (`startHeartbeatLoop`)**:
+   - Fires every 30 seconds (`DefaultHeartbeatInterval = 30`).
+   - Posts endpoint health and metrics to `POST /api/v1/agents/{id}/heartbeat`.
+   - Runs in complete isolation so intensive forensics acquisitions or gigabyte uploads never cause the device to be marked as `offline` or `degraded`.
+
+2. **Job Collection Loop (`startJobLoop`)**:
+   - Long-polls `GET /api/v1/agents/{id}/jobs/next` every 15 seconds with ±30% OPSEC jitter.
+   - Orchestrates Phase 1 (parallel module collection), Phase 2 (local parsing), and Phase 3 (evidence compression & upload).
+
+3. **Live Command Loop (`startCommandLoop`)**:
+   - Fast-polls `GET /api/v1/agent-commands/poll/{agent_id}` every 3 seconds (`DefaultCommandPollInterval = 3`).
+   - Provides sub-5-second latency for interactive remote commands dispatched by analysts via the Web Console.
+   - Executes commands safely through the native OS shell (`cmd.exe /C` on Windows, `sh -c` on Linux/macOS) with configurable timeouts and 500 KB output truncation guards.
+
 ### Agent Workflow
 
 ```mermaid
 sequenceDiagram
-    participant Agent
-    participant Backend
+    participant Analyst
+    participant WebUI as Web UI (React)
+    participant Backend as FastAPI Backend
+    participant Agent as Go Agent (Target Host)
 
-    Agent->>Backend: POST /agents/register
-    Note over Agent,Backend: Initial registration with OS info
-    Backend-->>Agent: Device ID
+    Note over Agent,Backend: 1. Registration
+    Agent->>Backend: POST /agents/register (Host, OS, IP)
+    Backend-->>Agent: Device ID & persistent Agent ID
 
-    loop Poll for jobs
-        Agent->>Backend: GET /agents/{id}/jobs/next
-        Backend-->>Agent: JobInstruction or 404
-        alt Job available
-            Agent->>Agent: Phase 1: Execute collection modules (parallel)
-            Agent->>Agent: Phase 2: Parse artifacts locally (EVTX, Prefetch, LNK, Browser)
-            Agent->>Backend: POST /agents/{id}/jobs/{job_id}/upload
-            Note over Agent,Backend: Upload evidence ZIP (Phase 3)
+    par Background Heartbeat
+        loop Every 30 seconds
+            Agent->>Backend: POST /agents/{id}/heartbeat (X-Agent-Token)
+            Backend-->>Agent: 200 OK
+        end
+    and Live Interactive Commands
+        Analyst->>WebUI: Execute shell command
+        WebUI->>Backend: POST /agent-commands/run (JWT Auth)
+        Backend->>Backend: AuditLog: agent.command.submitted
+        loop Every 3 seconds
+            Agent->>Backend: GET /agent-commands/poll/{id} (X-Agent-Token)
+            opt Command queued
+                Backend-->>Agent: CommandInstruction {command_id, command, timeout}
+                Agent->>Agent: Execute via shell (cmd.exe / sh -c)
+                Agent->>Backend: POST /agent-commands/result/{id} (exit_code, output)
+                Backend->>Backend: AuditLog: agent.command.completed
+                Backend-->>WebUI: WebSocket broadcast /agent-commands/ws/{id}
+                WebUI-->>Analyst: Real-time terminal output
+            end
+        end
+    and Evidence Collection Jobs
+        loop Poll with OPSEC Jitter
+            Agent->>Backend: GET /agents/{id}/jobs/next (X-Agent-Token)
+            opt Job available
+                Backend-->>Agent: JobInstruction {modules, concurrency, timeout}
+                Agent->>Agent: Phase 1: Parallel module collection
+                Agent->>Agent: Phase 2: Local parsing (EVTX, Prefetch, LNK, Browser)
+                Agent->>Backend: POST /agents/{id}/jobs/{jid}/upload (collection.zip)
+                Backend->>Backend: Hash manifest, append CoC, lock folder
+            end
         end
     end
 ```

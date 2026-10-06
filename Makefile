@@ -9,7 +9,7 @@ DIST_DIR    := $(AGENT_DIR)/dist
 
 .PHONY: help setup up down restart rebuild logs logs-backend logs-celery status \
         reset reset-volumes migrate seed seed-demo \
-        agent-windows agent-linux agent-linux-arm64 agent-all \
+        agent-windows agent-linux agent-linux-arm64 agent-darwin-arm64 agent-darwin-amd64 agent-all \
         agent-config backup-db test-backend shell-backend dev-up dev-down dev-logs
 
 # ── Help ──────────────────────────────────────────────────────────────────────
@@ -118,7 +118,23 @@ agent-linux-arm64: $(DIST_DIR) ## Build Linux ARM64 agent → agent/dist/dfir-ag
 	  -o dist/dfir-agent-linux-arm64 ./cmd/agent
 	@echo "  -> $(DIST_DIR)/dfir-agent-linux-arm64"
 
-agent-all: agent-windows agent-linux ## Build agent for Windows + Linux (amd64)
+agent-darwin-arm64: $(DIST_DIR) ## Build macOS Apple Silicon (arm64) agent → agent/dist/dfir-agent-darwin-arm64
+	@echo "Building macOS ARM64 agent..."
+	cd $(AGENT_DIR) && \
+	  GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
+	  go build -trimpath -ldflags="-s -w" \
+	  -o dist/dfir-agent-darwin-arm64 ./cmd/agent
+	@echo "  -> $(DIST_DIR)/dfir-agent-darwin-arm64"
+
+agent-darwin-amd64: $(DIST_DIR) ## Build macOS Intel (amd64) agent → agent/dist/dfir-agent-darwin-amd64
+	@echo "Building macOS Intel agent..."
+	cd $(AGENT_DIR) && \
+	  GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 \
+	  go build -trimpath -ldflags="-s -w" \
+	  -o dist/dfir-agent-darwin-amd64 ./cmd/agent
+	@echo "  -> $(DIST_DIR)/dfir-agent-darwin-amd64"
+
+agent-all: agent-windows agent-linux agent-linux-arm64 agent-darwin-arm64 agent-darwin-amd64 ## Build agent for all platforms (Windows, Linux, macOS)
 	@echo ""
 	@echo "Agent binaries built in $(DIST_DIR)/"
 	@ls -lh $(DIST_DIR)/

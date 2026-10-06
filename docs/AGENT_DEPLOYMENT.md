@@ -37,7 +37,7 @@ The backend serves the API on port 8000 by default. Ensure network connectivity 
 
 - **Windows**: No dependencies (bundled libraries)
 - **Linux**: `glibc` 2.29+ (standard on Ubuntu 20.04+, Debian 11+, CentOS 8+, RHEL 8+)
-- **macOS**: Not supported (no Go module implementations)
+- **macOS**: macOS 12 Monterey+ (Intel amd64 or Apple Silicon arm64). Full Disk Access (FDA) recommended for full artifact coverage.
 
 ---
 
@@ -60,9 +60,17 @@ make agent-linux
 make agent-linux-arm64
 # Output: agent/dist/dfir-agent-linux-arm64
 
-# Build all three
+# Build for macOS Apple Silicon (ARM64)
+make agent-darwin-arm64
+# Output: agent/dist/dfir-agent-darwin-arm64
+
+# Build for macOS Intel (amd64)
+make agent-darwin-amd64
+# Output: agent/dist/dfir-agent-darwin-amd64
+
+# Build for all platforms (Windows, Linux, macOS)
 make agent-all
-# Outputs all three binaries to agent/dist/
+# Outputs all binaries to agent/dist/
 ```
 
 Binaries are optimized with `-trimpath` and `-ldflags="-s -w"` for reduced size and obscured paths.
@@ -88,6 +96,16 @@ GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
   go build -trimpath -ldflags="-s -w" \
   -o dist/dfir-agent-linux-arm64 ./cmd/agent
+
+# macOS Apple Silicon (ARM64)
+GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 \
+  go build -trimpath -ldflags="-s -w" \
+  -o dist/dfir-agent-darwin-arm64 ./cmd/agent
+
+# macOS Intel (amd64)
+GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 \
+  go build -trimpath -ldflags="-s -w" \
+  -o dist/dfir-agent-darwin-amd64 ./cmd/agent
 ```
 
 ---
@@ -100,14 +118,18 @@ All agent configuration is via environment variables with the `DFIR_` prefix:
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `DFIR_BACKEND_URL` | Yes | `http://localhost:8000/api/v1` | Backend API URL |
-| `DFIR_AGENT_SECRET` | Yes | — | Shared secret (must match backend `AGENT_SHARED_SECRET`) |
+| `DFIR_BACKEND_URL` | Yes | `http://localhost:8000/api/v1` | Backend API URL (alias: `DFIR_SERVER_URL`) |
+| `DFIR_AGENT_SECRET` | Yes | — | Shared secret token (alias: `AGENT_SHARED_SECRET`, matches backend `AGENT_SHARED_SECRET`) |
 | `DFIR_AGENT_ID` | No | (auto-generated) | Unique agent identifier; auto-generated and saved to `~/.dfir-agent/agent_id.json` if not set |
+| `DFIR_COMMAND_POLL_INTERVAL` | No | `3` | Interval (in seconds) for polling live operator console commands |
+| `DFIR_POLL_INTERVAL` | No | `15` | Interval (in seconds) for polling new evidence collection jobs (with OPSEC jitter) |
 | `DFIR_HOSTNAME` | No | (system hostname) | Override reported hostname |
 | `DFIR_IP_ADDRESS` | No | (auto-detected) | Override reported IP address |
-| `DFIR_TYPE` | No | (empty) | Device type label (e.g., "server", "workstation") |
+| `DFIR_TYPE` | No | (empty) | Device type label (e.g., "server", "workstation", "laptop") |
+| `DFIR_WORK_DIR` | No | (system temp) | Temporary directory used for active evidence collection and parsing |
+| `DFIR_LOG_LEVEL` | No | `info` | Logging verbosity (`debug`, `info`, `warn`, `error`) |
 
-**Critical:** `DFIR_AGENT_SECRET` must exactly match the backend's `AGENT_SHARED_SECRET`. Verify with:
+**Critical:** `DFIR_AGENT_SECRET` (or `AGENT_SHARED_SECRET`) must exactly match the backend's `AGENT_SHARED_SECRET`. Verify with:
 
 ```bash
 # On the backend server
@@ -537,6 +559,99 @@ Run with:
 
 ---
 
+## Deployment on macOS
+
+### Architectures
+- **Apple Silicon (M1/M2/M3/M4)**: `dfir-agent-darwin-arm64`
+- **Intel (x86_64)**: `dfir-agent-darwin-amd64`
+
+### Gatekeeper & Quarantine Removal
+When the binary is downloaded via a web browser, macOS attaches the `com.apple.quarantine` extended attribute. Remove it prior to execution:
+
+```bash
+# Check quarantine attribute
+xattr -l dfir-agent-darwin-arm64
+
+# Strip quarantine attribute
+xattr -d com.apple.quarantine dfir-agent-darwin-arm64
+```
+
+### Full Disk Access (FDA / TCC)
+To acquire protected macOS forensic artifacts (e.g. Safari `History.db`, system-wide Unified Logs, LaunchServices quarantine events), the agent binary requires **Full Disk Access**:
+1. Open **System Settings** > **Privacy & Security** > **Full Disk Access**.
+2. Click **+** and add `/usr/local/bin/dfir-agent` (or your Terminal app if executing manually).
+3. Ensure the toggle is switched to **ON**.
+
+> **Resilience Guarantee**: If Full Disk Access is not granted, the agent gracefully degrades without crashing; accessible artifacts (process trees, sockets, launchd items, system profiles) are collected normally, while protected files generate warning events in the audit trail.
+
+### Quick Start (Terminal / Ad-Hoc Incident)
+
+```bash
+chmod +x dfir-agent-darwin-arm64
+
+# Run with environment variables as root
+sudo DFIR_BACKEND_URL="https://dfir-kit.internal/api/v1" \
+     DFIR_AGENT_SECRET="your-shared-secret" \
+     ./dfir-agent-darwin-arm64
+```
+
+### Running as a Persistent LaunchDaemon (Recommended for Production)
+
+Create `/Library/LaunchDaemons/com.dfir.agent.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.dfir.agent</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/dfir-agent</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DFIR_BACKEND_URL</key>
+        <string>https://dfir-kit.internal/api/v1</string>
+        <key>DFIR_AGENT_SECRET</key>
+        <string>your-shared-secret</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/var/log/dfir-agent.log</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/dfir-agent.err</string>
+</dict>
+</plist>
+```
+
+**Installation:**
+
+```bash
+# 1. Install binary
+sudo cp dfir-agent-darwin-arm64 /usr/local/bin/dfir-agent
+sudo chmod +x /usr/local/bin/dfir-agent
+sudo chown root:wheel /usr/local/bin/dfir-agent
+
+# 2. Install LaunchDaemon plist
+sudo cp com.dfir.agent.plist /Library/LaunchDaemons/
+sudo chown root:wheel /Library/LaunchDaemons/com.dfir.agent.plist
+sudo chmod 644 /Library/LaunchDaemons/com.dfir.agent.plist
+
+# 3. Load daemon
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.dfir.agent.plist
+
+# 4. Verify status
+sudo launchctl print system/com.dfir.agent
+tail -f /var/log/dfir-agent.log
+```
+
+---
+
 ## Agent Lifecycle
 
 ### Phase 1: Registration
@@ -555,13 +670,20 @@ On first run, the agent calls `POST /agents/register` with:
 
 Backend responds with a `device_id`. The agent saves its auto-generated `agent_id` to disk for persistence.
 
-### Phase 2: Job Polling
+### Phase 2: Independent Heartbeat & Job Polling
 
-Agent enters a loop, calling `GET /agents/{agent_id}/jobs/next` every `PollInterval` seconds (default: 15 seconds) with jitter:
+1. **Heartbeat Loop**: Runs every 30 seconds (`POST /agents/{agent_id}/heartbeat`) in a dedicated goroutine. Long-running artifact collections never starve or delay heartbeats.
+2. **Job Polling**: Polls `GET /agents/{agent_id}/jobs/next` every `PollInterval` seconds (default: 15s) with ±30% OPSEC jitter. Returns 404 when idle.
 
-- **Jitter**: Default ±30% randomization on poll interval (OPSEC-aware)
-- **Long-Polling**: Backend returns 404 if no job available; agent waits and retries
-- **Heartbeat**: Every `HeartbeatInterval` (default: 30 seconds), agent sends status to `/agents/{agent_id}/heartbeat`
+### Phase 2b: Dedicated Live Command Loop
+
+In parallel to job polling and heartbeats, the agent executes a dedicated command loop polling `GET /agent-commands/poll/{agent_id}` every 3 seconds:
+- Analyst enters ad-hoc command in Web Console.
+- Agent fetches `CommandInstruction` with command string and timeout.
+- Executes via native shell (`cmd.exe /C` on Windows, `sh -c` on Linux/macOS).
+- Truncates output safely to 500 KB to avoid memory exhaust.
+- Submits output and exit code to `POST /agent-commands/result/{command_id}`.
+- Backend broadcasts output over WebSocket (`/agent-commands/ws/{agent_id}`) directly to analyst terminal.
 
 ### Phase 3: Module Execution (Artifact Collection)
 

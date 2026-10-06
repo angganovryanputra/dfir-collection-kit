@@ -280,15 +280,22 @@ Forensics tools are **not required** to run the platform — they are only neede
 
 ### 1. Register an Agent
 
-Before running a collection, register the Go agent on the target endpoint:
+Before running a collection, deploy and register the Go agent on target endpoints:
 
-1. Build the agent binary for the target OS using `make agent-windows`, `make agent-linux`, or `make agent-all`
-2. Deploy the binary to the target endpoint
-3. Set environment variables: `DFIR_BACKEND_URL`, `DFIR_AGENT_SECRET` (matching backend), and optionally `DFIR_AGENT_ID`, `DFIR_HOSTNAME`, `DFIR_IP_ADDRESS`
-4. Run the agent: `./dfir-agent` (Windows) or `./dfir-agent-linux` (Linux)
-5. The agent self-registers on first launch — confirm it appears in the **Devices** page of the UI
+1. **Download Binary**:
+   - **Directly from Web UI**: Navigate to the **Devices** page (`/devices`) and click the appropriate button under the **DOWNLOAD AGENT** panel (`WINDOWS x64 (.exe)`, `LINUX x64`, `LINUX ARM64`, `macOS APPLE SILICON`, or `macOS INTEL`).
+   - **Or build via Makefile**: Run `make agent-windows`, `make agent-linux`, `make agent-darwin-arm64`, `make agent-darwin-amd64`, or `make agent-all`.
+2. **Deploy Binary**: Transfer the binary to the endpoint (via SCP, USB, or deployment tooling).
+3. **Configure Environment**:
+   - Set `DFIR_BACKEND_URL` to your server API URL (e.g., `https://dfir-kit.internal/api/v1`).
+   - Set `DFIR_AGENT_SECRET` to the `AGENT_SHARED_SECRET` configured on the backend.
+4. **Execute**:
+   - **Windows**: `.\dfir-agent.exe` (run as Administrator).
+   - **Linux**: `chmod +x dfir-agent-linux && sudo ./dfir-agent-linux`.
+   - **macOS**: `xattr -d com.apple.quarantine dfir-agent-darwin-* && sudo ./dfir-agent-darwin-arm64` (ensure Full Disk Access is enabled in System Settings).
+5. **Auto-Enrollment**: The agent self-registers and will appear in the **Devices** page within 60 seconds. You can also open the **Live Console** from the Devices table to run interactive commands.
 
-For detailed agent deployment instructions, see `docs/AGENT_DEPLOYMENT.md`.
+For complete persistence and daemon setup (Windows Service, Linux systemd, macOS LaunchDaemon), see [docs/AGENT_DEPLOYMENT.md](file:///d:/DFIRCollectionKit/docs/AGENT_DEPLOYMENT.md).
 
 ### 2. Load Demo Data (Optional)
 

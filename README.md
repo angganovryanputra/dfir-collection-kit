@@ -21,9 +21,11 @@ Built for DFIR practitioners who need a single platform to coordinate collection
 | Feature | Description |
 |---------|-------------|
 | **Incident Management** | Create, track, and manage DFIR cases with status machine (PENDING → ACTIVE → COLLECTION_IN_PROGRESS → COMPLETE → CLOSED) |
-| **Evidence Collection** | Automated collection via Go-based agents; 40+ Windows modules, 11+ Linux modules across 5 categories |
+| **Evidence Collection** | Automated cross-platform collection via Go agents (Windows, Linux, macOS); 130+ modules across 5 categories with parallel execution |
 | **Collection Profiles** | Pre-built profiles: `triage`, `ransomware`, `insider_threat`, `full` — or select modules manually |
 | **Agent Local Parsing** | On-device parsing (EVTX → JSONL, Prefetch → CSV, LNK → CSV, Browser History → CSV) before upload, reducing data transfer and enabling offline collection |
+| **Live Web Console** | Real-time interactive shell command execution directly from UI with sub-5s polling, WebSocket streaming, and hash-chained audit logging |
+| **Agent Binary Distribution** | Pre-built agent downloads from UI for Windows x64 (.exe), Linux x64/ARM64, and macOS (Apple Silicon M1-M4 & Intel) |
 | **Chain of Custody** | Tamper-evident, cryptographically hash-chained audit trail — verified on every read |
 | **Evidence Vault** | SHA256-hashed evidence with immutable LOCKED state; export as ZIP with HMAC-SHA256 signature |
 | **Forensics Pipeline** | Background Celery workers: 8 EZTools parsers → Hayabusa + Chainsaw Sigma hunting → DuckDB super timeline |
@@ -82,7 +84,7 @@ Built for DFIR practitioners who need a single platform to coordinate collection
 | Backend | FastAPI (Python 3.12), SQLAlchemy 2.0 async, Alembic, Pydantic v2 |
 | Database | PostgreSQL 16, Redis 7 (Celery broker) |
 | Background Tasks | Celery (forensics pipeline worker) |
-| Agent | Go 1.23 (goroutine pool, concurrent module execution, local parsing) |
+| Agent | Go 1.25 (cross-platform Windows, Linux amd64/arm64, macOS arm64/amd64; concurrent modules, live console, local parsing) |
 | Forensics | EZTools (8 parsers), Hayabusa, Chainsaw, DuckDB |
 | Serving | Nginx (SPA + security headers, production-ready) |
 
@@ -147,16 +149,25 @@ Modules are organized into 5 categories and registered in `backend/app/core/modu
 
 Volume Shadow Copy modules: `mft_vss`, `usnjrnl_vss`
 
-### Linux Modules (11+)
+### Linux Modules (40+)
+
+| Category | Modules |
+|----------|---------|
+| **volatile** | `process_list`, `network_connections`, `lsof`, `containers`, `memory_acquisition` |
+| **logs** | `journalctl`, `syslog`, `auth_logs`, `wtmp`, `btmp`, `audit_log`, `dmesg` |
+| **persistence** | `cron`, `systemd_units`, `systemd_timers`, `rc_local`, `authorized_keys`, `sudoers`, `ld_preload`, `pam_config`, `user_crontabs`, `systemd_overrides`, `init_scripts`, `at_jobs` |
+| **system** | `ip_config`, `resolv_conf`, `bash_history`, `zsh_history`, `logged_in_users`, `installed_packages`, `kernel_version`, `shadow`, `passwd_groups`, `hosts`, `sysctl`, `lsmod`, `sshd_config`, `environment`, `user_shell_configs`, `lastlog`, `network_config`, `profile_d` |
+| **artifacts** | `ssh_keys`, `setuid_binaries`, `proc_net`, `package_history`, `iptables_rules` |
+
+### macOS Modules (17)
 
 | Category | Modules |
 |----------|---------|
 | **volatile** | `process_list`, `network_connections` |
-| **logs** | `journalctl`, `syslog`, `auth_logs`, `wtmp`, `btmp` |
-| **persistence** | `cron`, `systemd_units`, `systemd_timers`, `rc_local`, `authorized_keys` |
-| **system** | `ip_config`, `resolv_conf`, `bash_history`, `logged_in_users`, `installed_packages`, `kernel_version` |
-
-> **macOS**: Module metadata is registered in Python (`MODULE_REGISTRY`) but Go implementations do not yet exist. macOS collection is not functional.
+| **logs** | `unified_log` (with configurable time window), `install_log` |
+| **persistence** | `launchd_agents`, `launchd_daemons`, `login_items` (sfltool), `cron` |
+| **system** | `system_info`, `users` (dscl), `bash_history`, `zsh_history`, `installed_apps` |
+| **artifacts** | `safari_history` (SQLite), `chrome_history`, `quarantine_events` (LaunchServices), `ssh_known_hosts` |
 
 ### Collection Profiles
 
@@ -351,7 +362,9 @@ X-Agent-Token: <AGENT_SHARED_SECRET>
 | **Auth** | `/api/v1/auth` | `POST /login`, `POST /logout` |
 | **Incidents** | `/api/v1/incidents` | CRUD + `POST /{id}/collect`, `POST /{id}/collect/poll`, `GET /{id}/report` |
 | **Devices** | `/api/v1/devices` | CRUD |
-| **Agents** | `/api/v1/agents` | `POST /register`, `GET /{id}/jobs/next` (long-poll), `POST /{id}/jobs/{jid}/upload` |
+| **Agents** | `/api/v1/agents` | `POST /register`, `GET /{id}/jobs/next` (long-poll), `POST /{id}/heartbeat`, `POST /{id}/jobs/{jid}/upload` |
+| **Agent Binary** | `/api/v1/agent-binary` | `GET /info` (availability matrix), `GET /download` (Windows, Linux, macOS) |
+| **Agent Commands** | `/api/v1/agent-commands` | `POST /run` (operator execute), `GET /poll/{id}` (agent poll), `POST /result/{id}` (agent result), `WS /ws/{id}` (streaming console) |
 | **Jobs** | `/api/v1/jobs` | `POST /`, `GET /{id}`, `POST /{id}/cancel` |
 | **Evidence** | `/api/v1/evidence` | `GET /folders`, `GET /items`, `GET /{fid}/items/{iid}/download`, `POST /{inc_id}/export`, `GET /super-timeline/{inc_id}` (query), `GET /super-timeline/{inc_id}/export` (CSV/JSONL) |
 | **Chain of Custody** | `/api/v1/chain-of-custody` | `GET /` (verified), `GET /export` (CSV) |
@@ -364,7 +377,7 @@ X-Agent-Token: <AGENT_SHARED_SECRET>
 | **Audit Logs** | `/api/v1/audit-logs` | `GET /` (filterable) |
 | **Status** | `/api/v1/status` | `GET /health` (public), `GET /diagnostics` (admin+) |
 
-Full interactive documentation: **http://localhost:8000/docs**
+Detailed documentation: [docs/API_REFERENCE.md](file:///d:/DFIRCollectionKit/docs/API_REFERENCE.md) or interactive Swagger at **http://localhost:8000/docs**
 
 ---
 
