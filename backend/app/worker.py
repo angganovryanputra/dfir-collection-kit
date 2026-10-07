@@ -15,10 +15,31 @@ from pathlib import Path
 from typing import Awaitable, TypeVar
 
 from celery import Celery
-from celery.exceptions import SoftTimeLimitExceeded
+from celery.exceptions import MaxRetriesExceededError, SoftTimeLimitExceeded
 
 logger = logging.getLogger(__name__)
 _TaskResult = TypeVar("_TaskResult")
+
+
+def _record_permanent_task_failure(job_id: str, error_message: str) -> None:
+    async def _update() -> None:
+        from app.crud.job import update_job_status
+        from app.db.session import AsyncSessionLocal
+        from app.schemas.job import JobStatusUpdate
+
+        async with AsyncSessionLocal() as db:
+            await update_job_status(
+                db,
+                job_id,
+                JobStatusUpdate(status="failed", message=error_message[:500]),
+            )
+            await db.commit()
+
+    try:
+        asyncio.run(_run_with_disposed_engine(_update()))
+    except Exception as e:
+        logger.warning("Failed to record permanent task failure for %s: %s", job_id, e)
+
 
 
 async def _run_with_disposed_engine(coroutine: Awaitable[_TaskResult]) -> _TaskResult:
@@ -100,10 +121,16 @@ def run_pipeline_task(
         return {"status": "done", "job_id": job_id}
     except SoftTimeLimitExceeded:
         logger.error("Celery: pipeline soft time limit exceeded for job %s — aborting", job_id)
+        _record_permanent_task_failure(job_id, "Pipeline soft time limit exceeded")
         raise
     except Exception as exc:
         logger.error("Celery: pipeline failed for job %s: %s", job_id, exc, exc_info=True)
-        raise self.retry(exc=exc, countdown=30)
+        try:
+            raise self.retry(exc=exc, countdown=30)
+        except MaxRetriesExceededError:
+            logger.error("Celery: max retries exceeded for pipeline job %s", job_id)
+            _record_permanent_task_failure(job_id, f"Pipeline retry limit exceeded: {exc}")
+            raise
 
 
 @celery_app.task(
@@ -126,10 +153,16 @@ def process_s3_upload_task(
         return {"status": "done", "job_id": job_id}
     except SoftTimeLimitExceeded:
         logger.error("Celery: S3 processing soft time limit exceeded for job %s", job_id)
+        _record_permanent_task_failure(job_id, "S3 processing soft time limit exceeded")
         raise
     except Exception as exc:
         logger.error("Celery: S3 processing failed for job %s: %s", job_id, exc, exc_info=True)
-        raise self.retry(exc=exc, countdown=60)
+        try:
+            raise self.retry(exc=exc, countdown=60)
+        except MaxRetriesExceededError:
+            logger.error("Celery: max retries exceeded for S3 processing job %s", job_id)
+            _record_permanent_task_failure(job_id, f"S3 processing retry limit exceeded: {exc}")
+            raise
 
 
 async def process_s3_upload_background(

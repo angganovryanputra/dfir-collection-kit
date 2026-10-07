@@ -176,7 +176,105 @@ function TechniquePill({ tech }: { tech: string }) {
     );
 }
 
+function DirectedAttackGraph({ nodes, edges }: { nodes: AttackChain["graph_nodes"]; edges: AttackChain["graph_edges"] }) {
+    if (!nodes || nodes.length === 0) return null;
+
+    // Separate tactics and techniques
+    const tacticNodes = nodes.filter((n) => n.type === "tactic");
+    const techNodes = nodes.filter((n) => n.type === "technique");
+
+    // Group techniques by their parent tactic(s) using edges
+    const techByTactic: Record<string, string[]> = {};
+    for (const edge of edges) {
+        if (edge.label === "uses") {
+            if (!techByTactic[edge.source]) techByTactic[edge.source] = [];
+            techByTactic[edge.source].push(edge.target);
+        }
+    }
+
+    const assignedTechs = new Set(Object.values(techByTactic).flat());
+    const unparentedTechs = techNodes.filter((t) => !assignedTechs.has(t.id));
+
+    return (
+        <div className="p-3 border border-border/60 bg-background/60 rounded-sm space-y-3 font-mono text-xs overflow-x-auto">
+            <div className="flex items-center justify-between text-[10px] text-muted-foreground uppercase tracking-widest pb-1 border-b border-border/40">
+                <span className="flex items-center gap-1.5 text-primary">
+                    <GitBranch className="w-3.5 h-3.5" />
+                    DIRECTED ATT&CK GRAPH ({nodes.length} NODES · {edges.length} EDGES)
+                </span>
+                <span className="text-muted-foreground/60">PROGRESSION ──►</span>
+            </div>
+
+            <div className="flex items-start gap-3 min-w-max py-2">
+                {tacticNodes.map((tactic, idx) => {
+                    const childTechs = techByTactic[tactic.id] || [];
+                    const isLast = idx === tacticNodes.length - 1;
+
+                    return (
+                        <div key={tactic.id} className="flex items-start">
+                            {/* Column for this tactic and its techniques */}
+                            <div className="flex flex-col items-center gap-2">
+                                {/* Tactic Node */}
+                                <div className="px-3 py-1.5 border border-primary/40 bg-primary/10 text-primary rounded-sm font-bold text-center shadow-sm">
+                                    <div className="text-[9px] text-primary/70 uppercase">TACTIC</div>
+                                    <div className="text-xs uppercase">{tactic.label}</div>
+                                </div>
+
+                                {/* Techniques attached to this tactic */}
+                                {childTechs.length > 0 && (
+                                    <div className="flex flex-col items-center gap-1.5 pt-1 w-full">
+                                        <div className="w-0.5 h-2.5 bg-amber-500/40" />
+                                        <div className="flex flex-col gap-1 w-full">
+                                            {childTechs.map((techId) => (
+                                                <div
+                                                    key={techId}
+                                                    className="px-2 py-1 border border-amber-500/40 bg-amber-500/10 text-amber-400 rounded-sm text-[11px] text-center font-mono flex items-center justify-center gap-1"
+                                                >
+                                                    <span className="text-amber-400/50 text-[9px]">uses</span>
+                                                    <span>{techId}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* Arrow to next tactic */}
+                            {!isLast && (
+                                <div className="flex flex-col items-center justify-center px-3 pt-3 text-primary/50">
+                                    <span className="text-[8px] uppercase tracking-tighter text-muted-foreground/60 mb-0.5">leads_to</span>
+                                    <span className="text-sm font-bold">──►</span>
+                                </div>
+                            )}
+                        </div>
+                    );
+                })}
+
+                {/* Unparented techniques if any */}
+                {unparentedTechs.length > 0 && (
+                    <div className="flex flex-col items-center gap-2 pl-4 border-l border-border/40">
+                        <div className="px-2 py-1 border border-border/40 bg-secondary/20 text-muted-foreground rounded-sm text-[10px] uppercase font-mono">
+                            OTHER TECHNIQUES
+                        </div>
+                        <div className="flex flex-col gap-1">
+                            {unparentedTechs.map((tech) => (
+                                <div
+                                    key={tech.id}
+                                    className="px-2 py-0.5 border border-amber-500/30 bg-amber-500/5 text-amber-400 rounded-sm text-[10px] font-mono"
+                                >
+                                    {tech.label}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+}
+
 function ChainCard({ chain }: { chain: AttackChain }) {
+    const [showGraph, setShowGraph] = useState(false);
     const sevClass = SEVERITY_COLOR[chain.severity] ?? SEVERITY_COLOR.informational;
     const sortedTactics = [...chain.tactics].sort(
         (a, b) => TACTIC_ORDER.indexOf(a) - TACTIC_ORDER.indexOf(b)
@@ -238,6 +336,26 @@ function ChainCard({ chain }: { chain: AttackChain }) {
                             <TechniquePill key={t} tech={t} />
                         ))}
                     </div>
+                </div>
+            )}
+
+            {/* Graph Toggle and Visual Graph */}
+            {chain.graph_nodes && chain.graph_nodes.length > 0 && (
+                <div className="pt-2 border-t border-border/40">
+                    <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setShowGraph(!showGraph)}
+                        className="h-6 px-2 text-[10px] text-primary/80 hover:text-primary gap-1 font-mono"
+                    >
+                        <GitBranch className="w-3 h-3" />
+                        {showGraph ? "HIDE DIRECTED GRAPH" : "VIEW DIRECTED GRAPH"}
+                    </Button>
+                    {showGraph && (
+                        <div className="mt-2">
+                            <DirectedAttackGraph nodes={chain.graph_nodes} edges={chain.graph_edges} />
+                        </div>
+                    )}
                 </div>
             )}
         </div>

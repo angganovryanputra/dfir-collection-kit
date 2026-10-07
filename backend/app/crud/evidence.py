@@ -57,6 +57,18 @@ async def create_item(db: AsyncSession, payload: EvidenceItemCreate) -> Evidence
     return item
 
 
+async def create_items_bulk(
+    db: AsyncSession, payloads: list[EvidenceItemCreate], chunk_size: int = 1000
+) -> None:
+    if not payloads:
+        return
+    from sqlalchemy import insert
+    for i in range(0, len(payloads), chunk_size):
+        chunk = [p.model_dump() for p in payloads[i : i + chunk_size]]
+        await db.execute(insert(EvidenceItem).values(chunk))
+    await db.flush()
+
+
 async def has_evidence_for_incident(db: AsyncSession, incident_id: str) -> bool:
     result = await db.execute(
         select(EvidenceItem.id).where(EvidenceItem.incident_id == incident_id).limit(1)

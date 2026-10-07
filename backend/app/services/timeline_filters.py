@@ -53,7 +53,7 @@ def timeline_where(
                 "("
                 + " OR ".join(
                     f"LOWER(COALESCE({col}, '')) LIKE ? ESCAPE '\\'"
-                    for col in ("message", "source", "timestamp_desc", "CAST(extra AS VARCHAR)")
+                    for col in ("message", "source", "timestamp_desc", "host")
                 )
                 + ")"
             )

@@ -413,6 +413,13 @@ def _linux_bash_history_to_entries(
     # Extended history format: ": 1700000000:0;command"
     ext_re = re.compile(r"^:\s*(\d+):\d+;(.+)$")
     try:
+        file_mtime_iso = datetime.fromtimestamp(
+            history_path.stat().st_mtime, tz=timezone.utc
+        ).isoformat()
+    except (OSError, ValueError):
+        file_mtime_iso = datetime.now(timezone.utc).isoformat()
+
+    try:
         with history_path.open(encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 line = line.rstrip()
@@ -420,6 +427,7 @@ def _linux_bash_history_to_entries(
                     continue
 
                 m = ext_re.match(line)
+                confidence = "exact"
                 if m:
                     try:
                         dt = datetime.fromtimestamp(int(m.group(1)), tz=timezone.utc)
@@ -428,8 +436,9 @@ def _linux_bash_history_to_entries(
                         ts_iso = datetime.now(timezone.utc).isoformat()
                     cmd = m.group(2).strip()
                 else:
-                    # Plain history — no timestamp available, use a sentinel
-                    ts_iso = "1970-01-01T00:00:00+00:00"
+                    # Plain history — bound timestamp by file modification time
+                    ts_iso = file_mtime_iso
+                    confidence = "file_mtime_bounded"
                     cmd = line.strip()
 
                 if not cmd:
@@ -439,12 +448,13 @@ def _linux_bash_history_to_entries(
                     {
                         "message": cmd,
                         "datetime": ts_iso,
-                        "timestamp_desc": f"{shell.capitalize()} Command",
+                        "timestamp_desc": f"{shell.capitalize()} Command (File Mtime)" if confidence == "file_mtime_bounded" else f"{shell.capitalize()} Command",
                         "source": f"Linux {shell.capitalize()} History",
                         "source_short": shell.upper(),
                         "incident_id": incident_id,
                         "shell": shell,
                         "user": history_path.parts[-2] if len(history_path.parts) >= 2 else "",
+                        "timestamp_confidence": confidence,
                     }
                 )
     except (OSError, UnicodeDecodeError) as exc:
@@ -522,6 +532,12 @@ def _windows_text_artifacts_to_entries(extracted_dir: Path, incident_id: str) ->
         for hist_file in ps_hist_dir.glob("*ConsoleHost_history.txt"):
             user = hist_file.stem.replace("_ConsoleHost_history", "")
             try:
+                file_mtime_iso = datetime.fromtimestamp(
+                    hist_file.stat().st_mtime, tz=timezone.utc
+                ).isoformat()
+            except (OSError, ValueError):
+                file_mtime_iso = datetime.now(timezone.utc).isoformat()
+            try:
                 with hist_file.open(encoding="utf-8", errors="replace") as fh:
                     for line in fh:
                         cmd = line.strip()
@@ -530,12 +546,13 @@ def _windows_text_artifacts_to_entries(extracted_dir: Path, incident_id: str) ->
                         all_entries.append(
                             {
                                 "message": cmd,
-                                "datetime": "1970-01-01T00:00:00+00:00",  # no timestamps in plain history
-                                "timestamp_desc": "PowerShell Command",
+                                "datetime": file_mtime_iso,
+                                "timestamp_desc": "PowerShell Command (File Mtime)",
                                 "source": "Windows PowerShell History",
                                 "source_short": "PSHIST",
                                 "incident_id": incident_id,
                                 "username": user,
+                                "timestamp_confidence": "file_mtime_bounded",
                             }
                         )
             except (OSError, UnicodeDecodeError) as exc:

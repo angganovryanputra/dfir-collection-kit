@@ -64,6 +64,12 @@ def _detect_lateral_movement(
                     ) as actor
                 FROM timeline_events 
                 WHERE source_short IN ('EVTX', 'WEVT', 'WINDOWS EVENT LOG')
+                  AND (
+                    lower(message) LIKE '%logon%' 
+                    OR lower(timestamp_desc) LIKE '%logon%'
+                    OR json_extract_string(extra, '$.event_id') IN ('4624', '4625', '4648')
+                    OR message LIKE '%4624%'
+                  )
                   AND actor != ''
                   AND actor NOT IN ('-', 'SYSTEM', 'ANONYMOUS LOGON', 'LOCAL SERVICE', 'NETWORK SERVICE')
                   AND NOT ends_with(actor, '$')
@@ -123,7 +129,10 @@ def _detect_lateral_movement(
                   AND proc != ''
                   AND proc NOT IN (
                     'svchost.exe', 'explorer.exe', 'conhost.exe', 'lsass.exe', 
-                    'csrss.exe', 'wininit.exe', 'winlogon.exe', 'services.exe'
+                    'csrss.exe', 'wininit.exe', 'winlogon.exe', 'services.exe',
+                    'dwm.exe', 'runtimebroker.exe', 'searchindexer.exe', 'taskhostw.exe',
+                    'sihost.exe', 'ctfmon.exe', 'smartscreen.exe', 'fontdrvhost.exe',
+                    'spoolsv.exe', 'dllhost.exe', 'systemsettings.exe', 'shellexperiencehost.exe'
                   )
             ),
             spreads AS (

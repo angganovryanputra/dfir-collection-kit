@@ -177,7 +177,20 @@ func (e *Executor) Run(
 		}
 	}
 
-	// Execute modules concurrently with a bounded semaphore worker pool
+	// Partition modules: volatile memory modules must run sequentially first
+	// (RFC 3227 Order of Volatility) to prevent memory contamination and page-cache thrashing
+	// caused by concurrent disk I/O, before remaining modules run with concurrencyLimit.
+	var volatileMods []api.JobModule
+	var diskMods []api.JobModule
+	for _, mod := range moduleList {
+		modLower := strings.ToLower(mod.ModuleID)
+		if strings.Contains(modLower, "memory_acquisition") || strings.Contains(modLower, "memdump") {
+			volatileMods = append(volatileMods, mod)
+		} else {
+			diskMods = append(diskMods, mod)
+		}
+	}
+
 	totalModules := len(moduleList)
 	if timeoutMinutes < 0 {
 		timeoutMinutes = 0
@@ -194,92 +207,107 @@ func (e *Executor) Run(
 	var wg sync.WaitGroup
 	var apiMu sync.Mutex // serialises concurrent API status updates
 
-	for _, module := range moduleList {
-		wg.Add(1)
-		go func(mod api.JobModule) {
-			defer wg.Done()
-
-			// Acquire concurrency slot or respect context cancellation
-			select {
-			case sem <- struct{}{}:
-			case <-ctx.Done():
-				results <- moduleResult{mod.ModuleID, ctx.Err()}
-				return
+	runSingleModule := func(mod api.JobModule) {
+		logJob.Info("Starting module: %s", mod.ModuleID)
+		apiMu.Lock()
+		if e.apiClient != nil {
+			if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+				Status:  "collecting",
+				Message: fmt.Sprintf("Executing %s", mod.ModuleID),
+				LogTail: []string{fmt.Sprintf("Executing module %s", mod.ModuleID)},
+			}); err != nil {
+				logJob.Warning("Failed to update job status: %v", err)
 			}
-			defer func() { <-sem }()
+		}
+		apiMu.Unlock()
 
-			logJob.Info("Starting module: %s", mod.ModuleID)
-			apiMu.Lock()
-			if e.apiClient != nil {
-				if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
-					Status:  "collecting",
-					Message: fmt.Sprintf("Executing %s", mod.ModuleID),
-					LogTail: []string{fmt.Sprintf("Executing module %s", mod.ModuleID)},
-				}); err != nil {
-					logJob.Warning("Failed to update job status: %v", err)
-				}
+		// Execute with retry
+		attempts := retryAttempts + 1
+		if attempts < 1 {
+			attempts = 1
+		}
+		var execErr error
+		for attempt := 1; attempt <= attempts; attempt++ {
+			if err := checkCancellation(); err != nil {
+				execErr = err
+				break
 			}
-			apiMu.Unlock()
-
-			// Execute with retry
-			attempts := retryAttempts + 1
-			if attempts < 1 {
-				attempts = 1
+			moduleCtx := ctx
+			var cancel context.CancelFunc
+			if timeoutMinutes > 0 {
+				moduleCtx, cancel = context.WithTimeout(ctx, moduleTimeout)
 			}
-			var execErr error
-			for attempt := 1; attempt <= attempts; attempt++ {
-				if err := checkCancellation(); err != nil {
-					execErr = err
-					break
-				}
-				moduleCtx := ctx
-				var cancel context.CancelFunc
-				if timeoutMinutes > 0 {
-					moduleCtx, cancel = context.WithTimeout(ctx, moduleTimeout)
-				}
-				execErr = e.executeModule(moduleCtx, job, mod)
-				if cancel != nil {
-					cancel()
-				}
-				if errors.Is(execErr, context.DeadlineExceeded) {
-					logJob.Warning("Module timed out: %s", mod.ModuleID)
-					apiMu.Lock()
-					if e.apiClient != nil {
-						if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
-							Status:  "collecting",
-							Message: fmt.Sprintf("Timeout in %s", mod.ModuleID),
-							LogTail: []string{fmt.Sprintf("Timeout in %s", mod.ModuleID)},
-						}); err != nil {
-							logJob.Warning("Failed to update job status: %v", err)
-						}
+			execErr = e.executeModule(moduleCtx, job, mod)
+			if cancel != nil {
+				cancel()
+			}
+			if errors.Is(execErr, context.DeadlineExceeded) {
+				logJob.Warning("Module timed out: %s", mod.ModuleID)
+				apiMu.Lock()
+				if e.apiClient != nil {
+					if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+						Status:  "collecting",
+						Message: fmt.Sprintf("Timeout in %s", mod.ModuleID),
+						LogTail: []string{fmt.Sprintf("Timeout in %s", mod.ModuleID)},
+					}); err != nil {
+						logJob.Warning("Failed to update job status: %v", err)
 					}
-					apiMu.Unlock()
 				}
-				if execErr == nil {
-					break
-				}
-				logJob.Warning("Module attempt %d/%d failed: %s - %v", attempt, attempts, mod.ModuleID, execErr)
-				if attempt < attempts {
-					apiMu.Lock()
-					if e.apiClient != nil {
-						if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
-							Status:  "collecting",
-							Message: fmt.Sprintf("Retry %d/%d for %s", attempt, attempts, mod.ModuleID),
-							LogTail: []string{fmt.Sprintf("Retry %d/%d for %s", attempt, attempts, mod.ModuleID)},
-						}); err != nil {
-							logJob.Warning("Failed to update job status: %v", err)
-						}
-					}
-					apiMu.Unlock()
-				}
+				apiMu.Unlock()
 			}
+			if execErr == nil {
+				break
+			}
+			logJob.Warning("Module attempt %d/%d failed: %s - %v", attempt, attempts, mod.ModuleID, execErr)
+			if attempt < attempts {
+				apiMu.Lock()
+				if e.apiClient != nil {
+					if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
+						Status:  "collecting",
+						Message: fmt.Sprintf("Retry %d/%d for %s", attempt, attempts, mod.ModuleID),
+						LogTail: []string{fmt.Sprintf("Retry %d/%d for %s", attempt, attempts, mod.ModuleID)},
+					}); err != nil {
+						logJob.Warning("Failed to update job status: %v", err)
+					}
+				}
+				apiMu.Unlock()
+			}
+		}
 
-			results <- moduleResult{mod.ModuleID, execErr}
-		}(module)
+		results <- moduleResult{mod.ModuleID, execErr}
 	}
 
-	// Close the results channel once all goroutines finish
+	// Coordinator: run volatile memory modules first sequentially, then disk modules concurrently
 	go func() {
+		// Phase 1: Volatile modules run sequentially (concurrency 1)
+		for _, mod := range volatileMods {
+			select {
+			case <-ctx.Done():
+				results <- moduleResult{mod.ModuleID, ctx.Err()}
+			default:
+				runSingleModule(mod)
+			}
+		}
+
+		// Phase 2: Disk & remaining modules run concurrently with semaphore
+		for _, module := range diskMods {
+			wg.Add(1)
+			go func(mod api.JobModule) {
+				defer wg.Done()
+
+				// Acquire concurrency slot or respect context cancellation
+				select {
+				case sem <- struct{}{}:
+				case <-ctx.Done():
+					results <- moduleResult{mod.ModuleID, ctx.Err()}
+					return
+				}
+				defer func() { <-sem }()
+
+				runSingleModule(mod)
+			}(module)
+		}
+
 		wg.Wait()
 		close(results)
 	}()

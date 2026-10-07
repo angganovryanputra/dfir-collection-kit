@@ -31,7 +31,7 @@ from app.core.modules import build_modules
 from app.crud.chain_of_custody import create_entry
 from app.crud.collection_log import create_log_entries, get_last_sequence
 from app.crud.device import create_device, get_device, update_device
-from app.crud.evidence import create_folder, create_item
+from app.crud.evidence import create_folder, create_item, create_items_bulk
 from app.crud.incident import get_incident, update_incident
 from app.crud.job import (
     create_job,
@@ -451,7 +451,13 @@ async def complete_job_upload(
     await db.commit()
 
     # Dispatch to Celery
-    process_s3_upload_task.delay(job.incident_id, job.id, str(base_path), object_key)
+    try:
+        process_s3_upload_task.delay(job.incident_id, job.id, str(base_path), object_key)
+    except Exception as exc:
+        job.status = "failed"
+        await db.commit()
+        logger.exception("Failed to dispatch S3 upload task to Celery: %s", exc)
+        raise HTTPException(status_code=503, detail="Task queue unavailable") from exc
 
     return {"status": "processing"}
 
@@ -565,8 +571,8 @@ async def upload_job_evidence(
                 return await asyncio.to_thread(hash_file, item, runtime_settings.hash_algorithm)
 
         item_hashes = await asyncio.gather(*(_hash_item(item) for item in extracted_files))
-        for idx, (item, item_hash) in enumerate(zip(extracted_files, item_hashes), start=1):
-            item_payload = EvidenceItemCreate(
+        item_payloads = [
+            EvidenceItemCreate(
                 id=f"{job.id}-{idx}",
                 incident_id=job.incident_id,
                 name=item.name,
@@ -579,7 +585,9 @@ async def upload_job_evidence(
                 hash=item_hash,
                 collected_at=timestamp,
             )
-            await create_item(db, item_payload)
+            for idx, (item, item_hash) in enumerate(zip(extracted_files, item_hashes), start=1)
+        ]
+        await create_items_bulk(db, item_payloads)
 
         await create_entry(
             db,

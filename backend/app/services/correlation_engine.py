@@ -3,10 +3,29 @@
 from __future__ import annotations
 
 import json
+import re
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+_RDP_LOGON_PATTERN = re.compile(r"\b(?:logontype|logon\s+type)[\s:=]+10\b", re.IGNORECASE)
+
+
+def _is_rdp_logon(event: dict[str, Any]) -> bool:
+    if event.get("event_id") != "4624":
+        return False
+    extra = event.get("extra") or {}
+    logon_type = str(
+        extra.get("logon_type")
+        or extra.get("LogonType")
+        or extra.get("logonType")
+        or ""
+    ).strip()
+    if logon_type == "10":
+        return True
+    return bool(_RDP_LOGON_PATTERN.search(str(event.get("message") or "")))
+
 
 
 def _parse_extra(value: Any) -> dict[str, Any]:
@@ -141,9 +160,7 @@ def run_correlations(
     for event in events:
         actor = str(event.get("actor") or "")
         if (
-            event["event_id"] == "4624"
-            and "logon type" in str(event["message"]).lower()
-            and "10" in str(event["message"])
+            _is_rdp_logon(event)
             and actor.upper() not in {"", "-", "SYSTEM", "ANONYMOUS LOGON"}
             and not actor.endswith("$")
         ):

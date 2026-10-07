@@ -447,6 +447,26 @@ async def _run_parsing_pipeline_locked(
             "warning" if partial else "success",
         )
         await db.commit()
+
+        # Automatic super timeline chaining if configured
+        try:
+            from app.crud.system_settings import get_runtime_settings
+            from app.crud.super_timeline import create_super_timeline, get_super_timeline_by_incident
+            from app.services.super_timeline_service import dispatch_super_timeline
+
+            runtime = await get_runtime_settings(db)
+            if getattr(runtime, "auto_process", True):
+                st = await get_super_timeline_by_incident(db, incident_id)
+                if not st:
+                    st = await create_super_timeline(db, incident_id)
+                st.status = "PENDING"
+                st.error_message = None
+                await db.commit()
+                dispatch_super_timeline(incident_id, base_path)
+                logger.info("Auto-dispatched super timeline build for incident %s", incident_id)
+        except Exception as st_err:
+            logger.warning("Could not auto-dispatch super timeline for %s: %s", incident_id, st_err)
+
         return proc_job_id
     except Exception as exc:
         logger.exception("Pipeline failed for %s", job_id)

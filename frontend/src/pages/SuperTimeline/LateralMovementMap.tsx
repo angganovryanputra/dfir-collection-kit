@@ -40,24 +40,40 @@ type DetectionType = keyof typeof TYPE_CFG;
 
 // ─── SVG Graph Helpers ─────────────────────────────────────────────────────────
 
-const SVG_W = 520;
-const SVG_H = 340;
-const NODE_R = 32;
+interface LayoutConfig {
+    width: number;
+    height: number;
+    nodeR: number;
+    rxScale: number;
+    ryScale: number;
+}
 
-function computeLayout(hosts: string[]): Record<string, { x: number; y: number }> {
-    const cx = SVG_W / 2;
-    const cy = SVG_H / 2;
+function getLayoutConfig(hostCount: number): LayoutConfig {
+    if (hostCount <= 4) {
+        return { width: 520, height: 340, nodeR: 30, rxScale: 0.36, ryScale: 0.36 };
+    } else if (hostCount <= 8) {
+        return { width: 660, height: 440, nodeR: 26, rxScale: 0.38, ryScale: 0.38 };
+    } else if (hostCount <= 14) {
+        return { width: 820, height: 560, nodeR: 22, rxScale: 0.40, ryScale: 0.40 };
+    } else {
+        return { width: 960, height: 660, nodeR: 19, rxScale: 0.42, ryScale: 0.42 };
+    }
+}
+
+function computeLayout(hosts: string[], cfg: LayoutConfig): Record<string, { x: number; y: number }> {
+    const cx = cfg.width / 2;
+    const cy = cfg.height / 2;
     const n = hosts.length;
     const positions: Record<string, { x: number; y: number }> = {};
 
     if (n === 1) {
         positions[hosts[0]] = { x: cx, y: cy };
     } else if (n === 2) {
-        positions[hosts[0]] = { x: SVG_W * 0.3, y: cy };
-        positions[hosts[1]] = { x: SVG_W * 0.7, y: cy };
+        positions[hosts[0]] = { x: cfg.width * 0.3, y: cy };
+        positions[hosts[1]] = { x: cfg.width * 0.7, y: cy };
     } else {
-        const rx = SVG_W * 0.36;
-        const ry = SVG_H * 0.36;
+        const rx = cfg.width * cfg.rxScale;
+        const ry = cfg.height * cfg.ryScale;
         hosts.forEach((h, i) => {
             const angle = (2 * Math.PI * i / n) - Math.PI / 2;
             positions[h] = {
@@ -72,7 +88,8 @@ function computeLayout(hosts: string[]): Record<string, { x: number; y: number }
 function buildArrowPath(
     positions: Record<string, { x: number; y: number }>,
     src: string, tgt: string,
-    edgeIndex: number, totalEdges: number
+    edgeIndex: number, totalEdges: number,
+    nodeR: number = 30
 ): string {
     if (!positions[src] || !positions[tgt]) return "";
     const p1 = positions[src];
@@ -83,10 +100,10 @@ function buildArrowPath(
     const ux = dx / dist;
     const uy = dy / dist;
 
-    const sx = p1.x + ux * (NODE_R + 4);
-    const sy = p1.y + uy * (NODE_R + 4);
-    const ex = p2.x - ux * (NODE_R + 14);
-    const ey = p2.y - uy * (NODE_R + 14);
+    const sx = p1.x + ux * (nodeR + 4);
+    const sy = p1.y + uy * (nodeR + 4);
+    const ex = p2.x - ux * (nodeR + 14);
+    const ey = p2.y - uy * (nodeR + 14);
 
     // Vary curvature to separate parallel edges
     const curvature = 0.2 + (edgeIndex / Math.max(totalEdges, 1)) * 0.4;
@@ -109,10 +126,11 @@ interface HostNodeProps {
     y: number;
     role: "source" | "target" | "both" | "none";
     isHighlighted: boolean;
+    nodeR?: number;
     onClick: () => void;
 }
 
-function HostNode({ host, x, y, role, isHighlighted, onClick }: HostNodeProps) {
+function HostNode({ host, x, y, role, isHighlighted, nodeR = 30, onClick }: HostNodeProps) {
     const label = host.length > 11 ? host.slice(0, 10) + "…" : host;
     const strokeColor =
         role === "source" ? "#ef4444" :
@@ -129,14 +147,14 @@ function HostNode({ host, x, y, role, isHighlighted, onClick }: HostNodeProps) {
         <g className="cursor-pointer" onClick={onClick}>
             {/* Pulse ring */}
             {role !== "none" && (
-                <circle cx={x} cy={y} r={NODE_R + 12} fill="none" stroke={strokeColor} strokeWidth={1} strokeOpacity={0.15}>
-                    <animate attributeName="r" values={`${NODE_R + 8};${NODE_R + 20};${NODE_R + 8}`} dur="2.8s" repeatCount="indefinite" />
+                <circle cx={x} cy={y} r={nodeR + 12} fill="none" stroke={strokeColor} strokeWidth={1} strokeOpacity={0.15}>
+                    <animate attributeName="r" values={`${nodeR + 8};${nodeR + 20};${nodeR + 8}`} dur="2.8s" repeatCount="indefinite" />
                     <animate attributeName="stroke-opacity" values="0.25;0;0.25" dur="2.8s" repeatCount="indefinite" />
                 </circle>
             )}
             {/* Dashed outer ring */}
             <circle
-                cx={x} cy={y} r={NODE_R + 8}
+                cx={x} cy={y} r={nodeR + 8}
                 fill="none"
                 stroke={strokeColor}
                 strokeWidth={isHighlighted ? 2 : 0.8}
@@ -145,7 +163,7 @@ function HostNode({ host, x, y, role, isHighlighted, onClick }: HostNodeProps) {
             />
             {/* Main node */}
             <circle
-                cx={x} cy={y} r={NODE_R}
+                cx={x} cy={y} r={nodeR}
                 fill={`rgba(${role === "source" ? "239,68,68" : role === "target" ? "249,115,22" : role === "both" ? "168,85,247" : "99,102,241"},0.10)`}
                 stroke={strokeColor}
                 strokeWidth={isHighlighted ? 2.5 : 1.5}
@@ -206,7 +224,8 @@ export function LateralMovementMap({
         return Array.from(s).sort();
     }, [detections]);
 
-    const positions = useMemo(() => computeLayout(allHosts), [allHosts]);
+    const layoutCfg = useMemo(() => getLayoutConfig(allHosts.length), [allHosts.length]);
+    const positions = useMemo(() => computeLayout(allHosts, layoutCfg), [allHosts, layoutCfg]);
 
     const hostRoles = useMemo(() => {
         const sources = new Set(detections.map(d => d.source_host));
@@ -315,13 +334,13 @@ export function LateralMovementMap({
             <div className="flex min-h-0">
                 {/* SVG Graph */}
                 <div
-                    className="relative border-r border-border/30 bg-background/40 flex-shrink-0"
-                    style={{ width: SVG_W }}
+                    className="relative border-r border-border/30 bg-background/40 flex-shrink-0 overflow-auto"
+                    style={{ width: layoutCfg.width, maxWidth: "100%" }}
                 >
                     <svg
-                        width={SVG_W}
-                        height={SVG_H}
-                        viewBox={`0 0 ${SVG_W} ${SVG_H}`}
+                        width={layoutCfg.width}
+                        height={layoutCfg.height}
+                        viewBox={`0 0 ${layoutCfg.width} ${layoutCfg.height}`}
                         style={{ fontFamily: "monospace", display: "block" }}
                     >
                         <defs>
@@ -343,8 +362,8 @@ export function LateralMovementMap({
                             </marker>
                         </defs>
 
-                        <rect width={SVG_W} height={SVG_H} fill="url(#lm-grid)" />
-                        <circle cx={SVG_W / 2} cy={SVG_H / 2} r={SVG_H * 0.42} fill="none" stroke="rgba(255,255,255,0.025)" strokeWidth={1} />
+                        <rect width={layoutCfg.width} height={layoutCfg.height} fill="url(#lm-grid)" />
+                        <circle cx={layoutCfg.width / 2} cy={layoutCfg.height / 2} r={layoutCfg.height * 0.42} fill="none" stroke="rgba(255,255,255,0.025)" strokeWidth={1} />
 
                         {/* Edges */}
                         {(() => {
@@ -355,7 +374,7 @@ export function LateralMovementMap({
                                 indexTracker.set(key, idx + 1);
                                 const total = edgeParallelCount.get(key) ?? 1;
 
-                                const d = buildArrowPath(positions, det.source_host, det.target_host, idx, total);
+                                const d = buildArrowPath(positions, det.source_host, det.target_host, idx, total, layoutCfg.nodeR);
                                 if (!d) return null;
 
                                 const cfg = TYPE_CFG[det.detection_type as DetectionType] ?? TYPE_CFG.process_spread;
@@ -392,6 +411,7 @@ export function LateralMovementMap({
                                 x={positions[host]?.x ?? 0}
                                 y={positions[host]?.y ?? 0}
                                 role={hostRoles[host] ?? "none"}
+                                nodeR={layoutCfg.nodeR}
                                 isHighlighted={
                                     highlightedHost === host ||
                                     selectedDetection?.source_host === host ||
@@ -405,7 +425,7 @@ export function LateralMovementMap({
                         ))}
 
                         {/* Legend */}
-                        <g transform={`translate(10, ${SVG_H - 56})`}>
+                        <g transform={`translate(10, ${layoutCfg.height - 56})`}>
                             {(Object.keys(TYPE_CFG) as DetectionType[]).filter(t => typeCounts[t]).map((type, i) => (
                                 <g key={type} transform={`translate(0, ${i * 16})`}>
                                     <line x1={0} y1={5} x2={18} y2={5} stroke={TYPE_CFG[type].color} strokeWidth={2} markerEnd={`url(#arrow-${type})`} />
