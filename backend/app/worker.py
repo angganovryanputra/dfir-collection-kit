@@ -41,7 +41,6 @@ def _record_permanent_task_failure(job_id: str, error_message: str) -> None:
         logger.warning("Failed to record permanent task failure for %s: %s", job_id, e)
 
 
-
 async def _run_with_disposed_engine(coroutine: Awaitable[_TaskResult]) -> _TaskResult:
     """Run a task coroutine and release asyncpg connections in its own loop.
 
@@ -558,6 +557,7 @@ async def _verify_evidence_integrity() -> None:
 
     from sqlalchemy import select
 
+    from app.core.evidence_files import safe_join
     from app.db.session import AsyncSessionLocal
     from app.models.evidence import EvidenceItem
     from app.services.audit_log_service import safe_record_event
@@ -574,11 +574,24 @@ async def _verify_evidence_integrity() -> None:
         logger.info("Evidence integrity check: %d items to verify", len(items))
 
         tamper_count = 0
+        missing = 0
         for item in items:
             if not item.hash:
                 continue
-            file_path = evidence_base / item.incident_id / item.name
+            rel_path = item.relative_path or (
+                f"{item.job_id}/extracted/{item.name}" if item.job_id else item.name
+            )
+            try:
+                file_path = safe_join(evidence_base / item.incident_id, rel_path)
+            except Exception as p_err:
+                logger.warning(
+                    "Unsafe or invalid evidence relative path for item %s: %s", item.id, p_err
+                )
+                continue
+
             if not file_path.exists():
+                missing += 1
+                logger.warning("Evidence file missing from disk: %s (item %s)", file_path, item.id)
                 continue
             try:
                 h = hashlib.new(runtime.hash_algorithm.replace("-", "").lower())

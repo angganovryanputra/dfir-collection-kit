@@ -450,9 +450,12 @@ async def _run_parsing_pipeline_locked(
 
         # Automatic super timeline chaining if configured
         try:
-            from app.crud.system_settings import get_runtime_settings
-            from app.crud.super_timeline import create_super_timeline, get_super_timeline_by_incident
+            from app.crud.super_timeline import (
+                create_super_timeline,
+                get_super_timeline_by_incident,
+            )
             from app.services.super_timeline_service import dispatch_super_timeline
+            from app.services.system_settings_service import get_runtime_settings
 
             runtime = await get_runtime_settings(db)
             if getattr(runtime, "auto_process", True):
@@ -462,7 +465,7 @@ async def _run_parsing_pipeline_locked(
                 st.status = "PENDING"
                 st.error_message = None
                 await db.commit()
-                dispatch_super_timeline(incident_id, base_path)
+                dispatch_super_timeline(incident_id, Path(runtime.evidence_storage_path))
                 logger.info("Auto-dispatched super timeline build for incident %s", incident_id)
         except Exception as st_err:
             logger.warning("Could not auto-dispatch super timeline for %s: %s", incident_id, st_err)
