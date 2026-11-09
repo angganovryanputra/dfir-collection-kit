@@ -113,3 +113,6 @@ nginx/certs/*.crt
 # Added by code-review-graph
 .code-review-graph/
 .codegraph/
+
+# Superpowers SDD workspace
+.superpowers/
