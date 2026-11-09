@@ -17,11 +17,17 @@ type OutputLine = {
   text: string;
 };
 
-const WS_BASE = (() => {
-  const loc = window.location;
-  const proto = loc.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${loc.host}/api/v1/agent-commands/ws`;
-})();
+const getWsUrl = (agentId: string) => {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const envUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
+  if (envUrl && /^https?:\/\//i.test(envUrl)) {
+    const wsProto = envUrl.startsWith("https:") ? "wss:" : "ws:";
+    const cleanHost = envUrl.replace(/^https?:\/\//i, "").replace(/\/+$/, "");
+    return `${wsProto}//${cleanHost}/agent-commands/ws/${encodeURIComponent(agentId)}`;
+  }
+  const cleanBase = envUrl && envUrl.startsWith("/") ? envUrl.replace(/\/+$/, "") : "/api/v1";
+  return `${protocol}//${window.location.host}${cleanBase}/agent-commands/ws/${encodeURIComponent(agentId)}`;
+};
 
 // Read-only triage commands remain fast; commands that can alter evidence or
 // endpoint state require an explicit analyst confirmation before dispatch.
@@ -52,11 +58,11 @@ export default function AgentConsole() {
     });
 
   const connect = () => {
-    if (wsRef.current) return;
+    if (wsRef.current || !agentId) return;
     setConnecting(true);
     setWsError(null);
 
-    const ws = new WebSocket(`${WS_BASE}/${agentId}`);
+    const ws = new WebSocket(getWsUrl(agentId));
 
     ws.onopen = () => {
       setConnected(true);

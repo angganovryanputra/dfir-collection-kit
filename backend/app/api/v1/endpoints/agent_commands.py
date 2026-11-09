@@ -33,9 +33,10 @@ from fastapi import (
     Depends,
     Header,
     HTTPException,
+    Query,
+    WebSocket,
+    WebSocketDisconnect,
 )
-from fastapi import Query as FastAPIQuery
-from fastapi import WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.endpoints.agents import verify_agent_secret
@@ -95,11 +96,6 @@ async def _authorize_console_session(token: str) -> str:
         return user.username
 
 
-def Query(default: object = ..., **kwargs: object):
-    """Keep the legacy token query parameter optional during cookie migration."""
-    return FastAPIQuery(None if default is ... else default, **kwargs)
-
-
 def _is_allowed_websocket_origin(websocket: WebSocket) -> bool:
     """Allow only the application origin for cookie-authenticated WebSockets."""
     origin = websocket.headers.get("origin")
@@ -124,23 +120,26 @@ def _is_allowed_websocket_origin(websocket: WebSocket) -> bool:
 async def analyst_ws(
     agent_id: str,
     websocket: WebSocket,
-    token: str = Query(..., description="Bearer JWT — sent as ?token=... (WS can't set headers)"),
+    token: str | None = Query(
+        default=None, description="Optional Bearer JWT for non-browser/CLI clients"
+    ),
 ) -> None:
     """Stream live command output to an analyst."""
     from jwt import InvalidTokenError
 
-    if not _is_allowed_websocket_origin(websocket):
-        await websocket.close(code=4003, reason="Untrusted WebSocket origin")
-        return
-    # Ignore any legacy query-string value.  The browser presents the HttpOnly
-    # cookie automatically for a same-origin WebSocket upgrade.
-    token = websocket.cookies.get(settings.AUTH_COOKIE_NAME)
-    if not token:
+    origin = websocket.headers.get("origin")
+    if not token or origin:
+        if not _is_allowed_websocket_origin(websocket):
+            await websocket.close(code=4003, reason="Untrusted WebSocket origin")
+            return
+
+    raw_token = token or websocket.cookies.get(settings.AUTH_COOKIE_NAME)
+    if not raw_token:
         await websocket.close(code=4001, reason="Missing session")
         return
 
     try:
-        analyst_name = await _authorize_console_session(token)
+        analyst_name = await _authorize_console_session(raw_token)
     except InvalidTokenError:
         await websocket.close(code=4001, reason="Invalid token")
         return
@@ -171,7 +170,7 @@ async def analyst_ws(
             # Re-check session state for every command. Long-lived WebSockets
             # must honor expiry, revocation, and role changes after connect.
             try:
-                analyst_name = await _authorize_console_session(token)
+                analyst_name = await _authorize_console_session(raw_token)
             except InvalidTokenError:
                 await websocket.close(code=4001, reason="Session expired")
                 return
