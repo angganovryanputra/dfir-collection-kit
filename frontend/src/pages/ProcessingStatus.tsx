@@ -213,6 +213,36 @@ export default function ProcessingStatus() {
         }
     };
 
+    const handleDownloadTimeline = async (targetJob?: ProcessingJobOut) => {
+        if (!targetJob?.job_id) return;
+        try {
+            const baseUrl = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim() || "/api/v1";
+            const response = await fetch(
+                `${baseUrl}/processing/${encodeURIComponent(targetJob.job_id)}/timeline/download`,
+                { credentials: "include" }
+            );
+            if (!response.ok) {
+                throw new Error(`Download failed: HTTP ${response.status}`);
+            }
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `timeline-${targetJob.job_id}.jsonl`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            toast({ title: "Downloaded", description: `Timeline saved for job ${targetJob.job_id}` });
+        } catch (err) {
+            toast({
+                variant: "destructive",
+                title: "Download Error",
+                description: err instanceof Error ? err.message : "Failed to download timeline",
+            });
+        }
+    };
+
     const role = getStoredRole();
     const { data: preflight } = useQuery<PreflightResponse>({
         queryKey: ["processing-preflight", incidentId],
@@ -490,27 +520,7 @@ export default function ProcessingStatus() {
                                 variant="ghost"
                                 className="col-span-2"
                                 disabled={!job?.job_id}
-                                onClick={async () => {
-                                    if (!job?.job_id) return;
-                                    try {
-                                        const blob = await apiGet<Blob>(`/processing/${encodeURIComponent(job.job_id)}/timeline/download`);
-                                        const url = window.URL.createObjectURL(blob);
-                                        const a = document.createElement("a");
-                                        a.href = url;
-                                        a.download = `timeline_${job.job_id}.jsonl`;
-                                        document.body.appendChild(a);
-                                        a.click();
-                                        a.remove();
-                                        window.URL.revokeObjectURL(url);
-                                    } catch (err) {
-                                        console.error("Timeline download failed:", err);
-                                        toast({
-                                            title: "Download Failed",
-                                            description: "Could not download timeline.jsonl. Check the console for details.",
-                                            variant: "destructive",
-                                        });
-                                    }
-                                }}
+                                onClick={() => handleDownloadTimeline(job)}
                             >
                                 <Download className="w-4 h-4 mr-2" />
                                 DOWNLOAD TIMELINE.JSONL
