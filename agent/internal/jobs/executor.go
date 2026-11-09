@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strings"
@@ -29,11 +30,22 @@ const DefaultConcurrency = 4
 // MaxEvidenceZipBytes is the hard limit for a single evidence ZIP (50 GB).
 const MaxEvidenceZipBytes = 50 * 1024 * 1024 * 1024
 
+// DefaultUploadRetryDelay is the default backoff base between evidence upload attempts.
+const DefaultUploadRetryDelay = 2 * time.Second
+
+// APIClient defines the interface required by Executor to communicate with the central server.
+type APIClient interface {
+	GetJobStatus(ctx context.Context, jobID string) (string, error)
+	UpdateJobStatus(ctx context.Context, jobID string, update api.JobStatusUpdate) error
+	UploadEvidence(ctx context.Context, jobID, zipPath string) error
+}
+
 // Executor handles the execution of a collection job
 type Executor struct {
-	apiClient  *api.Client
-	config     *config.Config
-	currentJob *Job
+	apiClient        APIClient
+	config           *config.Config
+	currentJob       *Job
+	uploadRetryDelay time.Duration
 }
 
 // Job represents the current job being executed
@@ -48,11 +60,25 @@ type Job struct {
 }
 
 // NewExecutor creates a new job executor
-func NewExecutor(cfg *config.Config, apiClient *api.Client) *Executor {
+func NewExecutor(cfg *config.Config, apiClient APIClient) *Executor {
 	return &Executor{
-		apiClient: apiClient,
-		config:    cfg,
+		apiClient:        apiClient,
+		config:           cfg,
+		uploadRetryDelay: DefaultUploadRetryDelay,
 	}
+}
+
+// SetUploadRetryDelay configures the retry delay for evidence uploads (used in tests for fast execution).
+func (e *Executor) SetUploadRetryDelay(delay time.Duration) {
+	e.uploadRetryDelay = delay
+}
+
+func (e *Executor) hasAPIClient() bool {
+	if e.apiClient == nil {
+		return false
+	}
+	v := reflect.ValueOf(e.apiClient)
+	return !(v.Kind() == reflect.Ptr && v.IsNil())
 }
 
 // Run executes a job by processing all modules concurrently with a bounded worker pool.
@@ -89,7 +115,7 @@ func (e *Executor) Run(
 	}
 
 	checkCancellation := func() error {
-		if e.apiClient == nil {
+		if !e.hasAPIClient() {
 			return nil
 		}
 		status, err := e.apiClient.GetJobStatus(ctx, jobID)
@@ -129,14 +155,24 @@ func (e *Executor) Run(
 	if err := storage.CreateWorkDir(workDir); err != nil {
 		return fmt.Errorf("failed to create work directory: %w", err)
 	}
+
+	var zipPath string
+	var zipCreated bool
+
 	// Clean up work directory on failure — prevents disk exhaustion from failed jobs.
-	// On success the caller manages the lifecycle of collected evidence.
+	// On failure: if collection.zip was already generated, prune staging files but retain zip.
+	// If zip was not generated (pre-zip failure), clean up the entire workdir.
 	// retErr is the named return value; every `return err` path sets it automatically.
 	defer func() {
 		if retErr != nil {
-			logJob.Info("Cleaning up work directory after failure: %s", workDir)
-			if removeErr := os.RemoveAll(workDir); removeErr != nil {
-				logJob.Warning("Failed to remove work directory %s: %v", workDir, removeErr)
+			if zipCreated && zipPath != "" {
+				logJob.Warning("Retaining evidence archive for manual recovery: %s", zipPath)
+				pruneStagingKeepZip(workDir, zipPath)
+			} else {
+				logJob.Info("Cleaning up work directory after failure: %s", workDir)
+				if removeErr := storage.Cleanup(workDir); removeErr != nil {
+					logJob.Warning("Failed to clean up work directory %s: %v", workDir, removeErr)
+				}
 			}
 		}
 	}()
@@ -154,7 +190,7 @@ func (e *Executor) Run(
 	if len(missingModules) > 0 {
 		message := fmt.Sprintf("Unsupported modules: %s", strings.Join(missingModules, ", "))
 		logJob.Error(message)
-		if e.apiClient != nil {
+		if e.hasAPIClient() {
 			if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 				Status:  "failed",
 				Message: message,
@@ -167,7 +203,7 @@ func (e *Executor) Run(
 	}
 
 	// Report job started
-	if e.apiClient != nil {
+	if e.hasAPIClient() {
 		if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 			Status:   "collecting",
 			Progress: intPtr(0),
@@ -324,7 +360,7 @@ func (e *Executor) Run(
 			logJob.Error("Module failed: %s - %v", result.moduleID, result.err)
 			failedModules = append(failedModules, result.moduleID)
 			apiMu.Lock()
-			if e.apiClient != nil {
+			if e.hasAPIClient() {
 				if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 					Status:  "collecting",
 					Message: fmt.Sprintf("Module %s failed: %v", result.moduleID, result.err),
@@ -337,7 +373,7 @@ func (e *Executor) Run(
 		} else {
 			logJob.Info("Completed module: %s (%d/%d)", result.moduleID, completed, totalModules)
 			apiMu.Lock()
-			if e.apiClient != nil {
+			if e.hasAPIClient() {
 				if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 					Status:   fmt.Sprintf("collecting (%d/%d)", completed, totalModules),
 					Progress: intPtr(progress),
@@ -355,7 +391,7 @@ func (e *Executor) Run(
 	if len(failedModules) == totalModules && totalModules > 0 {
 		msg := fmt.Sprintf("All modules failed: %s", strings.Join(failedModules, ", "))
 		logJob.Error(msg)
-		if e.apiClient != nil {
+		if e.hasAPIClient() {
 			if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 				Status:  "failed",
 				Message: msg,
@@ -373,7 +409,7 @@ func (e *Executor) Run(
 
 	// Phase 2: Parse collected artifacts
 	logJob.Info("Starting artifact parsing phase")
-	if e.apiClient != nil {
+	if e.hasAPIClient() {
 		if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 			Status:  "parsing",
 			Message: "Parsing collected artifacts",
@@ -389,23 +425,52 @@ func (e *Executor) Run(
 	if err := checkCancellation(); err != nil {
 		return err
 	}
+	zipPath = filepath.Join(workDir, "collection.zip")
 	if err := e.createEvidenceZip(ctx, job); err != nil {
 		logJob.Error("Failed to create evidence ZIP: %v", err)
 		return err
 	}
+	zipCreated = true
 
 	logJob.Info("Evidence ZIP created successfully")
 
-	if e.apiClient != nil {
+	if e.hasAPIClient() {
 		if err := checkCancellation(); err != nil {
 			return err
 		}
-		if err := e.apiClient.UploadEvidence(ctx, jobID, filepath.Join(workDir, "collection.zip")); err != nil {
-			logJob.Error("Failed to upload evidence: %v", err)
-			return err
+
+		maxAttempts := 3
+		retryDelay := e.uploadRetryDelay
+		if retryDelay <= 0 {
+			retryDelay = DefaultUploadRetryDelay
+		}
+
+		var uploadErr error
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			uploadErr = e.apiClient.UploadEvidence(ctx, jobID, zipPath)
+			if uploadErr == nil {
+				break
+			}
+			logJob.Warning("Upload attempt %d/%d failed: %v", attempt, maxAttempts, uploadErr)
+			if attempt < maxAttempts {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(time.Duration(attempt) * retryDelay):
+				}
+			}
+		}
+
+		if uploadErr != nil {
+			retErr = fmt.Errorf("evidence upload failed after %d attempts: %w", maxAttempts, uploadErr)
+			return retErr
 		}
 
 		logJob.Info("Evidence uploaded successfully")
+
+		// Clean up entire workdir on confirmed success
+		_ = storage.Cleanup(workDir)
+		logJob.Info("Evidence successfully uploaded and local workdir cleaned: %s", workDir)
 
 		if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 			Status:   "complete",
@@ -457,7 +522,7 @@ func (e *Executor) executeModule(ctx context.Context, job *Job, module api.JobMo
 	if err := moduleImpl.Run(ctx, mctx, params, outputPath); err != nil {
 		if modules.IsWarning(err) {
 			log.Warning("Module warning: %s - %v", module.ModuleID, err)
-			if e.apiClient != nil {
+			if e.hasAPIClient() {
 				if err2 := e.apiClient.UpdateJobStatus(ctx, job.ID, api.JobStatusUpdate{
 					Status:  job.Status,
 					Message: fmt.Sprintf("Warning in %s: %v", module.ModuleID, err),
@@ -696,4 +761,25 @@ closeZip:
 
 	log.Info("ZIP created successfully: %s", zipPath)
 	return nil
+}
+
+// pruneStagingKeepZip removes all uncompressed staging files and directories in workDir,
+// preserving only the evidence archive (collection.zip).
+func pruneStagingKeepZip(workDir, zipPath string) {
+	cleanZip := filepath.Clean(zipPath)
+	zipBase := filepath.Base(cleanZip)
+	entries, err := os.ReadDir(workDir)
+	if err != nil {
+		logging.Warning("Failed to read work directory for pruning %s: %v", workDir, err)
+		return
+	}
+	for _, entry := range entries {
+		entryPath := filepath.Clean(filepath.Join(workDir, entry.Name()))
+		if entryPath == cleanZip || entry.Name() == zipBase {
+			continue
+		}
+		if removeErr := os.RemoveAll(entryPath); removeErr != nil {
+			logging.Warning("Failed to prune staging path %s: %v", entryPath, removeErr)
+		}
+	}
 }
