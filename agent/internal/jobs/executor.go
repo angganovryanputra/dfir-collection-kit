@@ -246,7 +246,7 @@ func (e *Executor) Run(
 	runSingleModule := func(mod api.JobModule) {
 		logJob.Info("Starting module: %s", mod.ModuleID)
 		apiMu.Lock()
-		if e.apiClient != nil {
+		if e.hasAPIClient() {
 			if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 				Status:  "collecting",
 				Message: fmt.Sprintf("Executing %s", mod.ModuleID),
@@ -280,7 +280,7 @@ func (e *Executor) Run(
 			if errors.Is(execErr, context.DeadlineExceeded) {
 				logJob.Warning("Module timed out: %s", mod.ModuleID)
 				apiMu.Lock()
-				if e.apiClient != nil {
+				if e.hasAPIClient() {
 					if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 						Status:  "collecting",
 						Message: fmt.Sprintf("Timeout in %s", mod.ModuleID),
@@ -297,7 +297,7 @@ func (e *Executor) Run(
 			logJob.Warning("Module attempt %d/%d failed: %s - %v", attempt, attempts, mod.ModuleID, execErr)
 			if attempt < attempts {
 				apiMu.Lock()
-				if e.apiClient != nil {
+				if e.hasAPIClient() {
 					if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 						Status:  "collecting",
 						Message: fmt.Sprintf("Retry %d/%d for %s", attempt, attempts, mod.ModuleID),
@@ -469,8 +469,11 @@ func (e *Executor) Run(
 		logJob.Info("Evidence uploaded successfully")
 
 		// Clean up entire workdir on confirmed success
-		_ = storage.Cleanup(workDir)
-		logJob.Info("Evidence successfully uploaded and local workdir cleaned: %s", workDir)
+		if err := storage.Cleanup(workDir); err != nil {
+			logJob.Warning("Failed to clean up work directory %s: %v", workDir, err)
+		} else {
+			logJob.Info("Evidence successfully uploaded and local workdir cleaned: %s", workDir)
+		}
 
 		if err := e.apiClient.UpdateJobStatus(ctx, jobID, api.JobStatusUpdate{
 			Status:   "complete",
