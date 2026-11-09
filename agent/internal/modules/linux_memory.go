@@ -2,14 +2,24 @@ package modules
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"runtime"
 )
 
-// LinuxMemoryAcquisitionModule captures physical memory using AVML or /proc/kcore as fallback.
+// Internal hook variables for testing and mocking system interactions.
+var (
+	lookPath   = exec.LookPath
+	statPath   = os.Stat
+	openFile   = os.Open
+	runCommand = func(ctx context.Context, name string, args ...string) error {
+		return exec.CommandContext(ctx, name, args...).Run()
+	}
+	currentOS = runtime.GOOS
+)
+
+// LinuxMemoryAcquisitionModule captures physical memory using AVML or LiME.
 type LinuxMemoryAcquisitionModule struct {
 	Module
 }
@@ -21,60 +31,67 @@ func NewLinuxMemoryAcquisition() *LinuxMemoryAcquisitionModule {
 	}
 }
 
-// Run acquires physical memory via AVML (preferred) or /proc/kcore (fallback).
-// AVML requires no kernel module and produces a LiME-compatible image.
-// /proc/kcore is an ELF core of the kernel's virtual address space and requires root.
+// Run acquires physical memory on Linux via AVML (preferred) or LiME.
+// Unbounded sequential copying of /proc/kcore is deliberately omitted to prevent host crash and 128TB disk exhaustion.
 func (m *LinuxMemoryAcquisitionModule) Run(
 	ctx context.Context,
 	mctx ModuleContext,
 	params map[string]interface{},
 	outputPath string,
 ) error {
-	if runtime.GOOS != "linux" {
+	if currentOS != "linux" {
 		return NewWarningError("linux_memory_acquisition: only supported on Linux")
 	}
+	return LinuxMemoryAcquisition(ctx, outputPath, false, params)
+}
+
+// LinuxMemoryAcquisition captures physical memory using AVML or LiME.
+// Unbounded sequential copying of /proc/kcore is disabled to prevent host crashes and 128TB disk exhaustion.
+func LinuxMemoryAcquisition(
+	ctx context.Context,
+	outputPath string,
+	allowKcore bool,
+	params map[string]interface{},
+) error {
 	if err := EnsureOutputDir(outputPath); err != nil {
 		return err
 	}
 
-	// Prefer AVML: statically linked, no kernel module required.
-	if avml, err := exec.LookPath("avml"); err == nil {
-		cmd := exec.CommandContext(ctx, avml, outputPath)
-		out, runErr := cmd.CombinedOutput()
-		if runErr != nil {
-			_ = os.Remove(outputPath)
-			outLen := min(500, len(out))
-			return fmt.Errorf("avml failed: %w — %s", runErr, string(out[:outLen]))
+	// 1. Prefer AVML: statically linked, no kernel module required.
+	if avmlPath, err := lookPath("avml"); err == nil {
+		if runErr := runCommand(ctx, avmlPath, outputPath); runErr == nil {
+			return nil
 		}
-		return nil
+		_ = os.Remove(outputPath)
 	}
 
-	// Fallback: /proc/kcore — ELF core of kernel virtual address space.
-	const kcore = "/proc/kcore"
-	if _, err := os.Stat(kcore); err != nil {
-		return NewWarningError(
-			"linux_memory_acquisition: neither AVML nor /proc/kcore is available. " +
-				"Install AVML from https://github.com/microsoft/avml/releases or run the agent as root.",
-		)
+	// 2. Check for LiME driver
+	if _, err := statPath("/proc/lime"); err == nil {
+		if err := copyLime(outputPath); err == nil {
+			return nil
+		}
+		_ = os.Remove(outputPath)
 	}
 
-	src, err := os.Open(kcore)
+	// 3. Fallback safeguard: Do NOT sequential-copy /proc/kcore without an ELF segment parser
+	return NewWarningError("linux_memory_acquisition: AVML or LiME driver required for physical memory capture on Linux; /proc/kcore sequential read skipped to prevent host crash")
+}
+
+func copyLime(outputPath string) error {
+	src, err := openFile("/proc/lime")
 	if err != nil {
-		return NewWarningError(
-			fmt.Sprintf("linux_memory_acquisition: cannot open %s: %v — run agent as root.", kcore, err),
-		)
+		return err
 	}
 	defer src.Close()
 
 	dst, err := os.Create(outputPath)
 	if err != nil {
-		return fmt.Errorf("linux_memory_acquisition: cannot create output file: %w", err)
+		return err
 	}
 	defer dst.Close()
 
-	if _, copyErr := io.Copy(dst, src); copyErr != nil {
-		_ = os.Remove(outputPath)
-		return fmt.Errorf("linux_memory_acquisition: memory copy failed: %w", copyErr)
+	if _, err := io.Copy(dst, src); err != nil {
+		return err
 	}
 	return nil
 }
