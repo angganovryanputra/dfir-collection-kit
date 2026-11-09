@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DeviceBase(BaseModel):
@@ -17,8 +17,19 @@ class DeviceBase(BaseModel):
     registered_at: datetime
 
 
-class DeviceCreate(DeviceBase):
+class DeviceCreate(BaseModel):
     id: str
+    hostname: str
+    ip_address: str
+    type: str = "workstation"
+    os: str = "unknown"
+    agent_version: str = "1.0.0"
+    status: str = "ONLINE"
+    last_seen: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    collection_status: str = "IDLE"
+    registered_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    cpu_usage: int | None = None
+    memory_usage: int | None = None
 
 
 class DeviceUpdate(BaseModel):

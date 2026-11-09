@@ -1,6 +1,7 @@
-from datetime import datetime
+from datetime import datetime, timezone
+from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class CollectorBase(BaseModel):
@@ -10,8 +11,12 @@ class CollectorBase(BaseModel):
     last_heartbeat: datetime
 
 
-class CollectorCreate(CollectorBase):
-    id: str
+class CollectorCreate(BaseModel):
+    id: str = Field(default_factory=lambda: f"COL-{uuid4().hex[:8].upper()}")
+    name: str
+    endpoint: str
+    status: str = "ONLINE"
+    last_heartbeat: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 class CollectorUpdate(BaseModel):
