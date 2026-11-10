@@ -21,10 +21,12 @@ import (
 	"mime/multipart"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"time"
 
 	"github.com/dfir/agent/internal/config"
@@ -449,58 +451,64 @@ func (c *Client) UploadEvidence(ctx context.Context, jobID string, zipPath strin
 
 	// Streaming multipart fallback
 	logging.WithJob(jobID).Info("Streaming multipart upload to backend")
-	return c.streamingMultipartUpload(ctx, jobID, zipPath)
+	return c.uploadZip(ctx, jobID, zipPath)
 }
 
-// streamingMultipartUpload sends the ZIP to the backend using io.Pipe so the
-// file is NEVER fully loaded into memory.  This fixes the OOM bug that existed
-// when var body bytes.Buffer was used for large (50 GB) evidence archives.
+// streamingMultipartUpload is a backward-compatible alias for uploadZip.
 func (c *Client) streamingMultipartUpload(ctx context.Context, jobID, zipPath string) error {
-	stat, err := os.Stat(zipPath)
+	return c.uploadZip(ctx, jobID, zipPath)
+}
+
+// uploadZip sends the ZIP to the backend using io.MultiReader with a deterministic
+// Content-Length header so corporate proxies and WAFs do not reject chunked transfer.
+// The file is streamed directly from disk without buffering the archive in memory.
+func (c *Client) uploadZip(ctx context.Context, jobID, zipPath string) error {
+	if err := validateID(c.config.AgentID); err != nil {
+		return fmt.Errorf("uploadZip: %w", err)
+	}
+	if err := validateID(jobID); err != nil {
+		return fmt.Errorf("uploadZip: %w", err)
+	}
+
+	f, err := os.Open(zipPath)
+	if err != nil {
+		return fmt.Errorf("open ZIP: %w", err)
+	}
+	defer f.Close()
+
+	stat, err := f.Stat()
 	if err != nil {
 		return fmt.Errorf("stat ZIP: %w", err)
 	}
 	logging.WithJob(jobID).Info("Upload size: %.1f MiB", float64(stat.Size())/1024/1024)
 
-	pr, pw := io.Pipe()
-	mw := multipart.NewWriter(pw)
+	var headerBuf bytes.Buffer
+	mw := multipart.NewWriter(&headerBuf)
+	h := make(textproto.MIMEHeader)
+	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name="file"; filename="%s"`, filepath.Base(zipPath)))
+	h.Set("Content-Type", "application/zip")
+	if _, err := mw.CreatePart(h); err != nil {
+		return fmt.Errorf("create multipart header: %w", err)
+	}
+	footer := []byte(fmt.Sprintf("\r\n--%s--\r\n", mw.Boundary()))
+	totalLength := int64(headerBuf.Len()) + stat.Size() + int64(len(footer))
+	bodyReader := io.MultiReader(&headerBuf, f, bytes.NewReader(footer))
 
-	writeErrCh := make(chan error, 1)
-	go func() {
-		defer func() { mw.Close(); pw.Close() }() //nolint:errcheck
-		part, err := mw.CreateFormFile("file", filepath.Base(zipPath))
-		if err != nil {
-			writeErrCh <- err
-			return
-		}
-		f, err := os.Open(zipPath)
-		if err != nil {
-			writeErrCh <- err
-			return
-		}
-		defer f.Close()
-		_, err = io.Copy(part, f)
-		writeErrCh <- err
-	}()
-
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		c.baseURL+"/agents/"+c.config.AgentID+"/jobs/"+jobID+"/upload", pr)
+	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/agents/"+c.config.AgentID+"/jobs/"+jobID+"/upload", bodyReader)
 	if err != nil {
-		pw.CloseWithError(err)
-		<-writeErrCh
 		return fmt.Errorf("create upload request: %w", err)
 	}
-	req.Header.Set(HeaderAgentToken, c.authToken())
+	req.ContentLength = totalLength
+	req.Header.Set("Content-Length", strconv.FormatInt(totalLength, 10))
 	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set(HeaderAgentToken, c.authToken())
 
-	resp, httpErr := c.uploadClient.Do(req)
-	if wErr := <-writeErrCh; wErr != nil && httpErr == nil {
-		httpErr = wErr
-	}
-	if httpErr != nil {
-		return fmt.Errorf("upload failed: %w", httpErr)
+	resp, err := c.uploadClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("upload failed: %w", err)
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("upload: HTTP %d: %s", resp.StatusCode, string(body))
