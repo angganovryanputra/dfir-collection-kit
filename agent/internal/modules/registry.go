@@ -239,10 +239,19 @@ func NewModule(id string, outputRelPath string) Module {
 // BaseWindowsModule provides Windows-specific functionality
 type BaseWindowsModule struct {
 	Module
+	powerShellRunner func(ctx context.Context, command string) (string, error)
+}
+
+// SetPowerShellRunner overrides the PowerShell execution backend (primarily for unit tests).
+func (b *BaseWindowsModule) SetPowerShellRunner(runner func(ctx context.Context, command string) (string, error)) {
+	b.powerShellRunner = runner
 }
 
 // executePowerShell runs a PowerShell command and returns output
 func (b *BaseWindowsModule) executePowerShell(ctx context.Context, command string) (string, error) {
+	if b.powerShellRunner != nil {
+		return b.powerShellRunner(ctx, command)
+	}
 	cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", command)
 	output, err := cmd.CombinedOutput()
 	if err != nil {

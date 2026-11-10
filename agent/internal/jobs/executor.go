@@ -3,6 +3,8 @@ package jobs
 import (
 	"archive/zip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -645,14 +647,16 @@ type evidenceFile struct {
 	size int64
 }
 
-// createEvidenceZip creates a ZIP archive of all collected evidence files.
+// CreateEvidenceZip creates a ZIP archive of all collected evidence files.
 // If the total uncompressed size exceeds MaxEvidenceZipBytes the largest files
 // are dropped until the total fits, and an excluded_files.txt manifest is written
 // so investigators know which files were omitted rather than losing all evidence.
-func (e *Executor) createEvidenceZip(ctx context.Context, job *Job) error {
+// It generates a point-of-capture SHA-256 manifest and includes it in the archive.
+func (e *Executor) CreateEvidenceZip(ctx context.Context, job *Job) error {
 	log := logging.WithJob(job.ID)
 	zipPath := filepath.Join(job.WorkDir, "collection.zip")
 	manifestPath := filepath.Join(job.WorkDir, "excluded_files.txt")
+	sha256ManifestPath := filepath.Join(job.WorkDir, "manifest.sha256")
 	log.Info("Creating evidence ZIP: %s", zipPath)
 
 	// ── Phase 1: inventory all files ──────────────────────────────────────────
@@ -663,7 +667,7 @@ func (e *Executor) createEvidenceZip(ctx context.Context, job *Job) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || path == zipPath || path == manifestPath {
+		if info.IsDir() || path == zipPath || path == manifestPath || path == sha256ManifestPath {
 			return nil
 		}
 		relPath, err := filepath.Rel(job.WorkDir, path)
@@ -715,6 +719,61 @@ func (e *Executor) createEvidenceZip(ctx context.Context, job *Job) error {
 		}
 	}
 
+	// ── Phase 2.5: compute on-device SHA-256 manifest ─────────────────────────
+	type manifestEntry struct {
+		hash    string
+		relPath string
+	}
+	manifestEntries := make([]manifestEntry, 0, len(inventory))
+	for _, ef := range inventory {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		h, err := computeFileSHA256(ef.abs)
+		if err != nil {
+			return fmt.Errorf("failed to compute SHA-256 for %s: %w", ef.rel, err)
+		}
+		manifestEntries = append(manifestEntries, manifestEntry{
+			hash:    h,
+			relPath: filepath.ToSlash(ef.rel),
+		})
+	}
+
+	// Deterministic sort by relative path
+	sort.Slice(manifestEntries, func(i, j int) bool {
+		return manifestEntries[i].relPath < manifestEntries[j].relPath
+	})
+
+	mf, err := os.Create(sha256ManifestPath)
+	if err != nil {
+		return fmt.Errorf("failed to create SHA-256 manifest file: %w", err)
+	}
+	for _, me := range manifestEntries {
+		if _, err := fmt.Fprintf(mf, "%s  %s\n", me.hash, me.relPath); err != nil {
+			mf.Close()
+			return fmt.Errorf("failed to write entry to SHA-256 manifest: %w", err)
+		}
+	}
+	if err := mf.Close(); err != nil {
+		return fmt.Errorf("failed to close SHA-256 manifest file: %w", err)
+	}
+
+	manifestStat, err := os.Stat(sha256ManifestPath)
+	var manifestSize int64
+	if err == nil {
+		manifestSize = manifestStat.Size()
+	}
+
+	inventory = append(inventory, evidenceFile{
+		abs:  sha256ManifestPath,
+		rel:  "manifest.sha256",
+		size: manifestSize,
+	})
+
+	log.Info("Generated on-device SHA-256 manifest: %d entries", len(manifestEntries))
+
 	// ── Phase 3: create ZIP from selected files ────────────────────────────────
 	zipFile, err := os.Create(zipPath)
 	if err != nil {
@@ -731,7 +790,7 @@ func (e *Executor) createEvidenceZip(ctx context.Context, job *Job) error {
 		default:
 		}
 		func() {
-			fw, err := w.Create(ef.rel)
+			fw, err := w.Create(filepath.ToSlash(ef.rel))
 			if err != nil {
 				writeErr = fmt.Errorf("failed to create ZIP entry %s: %w", ef.rel, err)
 				return
@@ -764,6 +823,24 @@ closeZip:
 
 	log.Info("ZIP created successfully: %s", zipPath)
 	return nil
+}
+
+func (e *Executor) createEvidenceZip(ctx context.Context, job *Job) error {
+	return e.CreateEvidenceZip(ctx, job)
+}
+
+func computeFileSHA256(filePath string) (string, error) {
+	f, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // pruneStagingKeepZip removes all uncompressed staging files and directories in workDir,

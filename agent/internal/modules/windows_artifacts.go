@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -579,10 +580,23 @@ func (m *WindowsUSBHistory) Run(ctx context.Context, mctx ModuleContext, params 
 
 // ── VSS helpers ───────────────────────────────────────────────────────────────
 
+// vssMu serializes VSS snapshot creation and deletion across concurrent modules.
+var vssMu sync.Mutex
+
 // vssCreate creates a VSS shadow copy of C:\ and returns (shadowID, devicePath, cleanup func, error).
 // The caller MUST call cleanup() regardless of error to ensure the snapshot is deleted.
 func vssCreate(ctx context.Context, b *BaseWindowsModule) (shadowID, devicePath string, cleanup func(), err error) {
 	cleanup = func() {} // no-op default
+
+	vssMu.Lock()
+	var once sync.Once
+	unlocked := false
+	unlock := func() {
+		if !unlocked {
+			unlocked = true
+			vssMu.Unlock()
+		}
+	}
 
 	script := `$vss = (Get-WmiObject -List Win32_ShadowCopy).Create("C:\", "ClientAccessible"); ` +
 		`if ($vss.ReturnValue -ne 0) { throw "VSS create failed: " + $vss.ReturnValue }; ` +
@@ -591,12 +605,14 @@ func vssCreate(ctx context.Context, b *BaseWindowsModule) (shadowID, devicePath 
 
 	out, execErr := b.executePowerShell(ctx, script)
 	if execErr != nil {
+		unlock()
 		err = NewWarningError(fmt.Sprintf("VSS creation failed (requires admin): %v", execErr))
 		return
 	}
 
 	parts := strings.SplitN(strings.TrimSpace(out), "|", 2)
 	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		unlock()
 		err = NewWarningError(fmt.Sprintf("unexpected VSS output: %q", out))
 		return
 	}
@@ -604,22 +620,27 @@ func vssCreate(ctx context.Context, b *BaseWindowsModule) (shadowID, devicePath 
 	shadowID = parts[0]
 	devicePath = parts[1]
 	if !vssGUIDRe.MatchString(shadowID) {
+		unlock()
 		err = fmt.Errorf("unexpected VSS shadow ID format: %q", shadowID)
 		return
 	}
+
 	cleanup = func() {
-		// shadowID is already validated as a safe GUID format above.
-		del := fmt.Sprintf(
-			`$sc = Get-WmiObject Win32_ShadowCopy | Where-Object { $_.ID -eq '%s' }; if ($sc) { $sc.Delete() | Out-Null }`,
-			shadowID,
-		)
-		// Use a 30-second timeout; the original job context may already be cancelled.
-		cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		if _, err := b.executePowerShell(cleanCtx, del); err != nil {
-			// Non-fatal: VSS snapshot may be orphaned but deletion can be done manually
-			_ = err
-		}
+		once.Do(func() {
+			// shadowID is already validated as a safe GUID format above.
+			del := fmt.Sprintf(
+				`$sc = Get-WmiObject Win32_ShadowCopy | Where-Object { $_.ID -eq '%s' }; if ($sc) { $sc.Delete() | Out-Null }`,
+				shadowID,
+			)
+			// Use a 30-second timeout; the original job context may already be cancelled.
+			cleanCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if _, err := b.executePowerShell(cleanCtx, del); err != nil {
+				// Non-fatal: VSS snapshot may be orphaned but deletion can be done manually
+				_ = err
+			}
+			unlock()
+		})
 	}
 	return
 }
