@@ -32,22 +32,32 @@ export interface Incident {
   priority?: "P0" | "P1" | "P2" | "P3";
   assignee?: string | null;
   tags?: string[];
-  templateId?: string | null;
-  targetEndpoints: string[];
+  template_id?: string | null;
+  target_endpoints: string[];
   operator: string;
-  createdAt: string;
-  updatedAt: string;
+  created_at: string;
+  updated_at?: string;
+
+  // Backward-compatible optional aliases
+  templateId?: string | null;
+  targetEndpoints?: string[];
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface Evidence {
   id: string;
-  incidentId: string;
+  incident_id: string;
   name: string;
   type: string;
   size: string;
   status: EvidenceStatus;
   hash: string;
-  collectedAt: string;
+  collected_at: string;
+
+  // Backward-compatible optional aliases
+  incidentId?: string;
+  collectedAt?: string;
 }
 
 export interface ChainOfCustodyEntry {
@@ -73,5 +83,9 @@ export interface Collector {
   id: string;
   name: string;
   status: CollectorStatus;
-  lastSeen: string;
+  last_heartbeat?: string | null;
+  last_seen?: string;
+
+  // Backward-compatible optional aliases
+  lastSeen?: string;
 }

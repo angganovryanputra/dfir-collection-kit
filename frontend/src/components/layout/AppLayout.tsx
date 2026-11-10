@@ -57,10 +57,14 @@ const mapIncident = (incident: IncidentResponse): Incident => ({
   id: incident.id,
   type: incident.type,
   status: incident.status,
+  template_id: incident.template_id ?? null,
   templateId: incident.template_id ?? null,
+  target_endpoints: incident.target_endpoints,
   targetEndpoints: incident.target_endpoints,
   operator: incident.operator,
+  created_at: incident.created_at,
   createdAt: incident.created_at,
+  updated_at: incident.updated_at,
   updatedAt: incident.updated_at,
 });
 
@@ -68,6 +72,8 @@ const mapCollector = (collector: CollectorResponse): Collector => ({
   id: collector.id,
   name: collector.name,
   status: normalizeCollectorStatus(collector.status),
+  last_heartbeat: collector.last_heartbeat,
+  last_seen: collector.last_heartbeat,
   lastSeen: collector.last_heartbeat,
 });
 

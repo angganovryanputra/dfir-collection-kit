@@ -115,10 +115,14 @@ const mapIncident = (incident: IncidentResponse): Incident => ({
   id: incident.id,
   type: incident.type,
   status: incident.status,
+  template_id: incident.template_id ?? null,
   templateId: incident.template_id ?? null,
+  target_endpoints: incident.target_endpoints,
   targetEndpoints: incident.target_endpoints,
   operator: incident.operator,
+  created_at: incident.created_at,
   createdAt: incident.created_at,
+  updated_at: incident.updated_at,
   updatedAt: incident.updated_at,
 });
 
@@ -126,6 +130,8 @@ const mapCollector = (collector: CollectorResponse): Collector => ({
   id: collector.id,
   name: collector.name,
   status: normalizeCollectorStatus(collector.status),
+  last_heartbeat: collector.last_heartbeat,
+  last_seen: collector.last_heartbeat,
   lastSeen: collector.last_heartbeat,
 });
 
@@ -197,14 +203,14 @@ const IncidentRow = memo(({ incident, isSelected, onToggleSelect, onClick }: Inc
                         )}
                     </div>
                     <div className="text-[11px] text-muted-foreground space-y-1">
-                        <div className="truncate">TARGETS: <span className="font-mono text-foreground/80">{incident.targetEndpoints.slice(0, 4).join(", ")}{incident.targetEndpoints.length > 4 ? ` +${incident.targetEndpoints.length - 4}` : ""}</span></div>
+                        <div className="truncate">TARGETS: <span className="font-mono text-foreground/80">{(incident.target_endpoints ?? incident.targetEndpoints ?? []).slice(0, 4).join(", ")}{(incident.target_endpoints ?? incident.targetEndpoints ?? []).length > 4 ? ` +${(incident.target_endpoints ?? incident.targetEndpoints ?? []).length - 4}` : ""}</span></div>
                         <div>OPERATOR: <span className="font-mono text-foreground/80">{incident.operator}</span></div>
                     </div>
                 </div>
                 <div className="text-right space-y-2 shrink-0">
                     {getIndicator(incident.status)}
                     <div className="font-mono text-[10px] text-muted-foreground">
-                        {new Date(incident.updatedAt).toLocaleString()}
+                        {new Date(incident.updated_at ?? incident.updatedAt ?? incident.created_at ?? incident.createdAt ?? "").toLocaleString()}
                     </div>
                     <ArrowUpRight className="w-4 h-4 text-primary opacity-0 group-hover:opacity-100 transition-opacity ml-auto" />
                 </div>
@@ -349,7 +355,7 @@ export default function Dashboard() {
   
   const offlineCollector = collectors.find((collector) => collector.status === "OFFLINE");
   const formattedStoragePercent = storageUsedPercent !== null ? `${Math.round(storageUsedPercent)}%` : "--";
-  const offlineCollectorLastSeen = offlineCollector ? new Date(offlineCollector.lastSeen).toLocaleString() : "";
+  const offlineCollectorLastSeen = offlineCollector ? new Date(offlineCollector.last_heartbeat ?? offlineCollector.last_seen ?? offlineCollector.lastSeen ?? "").toLocaleString() : "";
 
   const handleIncidentClick = useCallback((incident: Incident) => {
     navigate(`/incidents/${incident.id}`);
