@@ -38,6 +38,10 @@ async def update_user(db: AsyncSession, user_id: str, payload: UserUpdate) -> Us
     if not user:
         return None
     data = payload.model_dump(exclude_unset=True)
+    if "password" in data:
+        password = data.pop("password")
+        if password is not None and password.strip():
+            user.password_hash = get_password_hash(password.strip())
     for key, value in data.items():
         setattr(user, key, value)
     await db.flush()

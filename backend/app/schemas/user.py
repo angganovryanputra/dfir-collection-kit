@@ -25,6 +25,7 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     role: RoleEnum | None = None
     status: str | None = None
+    password: str | None = None
 
 
 class UserOut(UserBase):
