@@ -1,5 +1,6 @@
 import asyncio
 import functools
+import hmac
 import logging
 import re
 import zipfile
@@ -225,7 +226,7 @@ def _require_signature(export_path: Path, signature: str | None) -> None:
     if not signature:
         raise HTTPException(status_code=401, detail="Missing export signature")
     expected = compute_export_signature(str(export_path))
-    if signature != expected:
+    if not hmac.compare_digest(signature, expected):
         raise HTTPException(status_code=403, detail="Invalid export signature")
 
 
@@ -413,6 +414,7 @@ async def create_export_endpoint(
 
 
 @router.get("/exports/incident/{incident_id}")
+@router.get("/incident/{incident_id}/download")
 async def download_incident_export(
     incident_id: str,
     signature: str | None = Query(default=None),
