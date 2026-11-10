@@ -43,6 +43,7 @@ export default function ScheduledCollections() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const role = getStoredRole();
+  const isAdmin = role === "admin";
   const canEdit = role === "admin" || role === "operator";
 
   const [showForm, setShowForm] = useState(false);
@@ -244,12 +245,14 @@ export default function ScheduledCollections() {
                             <ToggleLeft className="w-4 h-4" />
                           )}
                         </button>
-                        <button
-                          className="text-muted-foreground hover:text-destructive"
-                          onClick={() => deleteMutation.mutate(sc.id)}
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+                        {isAdmin && (
+                          <button
+                            className="text-muted-foreground hover:text-destructive"
+                            onClick={() => deleteMutation.mutate(sc.id)}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

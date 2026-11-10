@@ -29,7 +29,7 @@ export default function CustomModules() {
   const { toast } = useToast();
   const role = getStoredRole();
   const isAdmin = role === "admin";
-  const canEdit = role === "admin" || role === "operator";
+  const canEdit = role === "admin";
 
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({

@@ -162,13 +162,13 @@ const App = () => {
                 <Route path="/incidents/:id/scheduled" element={<ProtectedRoute><RouteBoundary><ScheduledCollections /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/scheduled-collections" element={<ProtectedRoute><RouteBoundary><ScheduledCollections /></RouteBoundary></ProtectedRoute>} />
                 <Route path="/threat-hunt" element={<ProtectedRoute><RouteBoundary><ThreatHuntLibrary /></RouteBoundary></ProtectedRoute>} />
-                <Route path="/admin/custom-modules" element={<ProtectedRoute><RouteBoundary><CustomModules /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/admin/custom-modules" element={<ProtectedRoute><RoleRoute roles={["admin"]}><RouteBoundary><CustomModules /></RouteBoundary></RoleRoute></ProtectedRoute>} />
                 <Route path="/admin/audit-log" element={<ProtectedRoute><RoleRoute roles={["admin"]}><RouteBoundary><AuditLog /></RouteBoundary></RoleRoute></ProtectedRoute>} />
                 <Route path="/correlate" element={<ProtectedRoute><RouteBoundary><CorrelationView /></RouteBoundary></ProtectedRoute>} />
-                <Route path="/agents/:agentId/console" element={<ProtectedRoute><RouteBoundary><AgentConsole /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/agents/:agentId/console" element={<ProtectedRoute><RoleRoute roles={["admin", "operator"]}><RouteBoundary><AgentConsole /></RouteBoundary></RoleRoute></ProtectedRoute>} />
                 <Route path="/threat-intel" element={<ProtectedRoute><RoleRoute roles={["admin", "operator"]}><RouteBoundary><ThreatIntel /></RouteBoundary></RoleRoute></ProtectedRoute>} />
                 <Route path="/incidents/:id/siem-export" element={<ProtectedRoute><RouteBoundary><SIEMExport /></RouteBoundary></ProtectedRoute>} />
-                <Route path="/incidents/:id/ai-analysis" element={<ProtectedRoute><RouteBoundary><AIAnalysis /></RouteBoundary></ProtectedRoute>} />
+                <Route path="/incidents/:id/ai-analysis" element={<ProtectedRoute><RoleRoute roles={["admin", "operator"]}><RouteBoundary><AIAnalysis /></RouteBoundary></RoleRoute></ProtectedRoute>} />
 
                 <Route path="*" element={<NotFound />} />
               </Routes>
