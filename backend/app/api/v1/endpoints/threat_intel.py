@@ -16,8 +16,13 @@ an explanatory error string — the endpoint never raises 500 for missing creds.
 
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
+import os
 import re
+import threading
+import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -69,20 +74,162 @@ class EnrichResult(BaseModel):
     error: str | None = None
 
 
+# ── Threat Intel Cache Layer (24h TTL) ────────────────────────────────────────
+
+THREAT_INTEL_CACHE_TTL = 86400  # 24 hours in seconds
+
+_memory_cache: dict[str, tuple[float, str]] = {}
+_memory_cache_lock = threading.Lock()
+_redis_client: Any = None
+
+
+def _threat_intel_cache_key(service: str, ioc_type: str, ioc_value: str) -> str:
+    return f"threat_intel:{service}:{ioc_type}:{ioc_value.strip().lower()}"
+
+
+def _get_memory_cache(key: str) -> EnrichResult | None:
+    now = time.time()
+    with _memory_cache_lock:
+        if key in _memory_cache:
+            expires_at, data = _memory_cache[key]
+            if now < expires_at:
+                try:
+                    return EnrichResult.model_validate_json(data)
+                except Exception:
+                    pass
+            _memory_cache.pop(key, None)
+    return None
+
+
+def _set_memory_cache(key: str, result: EnrichResult) -> None:
+    now = time.time()
+    with _memory_cache_lock:
+        _memory_cache[key] = (now + THREAT_INTEL_CACHE_TTL, result.model_dump_json())
+
+
+async def _get_redis_client() -> Any:
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+
+    redis_url = os.getenv("REDIS_URL")
+    if not redis_url:
+        try:
+            from app.core.config import settings
+
+            redis_url = settings.REDIS_URL
+        except Exception:
+            redis_url = ""
+
+    if not redis_url:
+        return None
+
+    try:
+        import redis.asyncio as aioredis
+
+        client = aioredis.from_url(
+            redis_url,
+            decode_responses=True,
+            socket_timeout=2.0,
+            socket_connect_timeout=2.0,
+        )
+        await client.ping()
+        _redis_client = client
+        return _redis_client
+    except Exception as exc:
+        logger.warning(
+            "Redis connection to %s failed, using in-memory cache fallback: %s", redis_url, exc
+        )
+        _redis_client = None
+        return None
+
+
+async def _get_cached_enrichment(service: str, ioc_type: str, ioc_value: str) -> EnrichResult | None:
+    key = _threat_intel_cache_key(service, ioc_type, ioc_value)
+    client = await _get_redis_client()
+    if client is not None:
+        try:
+            cached_val = await client.get(key)
+            if cached_val:
+                return EnrichResult.model_validate_json(cached_val)
+        except Exception as exc:
+            logger.warning("Redis GET error for %s, falling back to memory: %s", key, exc)
+
+    return _get_memory_cache(key)
+
+
+async def _set_cached_enrichment(
+    service: str, ioc_type: str, ioc_value: str, result: EnrichResult
+) -> None:
+    key = _threat_intel_cache_key(service, ioc_type, ioc_value)
+    _set_memory_cache(key, result)
+
+    client = await _get_redis_client()
+    if client is not None:
+        try:
+            payload = result.model_dump_json()
+            if hasattr(client, "setex"):
+                await client.setex(key, THREAT_INTEL_CACHE_TTL, payload)
+            else:
+                await client.set(key, payload, ex=THREAT_INTEL_CACHE_TTL)
+        except Exception as exc:
+            logger.warning("Redis SETEX error for %s: %s", key, exc)
+
+
+async def _async_clear_threat_intel_cache() -> None:
+    with _memory_cache_lock:
+        _memory_cache.clear()
+    client = await _get_redis_client()
+    if client is not None:
+        try:
+            if hasattr(client, "keys"):
+                keys = await client.keys("threat_intel:*")
+            elif hasattr(client, "scan_iter"):
+                keys = [k async for k in client.scan_iter("threat_intel:*")]
+            else:
+                keys = []
+            if keys:
+                await client.delete(*keys)
+        except Exception as exc:
+            logger.warning("Error clearing Redis threat intel cache: %s", exc)
+
+
+def clear_threat_intel_cache() -> Any:
+    """Clear threat intel cache (both Redis and in-memory). Works in sync and async contexts."""
+    with _memory_cache_lock:
+        _memory_cache.clear()
+    try:
+        loop = asyncio.get_running_loop()
+        return loop.create_task(_async_clear_threat_intel_cache())
+    except RuntimeError:
+        return asyncio.run(_async_clear_threat_intel_cache())
+
+
 @router.post("/enrich", response_model=list[EnrichResult])
 async def enrich_ioc(
     payload: EnrichRequest,
     _: User = Depends(require_roles("operator", "admin")),
 ) -> list[EnrichResult]:
     """Enrich a single IOC against all configured threat intel services."""
+    payload.ioc_value = payload.ioc_value.strip()
     _validate_ioc(payload.ioc_type, payload.ioc_value)
     services = payload.services or ["virustotal", "misp"]
     results: list[EnrichResult] = []
     for svc in services:
+        cached = await _get_cached_enrichment(svc, payload.ioc_type, payload.ioc_value)
+        if cached is not None:
+            results.append(cached)
+            continue
+
+        res: EnrichResult | None = None
         if svc == "virustotal":
-            results.append(await _vt_enrich(payload.ioc_type, payload.ioc_value))
+            res = await _vt_enrich(payload.ioc_type, payload.ioc_value)
         elif svc == "misp":
-            results.append(await _misp_enrich(payload.ioc_type, payload.ioc_value))
+            res = await _misp_enrich(payload.ioc_type, payload.ioc_value)
+
+        if res is not None:
+            await _set_cached_enrichment(svc, payload.ioc_type, payload.ioc_value, res)
+            results.append(res)
     return results
 
 

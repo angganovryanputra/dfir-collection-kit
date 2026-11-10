@@ -1,11 +1,19 @@
+from __future__ import annotations
+
 import asyncio
 import functools
 import hmac
 import logging
 import re
+import threading
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+try:
+    import duckdb
+except ImportError:
+    duckdb = None  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -542,6 +550,62 @@ def _has_duckdb() -> bool:
 
 _HAS_DUCKDB = _has_duckdb()
 
+_duckdb_conn_lock = threading.Lock()
+_duckdb_conn_cache: dict[str, duckdb.DuckDBPyConnection] = {}
+
+
+def get_duckdb_read_conn(duckdb_path: Path | str) -> duckdb.DuckDBPyConnection:
+    """Return a cursor on a shared, thread-safe read-only DuckDB connection."""
+    import duckdb
+
+    p = Path(duckdb_path)
+    try:
+        key = str(p.resolve())
+    except Exception:
+        key = str(p)
+
+    with _duckdb_conn_lock:
+        conn = _duckdb_conn_cache.get(key)
+        if conn is not None:
+            try:
+                return conn.cursor()
+            except Exception:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+                _duckdb_conn_cache.pop(key, None)
+
+        conn = duckdb.connect(str(p), read_only=True)
+        _duckdb_conn_cache[key] = conn
+        return conn.cursor()
+
+
+def clear_duckdb_conn_cache(path: Path | str | None = None) -> None:
+    """Closes and removes connections from cache (useful on rebuilds or test tear-down)."""
+    with _duckdb_conn_lock:
+        if path is not None:
+            p = Path(path)
+            try:
+                key = str(p.resolve())
+            except Exception:
+                key = str(p)
+            conn = _duckdb_conn_cache.pop(key, None)
+            if conn is None and str(path) in _duckdb_conn_cache:
+                conn = _duckdb_conn_cache.pop(str(path), None)
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+        else:
+            for conn in list(_duckdb_conn_cache.values()):
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            _duckdb_conn_cache.clear()
+
 
 class TimelineResponse(BaseModel):
     data: list[dict]
@@ -668,7 +732,7 @@ def _query_duckdb_store(db_path: Path, q: str, page: int, limit: int) -> Timelin
     offset = (page - 1) * limit
 
     try:
-        con = duckdb.connect(str(db_path), read_only=True)
+        con = get_duckdb_read_conn(db_path)
         try:
             params: list = []
             if q.strip():
@@ -899,7 +963,7 @@ def _query_super_timeline_duckdb(
     import duckdb
 
     offset = (page - 1) * limit
-    con = duckdb.connect(str(duckdb_path), read_only=True)
+    con = get_duckdb_read_conn(duckdb_path)
     try:
         # Always fetch all distinct hosts and source_shorts for the filter UI
         all_hosts = [
@@ -1055,7 +1119,7 @@ def _export_super_timeline_duckdb(
 
     import duckdb
 
-    con = duckdb.connect(str(duckdb_path), read_only=True)
+    con = get_duckdb_read_conn(duckdb_path)
     try:
         from app.services.timeline_filters import timeline_where
 
