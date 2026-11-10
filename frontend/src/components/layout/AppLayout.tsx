@@ -248,7 +248,7 @@ export function AppLayout({
   };
 
   return (
-    <EvidenceProvider>
+    <EvidenceProvider incidentId={activeIncidentId}>
       <div className="min-h-screen bg-background flex relative">
         {/* Global Command Palette */}
         <CommandDialog open={open} onOpenChange={setOpen}>

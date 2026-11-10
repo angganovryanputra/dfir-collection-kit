@@ -135,8 +135,62 @@ export default function CollectionExecution() {
   const location = useLocation();
   const locationState = location.state as CollectionLocationState | null;
 
-  const selectedModuleIds = useMemo(() => locationState?.selectedModuleIds ?? [], [locationState]);
-  const osOverride = locationState?.osOverride;
+  const storageKey = incidentId ? `dfir_collection_${incidentId}_modules` : null;
+
+  const resolvedState = useMemo<{ selectedModuleIds: string[]; osOverride?: string }>(() => {
+    // 1. If locationState has modules, persist them and use them
+    if (locationState?.selectedModuleIds && locationState.selectedModuleIds.length > 0) {
+      if (storageKey) {
+        try {
+          sessionStorage.setItem(
+            storageKey,
+            JSON.stringify({
+              selectedModuleIds: locationState.selectedModuleIds,
+              osOverride: locationState.osOverride,
+            })
+          );
+        } catch {
+          // ignore storage quota or access errors
+        }
+      }
+      return {
+        selectedModuleIds: locationState.selectedModuleIds,
+        osOverride: locationState.osOverride,
+      };
+    }
+
+    // 2. Otherwise try restoring from sessionStorage
+    if (storageKey) {
+      try {
+        const stored = sessionStorage.getItem(storageKey);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed)) {
+            return {
+              selectedModuleIds: parsed,
+              osOverride: locationState?.osOverride,
+            };
+          }
+          if (parsed && typeof parsed === "object") {
+            return {
+              selectedModuleIds: Array.isArray(parsed.selectedModuleIds) ? parsed.selectedModuleIds : [],
+              osOverride: typeof parsed.osOverride === "string" ? parsed.osOverride : locationState?.osOverride,
+            };
+          }
+        }
+      } catch {
+        // ignore JSON parse or storage errors
+      }
+    }
+
+    return {
+      selectedModuleIds: [],
+      osOverride: locationState?.osOverride,
+    };
+  }, [locationState, storageKey]);
+
+  const selectedModuleIds = resolvedState.selectedModuleIds;
+  const osOverride = resolvedState.osOverride;
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [phases, setPhases] = useState<CollectionPhase[]>(
     PHASES.map(({ id, name }) => ({ id, name, status: "pending" }))

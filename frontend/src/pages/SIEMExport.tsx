@@ -43,7 +43,7 @@ export default function SIEMExport() {
   const [isCaseExporting, setIsCaseExporting] = useState(false);
 
   useEffect(() => {
-    apiGet<{ timesketch_url?: string | null; timesketch_token?: string }>("/admin/settings")
+    apiGet<{ timesketch_url?: string | null; timesketch_token?: string }>("/settings/")
       .then((s) => {
         setCfg((c) => ({
           ...c,
