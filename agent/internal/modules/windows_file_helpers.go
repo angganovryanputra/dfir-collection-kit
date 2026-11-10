@@ -10,6 +10,7 @@ import (
 
 // copyNative copies files matching pattern from srcDir to dstDir using native Backup APIs.
 // This avoids calling `robocopy.exe`, improving OPSEC by avoiding Process Creation events.
+// Pattern matching is case-insensitive to reliably capture Windows artifacts regardless of case.
 func copyNative(ctx context.Context, srcDir, patternStr, dstDir string) error {
 	if err := os.MkdirAll(dstDir, 0755); err != nil {
 		return fmt.Errorf("failed to create dest dir %s: %w", dstDir, err)
@@ -20,12 +21,14 @@ func copyNative(ctx context.Context, srcDir, patternStr, dstDir string) error {
 		return fmt.Errorf("failed to read srcDir %s: %w", srcDir, err)
 	}
 
+	patternLower := strings.ToLower(patternStr)
 	var hasMatched bool
+	var copyErr error
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
-		matched, _ := filepath.Match(patternStr, entry.Name())
+		matched, _ := filepath.Match(patternLower, strings.ToLower(entry.Name()))
 		if matched {
 			hasMatched = true
 			srcPath := filepath.Join(srcDir, entry.Name())
@@ -33,12 +36,15 @@ func copyNative(ctx context.Context, srcDir, patternStr, dstDir string) error {
 			err := CopyFileNativeBackup(ctx, srcPath, dstPath)
 			if err != nil {
 				// We log or ignore individual file errors to continue copying
-				_ = err
+				copyErr = err
 			}
 		}
 	}
 	if !hasMatched {
 		return fmt.Errorf("no files matched %s in %s", patternStr, srcDir)
+	}
+	if !strings.ContainsAny(patternStr, "*?[]") && copyErr != nil {
+		return fmt.Errorf("failed to copy %s: %w", patternStr, copyErr)
 	}
 	return nil
 }

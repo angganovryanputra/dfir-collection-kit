@@ -19,8 +19,54 @@ import (
 var vssGUIDRe = regexp.MustCompile(`^\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$`)
 
 // ── Registry Hives ────────────────────────────────────────────────────────────
-// Exports SYSTEM, SOFTWARE, SAM, and SECURITY hives using `reg save`.
+// Exports SYSTEM, SOFTWARE, SAM, and SECURITY hives using native Backup APIs.
+// Copies main hives and companion transaction logs (.LOG1, .LOG2, .LOG).
 // Requires local administrator privileges. SAM and SECURITY require SYSTEM.
+
+type RegistryHiveTarget struct {
+	Name string
+	Path string
+}
+
+var defaultSystemHives = []RegistryHiveTarget{
+	{Name: "SYSTEM", Path: `C:\Windows\System32\config\SYSTEM`},
+	{Name: "SOFTWARE", Path: `C:\Windows\System32\config\SOFTWARE`},
+	{Name: "SAM", Path: `C:\Windows\System32\config\SAM`},
+	{Name: "SECURITY", Path: `C:\Windows\System32\config\SECURITY`},
+}
+
+// collectSystemHives copies the specified system hives and attempts to copy companion
+// transaction logs (.LOG1, .LOG2, and .LOG). Only failures on primary hive files are recorded.
+func collectSystemHives(ctx context.Context, hives []RegistryHiveTarget, outputPath string) []string {
+	if err := os.MkdirAll(outputPath, 0755); err != nil {
+		return []string{fmt.Sprintf("create output dir: %v", err)}
+	}
+	var errs []string
+	for _, hive := range hives {
+		dst := filepath.Join(outputPath, hive.Name)
+		err := CopyFileNativeBackup(ctx, hive.Path, dst)
+		if err != nil {
+			// On case-sensitive systems (mock tests), try lowercase filename
+			dir := filepath.Dir(hive.Path)
+			base := filepath.Base(hive.Path)
+			if lowerErr := CopyFileNativeBackup(ctx, filepath.Join(dir, strings.ToLower(base)), dst); lowerErr == nil {
+				err = nil
+			}
+		}
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s: %v", hive.Name, err))
+		}
+		// Attempt copying companion transaction logs: .LOG1, .LOG2, and .LOG
+		for _, ext := range []string{".LOG1", ".LOG2", ".LOG"} {
+			srcLog := hive.Path + ext
+			dstLog := filepath.Join(outputPath, hive.Name+ext)
+			if copyErr := CopyFileNativeBackup(ctx, srcLog, dstLog); copyErr != nil {
+				_ = CopyFileNativeBackup(ctx, hive.Path+strings.ToLower(ext), dstLog)
+			}
+		}
+	}
+	return errs
+}
 
 type WindowsRegistryHives struct{ BaseWindowsModule }
 
@@ -35,21 +81,8 @@ func (m *WindowsRegistryHives) Run(ctx context.Context, mctx ModuleContext, para
 	if err := os.MkdirAll(outputPath, 0755); err != nil {
 		return fmt.Errorf("failed to create output dir: %w", err)
 	}
-	hives := []struct{ name, path string }{
-		{"SYSTEM", `C:\Windows\System32\config\SYSTEM`},
-		{"SOFTWARE", `C:\Windows\System32\config\SOFTWARE`},
-		{"SAM", `C:\Windows\System32\config\SAM`},
-		{"SECURITY", `C:\Windows\System32\config\SECURITY`},
-	}
-	var errs []string
-	for _, hive := range hives {
-		dst := filepath.Join(outputPath, hive.name)
-		err := CopyFileNativeBackup(ctx, hive.path, dst)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", hive.name, err))
-		}
-	}
-	if len(errs) == len(hives) {
+	errs := collectSystemHives(ctx, defaultSystemHives, outputPath)
+	if len(errs) == len(defaultSystemHives) {
 		note := "All registry hives failed (requires admin): " + strings.Join(errs, "; ")
 		_ = WriteNotFound(filepath.Join(outputPath, "error.txt"), note)
 		return NewWarningError(note)
@@ -59,8 +92,8 @@ func (m *WindowsRegistryHives) Run(ctx context.Context, mctx ModuleContext, para
 }
 
 // ── NTUSER.DAT (per-user registry hives) ─────────────────────────────────────
-// Copies NTUSER.DAT and UsrClass.dat from every user profile directory.
-// Uses robocopy /B for access to locked hive files.
+// Copies NTUSER.DAT and UsrClass.dat from every user profile directory along with companion transaction logs.
+// Uses native Backup APIs for access to locked hive files.
 
 type WindowsNtuserDat struct{ BaseWindowsModule }
 
@@ -69,6 +102,26 @@ func NewWindowsNtuserDat() *WindowsNtuserDat {
 		"windows_ntuser_dat",
 		"artifacts/windows/registry/users/",
 	)}}
+}
+
+// collectNtuserDatProfiles copies NTUSER.DAT and UsrClass.dat along with companion transaction logs
+// (.LOG1, .LOG2, etc.) for each profile directory into outputPath/<username>.
+// Primary NTUSER.DAT missing errors are recorded in the returned slice; missing companion logs are ignored.
+func collectNtuserDatProfiles(ctx context.Context, profiles []string, outputPath string) []string {
+	var errs []string
+	for _, profileDir := range profiles {
+		uname := profileName(profileDir)
+		dstDir := filepath.Join(outputPath, uname)
+		if copyErr := copyNative(ctx, profileDir, "NTUSER.DAT", dstDir); copyErr != nil {
+			errs = append(errs, fmt.Sprintf("%s NTUSER.DAT: %v", uname, copyErr))
+		}
+		_ = copyNative(ctx, profileDir, "NTUSER.DAT.LOG*", dstDir)
+
+		usrClassDir := filepath.Join(profileDir, "AppData", "Local", "Microsoft", "Windows")
+		_ = copyNative(ctx, usrClassDir, "UsrClass.dat", dstDir)
+		_ = copyNative(ctx, usrClassDir, "UsrClass.dat.LOG*", dstDir)
+	}
+	return errs
 }
 
 func (m *WindowsNtuserDat) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
@@ -80,16 +133,7 @@ func (m *WindowsNtuserDat) Run(ctx context.Context, mctx ModuleContext, params m
 	if len(profiles) == 0 {
 		return WriteNotFound(filepath.Join(outputPath, "error.txt"), "no user profiles found")
 	}
-	var errs []string
-	for _, profileDir := range profiles {
-		uname := profileName(profileDir)
-		dstDir := filepath.Join(outputPath, uname)
-		if copyErr := copyNative(ctx, profileDir, "NTUSER.DAT", dstDir); copyErr != nil {
-			errs = append(errs, fmt.Sprintf("%s NTUSER.DAT: %v", uname, copyErr))
-		}
-		usrClassDir := filepath.Join(profileDir, `AppData\Local\Microsoft\Windows`)
-		_ = copyNative(ctx, usrClassDir, "UsrClass.dat", dstDir)
-	}
+	errs := collectNtuserDatProfiles(ctx, profiles, outputPath)
 	writeErrors(outputPath, errs)
 	return nil
 }
