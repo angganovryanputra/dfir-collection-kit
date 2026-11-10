@@ -27,7 +27,7 @@ import {
   Search as SearchIcon
 } from "lucide-react";
 import type { Incident, Collector } from "@/types/dfir";
-import { apiGet, apiPatch } from "@/lib/api";
+import { apiGet, apiPatch, apiDelete } from "@/lib/api";
 import { getStoredRole } from "@/lib/auth";
 import { cn } from "@/lib/utils";
 
@@ -383,6 +383,29 @@ export default function Dashboard() {
     }
   };
 
+  const handleBulkPurge = async () => {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm("Are you sure you want to permanently purge " + selectedIds.size + " selected incident(s)?")) {
+      return;
+    }
+    try {
+      await Promise.allSettled(
+        Array.from(selectedIds).map(async (id) => {
+          try {
+            await apiDelete(`/incidents/${id}`);
+          } catch (err) {
+            console.error(`Failed to purge incident ${id}:`, err);
+          }
+        })
+      );
+    } catch (e) {
+      console.error("Bulk purge failed:", e);
+    } finally {
+      setSelectedIds(new Set());
+      void queryClient.invalidateQueries({ queryKey: ["incidents"] });
+    }
+  };
+
   const isInitialLoading = (isIncLoading || isCollLoading) && !incidentData;
 
   return (
@@ -430,6 +453,7 @@ export default function Dashboard() {
                     <Button 
                         variant="ghost" 
                         size="sm" 
+                        onClick={handleBulkPurge}
                         className="h-9 px-4 gap-2 text-destructive hover:bg-destructive/5 font-bold text-[10px] tracking-widest"
                     >
                         <Trash2 className="w-3.5 h-3.5" /> PURGE_SECTOR

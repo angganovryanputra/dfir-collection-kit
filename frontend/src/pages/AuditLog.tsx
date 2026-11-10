@@ -3,10 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { TacticalPanel } from "@/components/TacticalPanel";
 import { Button } from "@/components/ui/button";
-import { Search, Download, RefreshCw } from "lucide-react";
+import { Search, Download, RefreshCw, Loader2 } from "lucide-react";
 import { apiGet } from "@/lib/api";
+import { useDebounce } from "@/hooks/useDebounce";
 
-type AuditEntry = {
+export type AuditEntry = {
   id: string;
   event_id: string;
   event_type: string;
@@ -22,10 +23,66 @@ type AuditEntry = {
   created_at: string;
 };
 
-type AuditLogResponse = {
+export type AuditLogEntry = AuditEntry;
+
+export type AuditLogResponse = {
   entries: AuditEntry[];
   total: number;
 };
+
+export function buildAuditExportParams(filters: {
+  search?: string;
+  targetId?: string;
+  eventType?: string;
+  actorId?: string;
+  startTime?: string;
+  endTime?: string;
+  dateFrom?: string;
+  dateTo?: string;
+}): URLSearchParams {
+  const params = new URLSearchParams({ limit: "10000" });
+  const searchVal = filters.search || filters.targetId;
+  if (searchVal) {
+    params.set("search", searchVal);
+    params.set("target_id", searchVal);
+  }
+  if (filters.eventType) params.set("event_type", filters.eventType);
+  if (filters.actorId) params.set("actor_id", filters.actorId);
+  if (filters.startTime) {
+    params.set("start_time", filters.startTime);
+  } else if (filters.dateFrom) {
+    try {
+      params.set("start_time", new Date(filters.dateFrom).toISOString());
+    } catch {
+      // ignore invalid date
+    }
+  }
+  if (filters.endTime) {
+    params.set("end_time", filters.endTime);
+  } else if (filters.dateTo) {
+    try {
+      params.set("end_time", new Date(`${filters.dateTo}T23:59:59`).toISOString());
+    } catch {
+      // ignore invalid date
+    }
+  }
+  return params;
+}
+
+export function generateAuditCsv(entries: AuditLogEntry[]): string {
+  const header = ["timestamp", "event_type", "actor_id", "action", "target_type", "target_id", "status", "message"];
+  const rows = entries.map(e => [
+    new Date(e.created_at).toISOString(),
+    e.event_type,
+    e.actor_id,
+    e.action,
+    e.target_type ?? "",
+    e.target_id ?? "",
+    e.status,
+    (e.message ?? "").replace(/,/g, ";"),
+  ]);
+  return [header, ...rows].map(r => r.join(",")).join("\n");
+}
 
 const STATUS_COLORS: Record<string, string> = {
   success: "text-primary",
@@ -40,21 +97,31 @@ export default function AuditLog() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [page, setPage] = useState(1);
+  const [isExporting, setIsExporting] = useState(false);
   const limit = 50;
+
+  const debouncedSearch = useDebounce(targetId, 300);
+  const eventTypeFilter = eventType;
+  const actorIdFilter = actorId;
+  const startTime = dateFrom ? new Date(dateFrom).toISOString() : "";
+  const endTime = dateTo ? new Date(`${dateTo}T23:59:59`).toISOString() : "";
 
   const params = new URLSearchParams({
     limit: String(limit),
     offset: String((page - 1) * limit),
   });
-  if (eventType) params.set("event_type", eventType);
-  if (actorId) params.set("actor_id", actorId);
-  if (targetId) params.set("target_id", targetId);
-  if (dateFrom) params.set("date_from", new Date(dateFrom).toISOString());
-  if (dateTo) params.set("date_to", new Date(`${dateTo}T23:59:59`).toISOString());
+  if (debouncedSearch) {
+    params.set("search", debouncedSearch);
+    params.set("target_id", debouncedSearch);
+  }
+  if (eventTypeFilter) params.set("event_type", eventTypeFilter);
+  if (actorIdFilter) params.set("actor_id", actorIdFilter);
+  if (startTime) params.set("start_time", startTime);
+  if (endTime) params.set("end_time", endTime);
 
   const { data, isLoading, refetch } = useQuery<AuditLogResponse>({
-    queryKey: ["audit-log", eventType, actorId, targetId, dateFrom, dateTo, page],
-    queryFn: () => apiGet<AuditLogResponse>(`/audit-logs?${params.toString()}`),
+    queryKey: ["audit-log", eventTypeFilter, actorIdFilter, debouncedSearch, startTime, endTime, page],
+    queryFn: () => apiGet<AuditLogResponse>(`/audit-logs/?${params.toString()}`),
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
   });
@@ -63,26 +130,37 @@ export default function AuditLog() {
   const total = data?.total ?? 0;
   const totalPages = Math.ceil(total / limit) || 1;
 
-  const handleExport = () => {
-    const header = ["timestamp", "event_type", "actor_id", "action", "target_type", "target_id", "status", "message"];
-    const rows = entries.map(e => [
-      new Date(e.created_at).toISOString(),
-      e.event_type,
-      e.actor_id,
-      e.action,
-      e.target_type ?? "",
-      e.target_id ?? "",
-      e.status,
-      (e.message ?? "").replace(/,/g, ";"),
-    ]);
-    const csv = [header, ...rows].map(r => r.join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+  const handleExport = async () => {
+    try {
+      setIsExporting(true);
+      const exportParams = new URLSearchParams({ limit: "10000" });
+      if (debouncedSearch) {
+        exportParams.set("search", debouncedSearch);
+        exportParams.set("target_id", debouncedSearch);
+      }
+      if (eventTypeFilter) exportParams.set("event_type", eventTypeFilter);
+      if (actorIdFilter) exportParams.set("actor_id", actorIdFilter);
+      if (startTime) exportParams.set("start_time", startTime);
+      if (endTime) exportParams.set("end_time", endTime);
+
+      const res = await apiGet<{ entries: AuditLogEntry[] }>(`/audit-logs/?${exportParams.toString()}`);
+      const exportEntries = res?.entries ?? [];
+
+      const csv = generateAuditCsv(exportEntries);
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to export audit logs:", err);
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (
@@ -137,10 +215,10 @@ export default function AuditLog() {
               size="sm"
               className="h-7"
               onClick={handleExport}
-              disabled={entries.length === 0}
+              disabled={entries.length === 0 || isExporting}
             >
-              <Download className="w-3 h-3 mr-1" />
-              EXPORT CSV
+              {isExporting ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Download className="w-3 h-3 mr-1" />}
+              {isExporting ? "EXPORTING..." : "EXPORT CSV"}
             </Button>
           </div>
         </TacticalPanel>

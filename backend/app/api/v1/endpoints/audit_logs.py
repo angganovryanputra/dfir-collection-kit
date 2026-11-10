@@ -33,7 +33,9 @@ async def get_audit_logs(
     evidence_id: str | None = Query(default=None),
     start_time: str | None = Query(default=None),
     end_time: str | None = Query(default=None),
-    limit: int = Query(default=200, ge=1, le=1000),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=10000),
     offset: int = Query(default=0, ge=0),
 ) -> AuditLogListResponse:
     def parse_time(value: str | None, label: str) -> datetime | None:
@@ -57,14 +59,17 @@ async def get_audit_logs(
         target_type = "evidence"
         target_filter = evidence_id
 
+    effective_start = start_time or date_from
+    effective_end = end_time or date_to
+
     entries, total = await list_entries_with_total(
         db,
         event_type=event_type,
         actor_id=actor_id,
         target_id=target_filter,
         target_type=target_type,
-        start_time=parse_time(start_time, "start_time"),
-        end_time=parse_time(end_time, "end_time"),
+        start_time=parse_time(effective_start, "start_time"),
+        end_time=parse_time(effective_end, "end_time"),
         limit=limit,
         offset=offset,
     )
