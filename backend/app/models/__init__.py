@@ -7,12 +7,21 @@ from app.models.device import Device
 from app.models.evidence import EvidenceFolder, EvidenceItem
 from app.models.incident import Incident
 from app.models.job import Job
+from app.models.platform_features import (
+    AttackHypothesis,
+    CustomModule,
+    DetectionTriage,
+    IncidentNote,
+    IncidentTask,
+    LegalHold,
+    ScheduledCollection,
+    ThreatHuntQuery,
+)
 from app.models.processing import ProcessingJob, SigmaHit
 from app.models.settings import SystemSettings
 from app.models.super_timeline import LateralMovement, SuperTimeline, TimelineAnnotation
 from app.models.template import IncidentTemplate
 from app.models.user import User
-from app.models.platform_features import DetectionTriage, IncidentNote, IncidentTask
 
 __all__ = [
     "Incident",
@@ -39,4 +48,9 @@ __all__ = [
     "IncidentNote",
     "IncidentTask",
     "DetectionTriage",
+    "CustomModule",
+    "AttackHypothesis",
+    "ScheduledCollection",
+    "ThreatHuntQuery",
+    "LegalHold",
 ]
