@@ -230,8 +230,8 @@ async def analyst_ws(
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "expires_at": time.time() + timeout_sec + 30,
             }
-            await command_bus.enqueue_command(agent_id, cmd_dict)
             result_queue = await command_bus.register_listener(command_id)
+            await command_bus.enqueue_command(agent_id, cmd_dict)
 
             deadline = time.monotonic() + timeout_sec + 30
             try:
@@ -376,8 +376,8 @@ async def run_command_sync(
         "created_at": datetime.now(timezone.utc).isoformat(),
         "expires_at": time.time() + timeout_sec + 30,
     }
-    await command_bus.enqueue_command(agent_id, cmd_dict)
     result_queue = await command_bus.register_listener(command_id)
+    await command_bus.enqueue_command(agent_id, cmd_dict)
 
     deadline = time.monotonic() + timeout_sec + 30
     output_parts: list[str] = []

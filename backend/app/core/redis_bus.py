@@ -268,7 +268,7 @@ class CommandBus:
         async with self._lock:
             q = self._ws_queues.get(command_id)
             if q is not None:
-                # If Redis delivered via pubsub to local listener, avoid duplicate if pump is running
+                # If Redis delivered via pubsub to local listener, avoid duplicate if pump is active
                 if not published_redis or command_id not in self._pubsub_tasks:
                     await q.put(message)
                 delivered_local = True
