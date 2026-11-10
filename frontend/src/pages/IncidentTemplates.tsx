@@ -237,7 +237,7 @@ export default function IncidentTemplates() {
         const mapped = mapTemplate(response);
         setTemplates((current) => current.map((t) => (t.id === mapped.id ? mapped : t)));
       } else {
-        const response = await apiPost<TemplateResponse>("/templates", {
+        const response = await apiPost<TemplateResponse>("/templates/", {
           name: formData.name.toUpperCase(),
           incident_type: formData.incidentType!,
           default_endpoints: formData.defaultEndpoints,
@@ -257,7 +257,7 @@ export default function IncidentTemplates() {
   const duplicateTemplate = async (template: IncidentTemplate) => {
     if (isViewer) return;
     try {
-      const response = await apiPost<TemplateResponse>("/templates", {
+      const response = await apiPost<TemplateResponse>("/templates/", {
         name: `${template.name} (COPY)`.toUpperCase(),
         incident_type: template.incidentType,
         default_endpoints: template.defaultEndpoints,

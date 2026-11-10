@@ -140,7 +140,7 @@ export default function Collectors() {
     setAdding(true);
     setErrorMsg(null);
     try {
-      await apiPost("/collectors", { name: newName.trim(), endpoint: newEndpoint.trim() });
+      await apiPost("/collectors/", { name: newName.trim(), endpoint: newEndpoint.trim() });
       await queryClient.invalidateQueries({ queryKey: ["collectors-page"] });
       setNewName("");
       setNewEndpoint("");

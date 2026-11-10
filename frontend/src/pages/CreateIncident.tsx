@@ -93,7 +93,7 @@ export default function CreateIncident() {
     setIsStarting(true);
     setErrorMessage(null);
     try {
-      await apiPost("/incidents", {
+      await apiPost("/incidents/", {
         id: incidentId,
         type: incidentType,
         title: title.trim() || null,

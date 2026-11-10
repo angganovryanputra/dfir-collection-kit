@@ -407,7 +407,7 @@ export default function AdminSettings() {
     if (aiApiKey && aiApiKey !== "***") body.ai_api_key = aiApiKey;
     if (googleClientSecret && googleClientSecret !== "***") body.google_oauth_client_secret = googleClientSecret;
     try {
-      await apiPut("/settings", { ...systemSettings, ...body });
+      await apiPut("/settings/", { ...systemSettings, ...body });
       setAiMessage({ ok: true, text: "AI configuration saved." });
       if (aiApiKey && aiApiKey !== "***") setAiApiKey("***");
       if (googleClientSecret && googleClientSecret !== "***") setGoogleClientSecret("***");
@@ -590,7 +590,7 @@ export default function AdminSettings() {
       return;
     }
     try {
-      const created = await apiPost<UserResponse>("/users", {
+      const created = await apiPost<UserResponse>("/users/", {
         username: newUser.username,
         role: newUser.role,
         status: "active",
@@ -1452,7 +1452,7 @@ export default function AdminSettings() {
                         setIsSavingSettings(true);
                         setErrorMessage(null);
                         try {
-                          const updated = await apiPut<SystemSettingsResponse>("/settings", systemSettings);
+                          const updated = await apiPut<SystemSettingsResponse>("/settings/", systemSettings);
                           setSystemSettings(updated);
                           await loadAdminData();
                         } catch {

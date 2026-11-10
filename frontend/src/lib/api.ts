@@ -1,6 +1,33 @@
 import { logout } from "./auth";
 
-type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+export type HttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+
+export const MUTATING_COLLECTION_ROOTS = new Set([
+  "/incidents",
+  "/collectors",
+  "/devices",
+  "/settings",
+  "/templates",
+  "/users",
+  "/audit-logs",
+]);
+
+export const normalizeMutatingPath = (path: string, method: HttpMethod): string => {
+  if (method === "GET") {
+    return path;
+  }
+
+  const separatorIndex = path.search(/[?#]/);
+  const pathname = separatorIndex === -1 ? path : path.slice(0, separatorIndex);
+  const suffix = separatorIndex === -1 ? "" : path.slice(separatorIndex);
+
+  const lookupKey = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  if (MUTATING_COLLECTION_ROOTS.has(lookupKey)) {
+    return `${pathname}/${suffix}`;
+  }
+
+  return path;
+};
 
 const DEFAULT_BASE_URL = "/api/v1";
 
@@ -27,11 +54,12 @@ const request = async <T>(
   body?: unknown,
   signal?: AbortSignal,
 ): Promise<T> => {
+  const normalizedPath = normalizeMutatingPath(path, method);
   const baseUrl = getBaseUrl();
-  const url = `${baseUrl}${path}`;
+  const url = `${baseUrl}${normalizedPath}`;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
 
-  const skipTimeout = NO_TIMEOUT_PATHS.some((p) => path.includes(p));
+  const skipTimeout = NO_TIMEOUT_PATHS.some((p) => normalizedPath.includes(p));
   const timeoutMs = skipTimeout ? 0 : METHOD_TIMEOUT_MS[method];
 
   let controller: AbortController | null = null;

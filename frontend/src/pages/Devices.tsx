@@ -210,7 +210,7 @@ export default function Devices() {
     setErrorMessage(null);
     try {
       const now = new Date().toISOString();
-      const response = await apiPost<DeviceResponse>("/devices", {
+      const response = await apiPost<DeviceResponse>("/devices/", {
         id: crypto.randomUUID(),
         hostname: newDevice.hostname.trim().toUpperCase(),
         ip_address: newDevice.ipAddress.trim(),

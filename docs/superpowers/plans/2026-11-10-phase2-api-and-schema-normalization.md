@@ -40,11 +40,11 @@ git commit -m "fix(backend): register platform models in __all__ and add device 
 - Consumes: `get_password_hash`, `UserUpdate.password`
 - Produces: Functional admin password reset with cryptographic hashing and audit logging.
 
-- [ ] **Step 1: Write unit tests for password update and hashing**
-- [ ] **Step 2: Add `password: str | None = None` to `UserUpdate` in `schemas/user.py`**
-- [ ] **Step 3: Update `crud/user.py:update_user` to hash `password` into `password_hash`**
-- [ ] **Step 4: Update `endpoints/users.py:update_user_endpoint` to emit `admin_password_reset` audit event**
-- [ ] **Step 5: Run pytest and commit**
+- [x] **Step 1: Write unit tests for password update and hashing**
+- [x] **Step 2: Add `password: str | None = None` to `UserUpdate` in `schemas/user.py`**
+- [x] **Step 3: Update `crud/user.py:update_user` to hash `password` into `password_hash`**
+- [x] **Step 4: Update `endpoints/users.py:update_user_endpoint` to emit `admin_password_reset` audit event**
+- [x] **Step 5: Run pytest and commit**
 ```bash
 git add backend/app/schemas/user.py backend/app/crud/user.py backend/app/api/v1/endpoints/users.py backend/tests/test_user_password_update.py
 git commit -m "feat(users): support password reset in UserUpdate with hashing and audit logging"
@@ -66,9 +66,9 @@ git commit -m "feat(users): support password reset in UserUpdate with hashing an
 - Consumes: Zero-redirect REST contracts on collection roots
 - Produces: Elimination of HTTP 307 redirects on mutating POST/PUT calls.
 
-- [ ] **Step 1: Add trailing slash safeguard in `frontend/src/lib/api.ts`**
-- [ ] **Step 2: Normalize mutating API calls in `CreateIncident`, `Collectors`, `Devices`, `AdminSettings`, `IncidentTemplates`**
-- [ ] **Step 3: Verify frontend typecheck and commit**
+- [x] **Step 1: Add trailing slash safeguard in `frontend/src/lib/api.ts`**
+- [x] **Step 2: Normalize mutating API calls in `CreateIncident`, `Collectors`, `Devices`, `AdminSettings`, `IncidentTemplates`**
+- [x] **Step 3: Verify frontend typecheck and commit**
 ```bash
 git add frontend/src/lib/api.ts frontend/src/pages/CreateIncident.tsx frontend/src/pages/Collectors.tsx frontend/src/pages/Devices.tsx frontend/src/pages/AdminSettings.tsx frontend/src/pages/IncidentTemplates.tsx
 git commit -m "fix(api): normalize trailing slashes on mutating routes and add client safeguard"
@@ -151,3 +151,4 @@ git commit -m "fix(ui): resolve phantom route, reload state loss, and evidence s
 - [ ] **Step 2: Run Go agent test suite (`go test ./...`)**
 - [ ] **Step 3: Run frontend typecheck, linter, tests, and production build**
 - [ ] **Step 4: Conduct Whole-Branch Review and fast-forward merge to `main`**
+
