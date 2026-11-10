@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/dfir/agent/internal/modules"
@@ -121,5 +123,160 @@ func TestRequireMacOSGuard(t *testing.T) {
 	// On non-macOS: must be WarningError
 	if err != nil && !modules.IsWarning(err) {
 		t.Errorf("expected warning or nil, got hard error: %v", err)
+	}
+}
+
+func TestGetMacOSUserHomeDirsFrom_ExclusionsAndDeduplication(t *testing.T) {
+	baseDir := t.TempDir()
+
+	// Create directories to be excluded
+	for _, name := range []string{"Shared", "Guest", ".localized", ".hidden"} {
+		if err := os.MkdirAll(filepath.Join(baseDir, name), 0755); err != nil {
+			t.Fatalf("failed to create excluded dir %s: %v", name, err)
+		}
+	}
+
+	// Create regular file that should be ignored
+	if err := os.WriteFile(filepath.Join(baseDir, "file.txt"), []byte("not a dir"), 0644); err != nil {
+		t.Fatalf("failed to create file.txt: %v", err)
+	}
+
+	// Create valid user home directories
+	aliceDir := filepath.Join(baseDir, "alice")
+	bobDir := filepath.Join(baseDir, "bob")
+	for _, d := range []string{aliceDir, bobDir} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("failed to create user dir %s: %v", d, err)
+		}
+	}
+
+	// Test deduplication when currentHome is inside baseDir (alice)
+	dirs := modules.GetMacOSUserHomeDirsFrom(baseDir, aliceDir)
+	if len(dirs) != 2 {
+		t.Fatalf("expected 2 user dirs, got %d: %v", len(dirs), dirs)
+	}
+	expectedMap := map[string]bool{aliceDir: true, bobDir: true}
+	for _, d := range dirs {
+		if !expectedMap[d] {
+			t.Errorf("unexpected directory included: %s", d)
+		}
+	}
+
+	// Test when currentHome is outside baseDir (e.g. root)
+	rootHome := filepath.Join(t.TempDir(), "root")
+	dirsWithRoot := modules.GetMacOSUserHomeDirsFrom(baseDir, rootHome)
+	if len(dirsWithRoot) != 3 {
+		t.Fatalf("expected 3 user dirs with root, got %d: %v", len(dirsWithRoot), dirsWithRoot)
+	}
+	expectedMapWithRoot := map[string]bool{aliceDir: true, bobDir: true, rootHome: true}
+	for _, d := range dirsWithRoot {
+		if !expectedMapWithRoot[d] {
+			t.Errorf("unexpected directory included: %s", d)
+		}
+	}
+}
+
+func TestCollectMacOSShellHistoryFrom_Aggregation(t *testing.T) {
+	baseDir := t.TempDir()
+	outPath := filepath.Join(t.TempDir(), "bash_history.txt")
+
+	aliceDir := filepath.Join(baseDir, "alice")
+	bobDir := filepath.Join(baseDir, "bob")
+	charlieDir := filepath.Join(baseDir, "charlie")
+	for _, d := range []string{aliceDir, bobDir, charlieDir} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatalf("failed to create dir %s: %v", d, err)
+		}
+	}
+
+	aliceHistory := "echo hello\nls -la /Users\n"
+	bobHistory := "whoami\nps aux\n"
+	if err := os.WriteFile(filepath.Join(aliceDir, ".bash_history"), []byte(aliceHistory), 0644); err != nil {
+		t.Fatalf("failed to write alice history: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(bobDir, ".bash_history"), []byte(bobHistory), 0644); err != nil {
+		t.Fatalf("failed to write bob history: %v", err)
+	}
+	// charlie has no history file
+
+	ctx := context.Background()
+	err := modules.CollectMacOSShellHistoryFrom(ctx, nil, outPath, ".bash_history", []string{aliceDir, bobDir, charlieDir})
+	if err != nil {
+		t.Fatalf("CollectMacOSShellHistoryFrom failed: %v", err)
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("failed to read output file: %v", err)
+	}
+	content := string(data)
+
+	// Verify Alice section
+	expectedAliceHeader := "=== User: alice (" + aliceDir + ") ==="
+	if !strings.Contains(content, expectedAliceHeader) {
+		t.Errorf("missing alice header %q in output:\n%s", expectedAliceHeader, content)
+	}
+	if !strings.Contains(content, "echo hello") || !strings.Contains(content, "ls -la /Users") {
+		t.Errorf("missing alice commands in output:\n%s", content)
+	}
+
+	// Verify Bob section
+	expectedBobHeader := "=== User: bob (" + bobDir + ") ==="
+	if !strings.Contains(content, expectedBobHeader) {
+		t.Errorf("missing bob header %q in output:\n%s", expectedBobHeader, content)
+	}
+	if !strings.Contains(content, "whoami") || !strings.Contains(content, "ps aux") {
+		t.Errorf("missing bob commands in output:\n%s", content)
+	}
+
+	// Verify Charlie is not mentioned
+	if strings.Contains(content, "charlie") {
+		t.Errorf("output should not mention charlie since no history file existed:\n%s", content)
+	}
+}
+
+func TestCollectMacOSShellHistoryFrom_NotFound(t *testing.T) {
+	baseDir := t.TempDir()
+	outPath := filepath.Join(t.TempDir(), "zsh_history.txt")
+
+	daveDir := filepath.Join(baseDir, "dave")
+	if err := os.MkdirAll(daveDir, 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+
+	ctx := context.Background()
+	err := modules.CollectMacOSShellHistoryFrom(ctx, nil, outPath, ".zsh_history", []string{daveDir})
+	if err != nil {
+		t.Fatalf("expected nil error on not found, got: %v", err)
+	}
+
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("failed to read output: %v", err)
+	}
+	if !strings.Contains(string(data), "NOT FOUND: .zsh_history not found") {
+		t.Errorf("expected NOT FOUND in output, got: %s", string(data))
+	}
+}
+
+func TestMacOSShellHistory_NonDarwinWarning(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("skipping non-darwin warning check on darwin")
+	}
+
+	tmpDir := t.TempDir()
+	ctx := context.Background()
+	mctx := modules.ModuleContext{}
+
+	bashMod := modules.NewMacOSBashHistory()
+	errBash := bashMod.Run(ctx, mctx, nil, filepath.Join(tmpDir, "bash_out.txt"))
+	if !modules.IsWarning(errBash) {
+		t.Errorf("expected warning error for bash history on non-darwin, got: %v", errBash)
+	}
+
+	zshMod := modules.NewMacOSZshHistory()
+	errZsh := zshMod.Run(ctx, mctx, nil, filepath.Join(tmpDir, "zsh_out.txt"))
+	if !modules.IsWarning(errZsh) {
+		t.Errorf("expected warning error for zsh history on non-darwin, got: %v", errZsh)
 	}
 }

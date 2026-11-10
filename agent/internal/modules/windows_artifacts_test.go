@@ -323,3 +323,97 @@ func TestRegistryModuleMetadata(t *testing.T) {
 		t.Errorf("unexpected rel path: %s", ntuserMod.OutputRelPath())
 	}
 }
+
+func TestWindowsShellbags_PowerShellCommand_MultiUserScoping(t *testing.T) {
+	cmd := windowsShellbagsCommand()
+
+	// Verify HKEY_USERS enumeration and SID filtering
+	if !strings.Contains(cmd, "Registry::HKEY_USERS") {
+		t.Errorf("Shellbags command missing HKEY_USERS enumeration")
+	}
+	if !strings.Contains(cmd, "S-1-5-21-*") {
+		t.Errorf("Shellbags command missing user SID filter S-1-5-21-*")
+	}
+	if !strings.Contains(cmd, "*_Classes") {
+		t.Errorf("Shellbags command must exclude *_Classes")
+	}
+
+	// Verify HKCU keys
+	hkcuKeys := []string{
+		`HKCU:\SOFTWARE\Microsoft\Windows\Shell\Bags`,
+		`HKCU:\SOFTWARE\Microsoft\Windows\Shell\BagMRU`,
+		`HKCU:\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags`,
+		`HKCU:\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU`,
+	}
+	for _, k := range hkcuKeys {
+		if !strings.Contains(cmd, k) {
+			t.Errorf("Shellbags command missing HKCU key: %s", k)
+		}
+	}
+
+	// Verify HKEY_USERS dynamic user keys
+	hkuKeys := []string{
+		`Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\Shell\Bags`,
+		`Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\Shell\BagMRU`,
+		`Registry::HKEY_USERS\$sid\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags`,
+		`Registry::HKEY_USERS\$sid\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU`,
+	}
+	for _, k := range hkuKeys {
+		if !strings.Contains(cmd, k) {
+			t.Errorf("Shellbags command missing HKU user key: %s", k)
+		}
+	}
+
+	// Verify NOT FOUND reporting
+	if !strings.Contains(cmd, "NOT FOUND:") {
+		t.Errorf("Shellbags command must report NOT FOUND for non-existent keys")
+	}
+}
+
+func TestWindowsMRU_PowerShellCommand_MultiUserScoping(t *testing.T) {
+	cmd := windowsMRUCommand()
+
+	// Verify HKEY_USERS enumeration and SID filtering
+	if !strings.Contains(cmd, "Registry::HKEY_USERS") {
+		t.Errorf("MRU command missing HKEY_USERS enumeration")
+	}
+	if !strings.Contains(cmd, "S-1-5-21-*") {
+		t.Errorf("MRU command missing user SID filter S-1-5-21-*")
+	}
+	if !strings.Contains(cmd, "*_Classes") {
+		t.Errorf("MRU command must exclude *_Classes")
+	}
+
+	// Verify HKCU keys
+	hkcuKeys := []string{
+		`HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\RunMRU`,
+		`HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\OpenSavePidlMRU`,
+		`HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedPidlMRU`,
+		`HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs`,
+		`HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths`,
+	}
+	for _, k := range hkcuKeys {
+		if !strings.Contains(cmd, k) {
+			t.Errorf("MRU command missing HKCU key: %s", k)
+		}
+	}
+
+	// Verify HKEY_USERS dynamic user keys
+	hkuKeys := []string{
+		`Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\RunMRU`,
+		`Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\OpenSavePidlMRU`,
+		`Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedPidlMRU`,
+		`Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs`,
+		`Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths`,
+	}
+	for _, k := range hkuKeys {
+		if !strings.Contains(cmd, k) {
+			t.Errorf("MRU command missing HKU user key: %s", k)
+		}
+	}
+
+	// Verify NOT FOUND reporting
+	if !strings.Contains(cmd, "NOT FOUND:") {
+		t.Errorf("MRU command must report NOT FOUND for non-existent keys")
+	}
+}

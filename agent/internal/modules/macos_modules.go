@@ -189,25 +189,115 @@ func (m *MacOSUsers) Run(ctx context.Context, _ ModuleContext, _ map[string]inte
 	return runMacOSCmd(ctx, out, "dscl", ".", "list", "/Users")
 }
 
+// getMacOSUserHomeDirs enumerates human user home directories under /Users
+// and includes the current user's home directory.
+func getMacOSUserHomeDirs() []string {
+	return GetMacOSUserHomeDirs()
+}
+
+// GetMacOSUserHomeDirs is the exported form of getMacOSUserHomeDirs.
+func GetMacOSUserHomeDirs() []string {
+	currentHome, _ := os.UserHomeDir()
+	return GetMacOSUserHomeDirsFrom("/Users", currentHome)
+}
+
+// getMacOSUserHomeDirsFrom enumerates human user home directories under baseDir
+// (excluding Shared, .localized, Guest, and hidden items) and appends currentHome deduplicated.
+func getMacOSUserHomeDirsFrom(baseDir, currentHome string) []string {
+	return GetMacOSUserHomeDirsFrom(baseDir, currentHome)
+}
+
+// GetMacOSUserHomeDirsFrom is the testable helper for getMacOSUserHomeDirs.
+func GetMacOSUserHomeDirsFrom(baseDir, currentHome string) []string {
+	var dirs []string
+	seen := make(map[string]bool)
+
+	addDir := func(d string) {
+		if d == "" {
+			return
+		}
+		clean := filepath.Clean(d)
+		if seen[clean] {
+			return
+		}
+		seen[clean] = true
+		dirs = append(dirs, clean)
+	}
+
+	if baseDir != "" {
+		entries, err := os.ReadDir(baseDir)
+		if err == nil {
+			for _, entry := range entries {
+				name := entry.Name()
+				if strings.HasPrefix(name, ".") || strings.EqualFold(name, "Shared") || strings.EqualFold(name, "Guest") {
+					continue
+				}
+				fullPath := filepath.Join(baseDir, name)
+				fi, err := os.Stat(fullPath)
+				if err != nil || !fi.IsDir() {
+					continue
+				}
+				addDir(fullPath)
+			}
+		}
+	}
+
+	if currentHome != "" {
+		addDir(currentHome)
+	}
+
+	return dirs
+}
+
+// collectMacOSShellHistory collects shell history across all discovered user accounts.
+func collectMacOSShellHistory(ctx context.Context, params map[string]interface{}, out, historyFile string) error {
+	return collectMacOSShellHistoryFrom(ctx, params, out, historyFile, getMacOSUserHomeDirs())
+}
+
+func collectMacOSShellHistoryFrom(ctx context.Context, params map[string]interface{}, out, historyFile string, userDirs []string) error {
+	return CollectMacOSShellHistoryFrom(ctx, params, out, historyFile, userDirs)
+}
+
+// CollectMacOSShellHistoryFrom aggregates shell history files across userDirs into out.
+func CollectMacOSShellHistoryFrom(ctx context.Context, params map[string]interface{}, out, historyFile string, userDirs []string) error {
+	var combined strings.Builder
+	found := false
+
+	for _, userDir := range userDirs {
+		src := filepath.Join(userDir, historyFile)
+		data, err := os.ReadFile(src)
+		if err != nil {
+			continue
+		}
+		found = true
+		username := filepath.Base(userDir)
+		combined.WriteString(fmt.Sprintf("=== User: %s (%s) ===\n", username, userDir))
+		content := strings.TrimRight(string(data), "\r\n")
+		combined.WriteString(content)
+		combined.WriteString("\n")
+	}
+
+	if !found {
+		_ = WriteNotFound(out, fmt.Sprintf("%s not found", historyFile))
+		return nil
+	}
+
+	maxLines, _ := GetMaxLines(params)
+	maxSize, _ := GetMaxSizeMB(params)
+	outBytes := LimitOutput([]byte(combined.String()), maxLines, maxSize)
+	return WriteOutput(out, outBytes)
+}
+
 type MacOSBashHistory struct{ Module }
 
 func NewMacOSBashHistory() *MacOSBashHistory {
 	return &MacOSBashHistory{NewModule("macos_bash_history", "system/macos/bash_history.txt")}
 }
-func (m *MacOSBashHistory) Run(ctx context.Context, _ ModuleContext, _ map[string]interface{}, out string) error {
+func (m *MacOSBashHistory) Run(ctx context.Context, _ ModuleContext, params map[string]interface{}, out string) error {
 	if err := requireMacOS("macos_bash_history"); err != nil {
 		return err
 	}
-	homeDir, _ := os.UserHomeDir()
-	src := filepath.Join(homeDir, ".bash_history")
-	if _, statErr := os.Stat(src); statErr != nil {
-		_ = WriteNotFound(out, ".bash_history not found")
-		return nil
-	}
-	if mkdirErr := os.MkdirAll(filepath.Dir(out), 0755); mkdirErr != nil {
-		return fmt.Errorf("mkdir failed: %w", mkdirErr)
-	}
-	return copyMacOSArtifact(ctx, src, out)
+	return collectMacOSShellHistory(ctx, params, out, ".bash_history")
 }
 
 type MacOSZshHistory struct{ Module }
@@ -215,20 +305,11 @@ type MacOSZshHistory struct{ Module }
 func NewMacOSZshHistory() *MacOSZshHistory {
 	return &MacOSZshHistory{NewModule("macos_zsh_history", "system/macos/zsh_history.txt")}
 }
-func (m *MacOSZshHistory) Run(ctx context.Context, _ ModuleContext, _ map[string]interface{}, out string) error {
+func (m *MacOSZshHistory) Run(ctx context.Context, _ ModuleContext, params map[string]interface{}, out string) error {
 	if err := requireMacOS("macos_zsh_history"); err != nil {
 		return err
 	}
-	homeDir, _ := os.UserHomeDir()
-	src := filepath.Join(homeDir, ".zsh_history")
-	if _, statErr := os.Stat(src); statErr != nil {
-		_ = WriteNotFound(out, ".zsh_history not found")
-		return nil
-	}
-	if mkdirErr := os.MkdirAll(filepath.Dir(out), 0755); mkdirErr != nil {
-		return fmt.Errorf("mkdir failed: %w", mkdirErr)
-	}
-	return copyMacOSArtifact(ctx, src, out)
+	return collectMacOSShellHistory(ctx, params, out, ".zsh_history")
 }
 
 type MacOSInstalledApps struct{ Module }

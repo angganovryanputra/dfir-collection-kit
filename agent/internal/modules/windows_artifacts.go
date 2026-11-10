@@ -467,13 +467,22 @@ func NewWindowsShellbags() *WindowsShellbags {
 	)}}
 }
 
-func (m *WindowsShellbags) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
-	command := `$keys = @(` +
+func windowsShellbagsCommand() string {
+	return `$keys = @(` +
 		`'HKCU:\SOFTWARE\Microsoft\Windows\Shell\Bags',` +
 		`'HKCU:\SOFTWARE\Microsoft\Windows\Shell\BagMRU',` +
 		`'HKCU:\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags',` +
 		`'HKCU:\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU'` +
 		`);` +
+		`$userSIDs = Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue | ` +
+		`Where-Object { $_.PSChildName -like 'S-1-5-21-*' -and $_.PSChildName -notlike '*_Classes' } | ` +
+		`Select-Object -ExpandProperty PSChildName;` +
+		`foreach ($sid in $userSIDs) {` +
+		`  $keys += "Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\Shell\Bags";` +
+		`  $keys += "Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\Shell\BagMRU";` +
+		`  $keys += "Registry::HKEY_USERS\$sid\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags";` +
+		`  $keys += "Registry::HKEY_USERS\$sid\SOFTWARE\Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU";` +
+		`};` +
 		`foreach ($key in $keys) {` +
 		`  if (Test-Path $key) {` +
 		`    Write-Output "=== $key ===";` +
@@ -481,7 +490,10 @@ func (m *WindowsShellbags) Run(ctx context.Context, mctx ModuleContext, params m
 		`    Select-Object -ExpandProperty PSPath` +
 		`  } else { Write-Output "NOT FOUND: $key" }` +
 		`}`
-	return runPowerShellToFile(ctx, command, outputPath, params)
+}
+
+func (m *WindowsShellbags) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	return runPowerShellToFile(ctx, windowsShellbagsCommand(), outputPath, params)
 }
 
 // ── MRU Lists ─────────────────────────────────────────────────────────────────
@@ -497,23 +509,36 @@ func NewWindowsMRU() *WindowsMRU {
 	)}}
 }
 
-func (m *WindowsMRU) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
-	command := `$mruKeys = @(` +
+func windowsMRUCommand() string {
+	return `$mruKeys = @(` +
 		`'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\RunMRU',` +
 		`'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\OpenSavePidlMRU',` +
 		`'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedPidlMRU',` +
 		`'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs',` +
 		`'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths'` +
 		`);` +
+		`$userSIDs = Get-ChildItem 'Registry::HKEY_USERS' -ErrorAction SilentlyContinue | ` +
+		`Where-Object { $_.PSChildName -like 'S-1-5-21-*' -and $_.PSChildName -notlike '*_Classes' } | ` +
+		`Select-Object -ExpandProperty PSChildName;` +
+		`foreach ($sid in $userSIDs) {` +
+		`  $mruKeys += "Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\RunMRU";` +
+		`  $mruKeys += "Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\OpenSavePidlMRU";` +
+		`  $mruKeys += "Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedPidlMRU";` +
+		`  $mruKeys += "Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs";` +
+		`  $mruKeys += "Registry::HKEY_USERS\$sid\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths";` +
+		`};` +
 		`foreach ($key in $mruKeys) {` +
 		`  if (Test-Path $key) {` +
 		`    Write-Output "=== $key ===";` +
 		`    Get-ItemProperty -Path $key -ErrorAction SilentlyContinue |` +
-		`    Select-Object * -ExcludeProperty PS*` +
+		`    Select-Object * -ExcludeProperty PS*;` +
 		`    Write-Output ""` +
-		`  }` +
+		`  } else { Write-Output "NOT FOUND: $key" }` +
 		`}`
-	return runPowerShellToFile(ctx, command, outputPath, params)
+}
+
+func (m *WindowsMRU) Run(ctx context.Context, mctx ModuleContext, params map[string]interface{}, outputPath string) error {
+	return runPowerShellToFile(ctx, windowsMRUCommand(), outputPath, params)
 }
 
 // ── USB / Device History ──────────────────────────────────────────────────────
