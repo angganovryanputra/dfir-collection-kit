@@ -29,3 +29,9 @@ class AuditLogOut(AuditLogBase):
 class AuditLogListResponse(BaseModel):
     total: int
     entries: list[AuditLogOut]
+
+
+class AuditLogVerifyResponse(BaseModel):
+    valid: bool
+    count: int
+    error: str | None = None

@@ -18,6 +18,68 @@ def _hash_payload(payload: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def compute_entry_payload_hash(entry: AuditLog) -> str:
+    ts = entry.timestamp
+    if isinstance(ts, str):
+        ts_str = ts
+    elif ts.tzinfo is None:
+        ts_str = ts.replace(tzinfo=timezone.utc).isoformat()
+    else:
+        ts_str = ts.isoformat()
+
+    payload = "|".join(
+        [
+            entry.event_type,
+            entry.actor_type,
+            entry.actor_id,
+            entry.source,
+            entry.action,
+            entry.target_type or "",
+            entry.target_id or "",
+            entry.status,
+            entry.message,
+            ts_str,
+            entry.previous_hash or "",
+        ]
+    )
+    return _hash_payload(payload)
+
+
+def verify_audit_log_chain(entries: list[AuditLog]) -> tuple[bool, str | None]:
+    """Verify cryptographic hash chain integrity across audit log entries.
+
+    Returns (True, None) if the chain is valid, or (False, error_description) on mismatch.
+    """
+    if not entries:
+        return True, None
+
+    sorted_entries = sorted(entries, key=lambda e: e.timestamp)
+    expected_previous_hashes: set[str | None] = {None}
+    is_first = True
+
+    for entry in sorted_entries:
+        expected_hash = compute_entry_payload_hash(entry)
+        if entry.entry_hash != expected_hash:
+            return False, f"Hash mismatch at entry {entry.id}"
+
+        if entry.event_type == "audit.archive_checkpoint":
+            expected_previous_hashes = {entry.entry_hash, entry.previous_hash}
+            is_first = False
+            continue
+
+        if is_first:
+            if entry.previous_hash is not None:
+                return False, f"Broken chain link at entry {entry.id}"
+            is_first = False
+        else:
+            if entry.previous_hash not in expected_previous_hashes:
+                return False, f"Broken chain link at entry {entry.id}"
+
+        expected_previous_hashes = {entry.entry_hash}
+
+    return True, None
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 

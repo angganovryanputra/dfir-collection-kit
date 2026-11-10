@@ -5,9 +5,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_db, require_roles
-from app.crud.audit_log import list_entries_with_total, prune_old_entries
-from app.schemas.audit_log import AuditLogListResponse, AuditLogOut
-from app.services.audit_log_service import safe_record_event
+from app.crud.audit_log import list_entries, list_entries_with_total, prune_old_entries
+from app.schemas.audit_log import AuditLogListResponse, AuditLogOut, AuditLogVerifyResponse
+from app.services.audit_log_service import safe_record_event, verify_audit_log_chain
 from app.services.system_settings_service import get_runtime_settings
 
 logger = logging.getLogger(__name__)
@@ -52,12 +52,6 @@ async def get_audit_logs(
         target_type = "evidence"
         target_filter = evidence_id
 
-    try:
-        runtime_settings = await get_runtime_settings(db)
-        await prune_old_entries(db, runtime_settings.log_retention_days)
-    except Exception as exc:
-        logger.warning("Audit log prune failed (non-critical): %s", exc)
-
     entries, total = await list_entries_with_total(
         db,
         event_type=event_type,
@@ -72,6 +66,24 @@ async def get_audit_logs(
     return AuditLogListResponse(
         total=total,
         entries=[AuditLogOut.model_validate(entry) for entry in entries],
+    )
+
+
+@router.get(
+    "/verify",
+    response_model=AuditLogVerifyResponse,
+    dependencies=[Depends(require_roles("admin"))],
+)
+async def verify_audit_logs(
+    db: AsyncSession = Depends(get_db),
+    limit: int = Query(default=10000, ge=1, le=50000),
+) -> AuditLogVerifyResponse:
+    entries = await list_entries(db, limit=limit)
+    is_valid, error = verify_audit_log_chain(entries)
+    return AuditLogVerifyResponse(
+        valid=is_valid,
+        count=len(entries),
+        error=error,
     )
 
 
