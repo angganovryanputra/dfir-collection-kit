@@ -23,8 +23,8 @@ async def create_user(db: AsyncSession, payload: UserCreate) -> User:
         username=username,
         role=data.get("role"),
         status=data.get("status"),
-        last_login="-",
-        created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        last_login=None,
+        created_at=datetime.now(timezone.utc),
         password_hash=get_password_hash(password),
     )
     db.add(user)
@@ -69,7 +69,7 @@ async def update_last_login(db: AsyncSession, user_id: str) -> None:
     user = result.scalar_one_or_none()
     if not user:
         return
-    user.last_login = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    user.last_login = datetime.now(timezone.utc)
     await db.flush()
 
 

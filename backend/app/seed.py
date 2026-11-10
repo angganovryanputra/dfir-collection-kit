@@ -23,8 +23,8 @@ async def seed_data(session: AsyncSession) -> None:
             username="admin",
             role="admin",
             status="active",
-            last_login="-",
-            created_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            last_login=None,
+            created_at=datetime.now(timezone.utc),
             password_hash=get_password_hash(admin_password),
         ),
     ]

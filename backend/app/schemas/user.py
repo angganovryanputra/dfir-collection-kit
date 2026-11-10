@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 
 from pydantic import BaseModel
@@ -28,10 +29,13 @@ class UserUpdate(BaseModel):
     password: str | None = None
 
 
-class UserOut(UserBase):
+class UserResponse(UserBase):
     id: str
-    last_login: str
-    created_at: str
+    last_login: datetime | str | None = None
+    created_at: datetime | str
 
     class Config:
         from_attributes = True
+
+
+UserOut = UserResponse

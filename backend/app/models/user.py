@@ -13,6 +13,6 @@ class User(Base):
     username: Mapped[str] = mapped_column(String, unique=True, index=True)
     role: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String)
-    last_login: Mapped[str] = mapped_column(String)
-    created_at: Mapped[str] = mapped_column(String)
+    last_login: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     password_hash: Mapped[str] = mapped_column(String)
