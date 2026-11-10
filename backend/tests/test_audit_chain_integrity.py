@@ -311,7 +311,10 @@ async def test_get_verify_endpoint_admin_allowed():
     chain = make_chain(3)
 
     try:
-        with patch("app.api.v1.endpoints.audit_logs.list_entries", AsyncMock(return_value=chain)):
+        with patch(
+            "app.api.v1.endpoints.audit_logs.list_entries_chronological",
+            AsyncMock(return_value=chain),
+        ):
             async with AsyncClient(
                 transport=ASGITransport(app=app),
                 base_url="https://test",

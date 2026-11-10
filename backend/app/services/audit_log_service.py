@@ -53,7 +53,7 @@ def verify_audit_log_chain(entries: list[AuditLog]) -> tuple[bool, str | None]:
     if not entries:
         return True, None
 
-    sorted_entries = sorted(entries, key=lambda e: e.timestamp)
+    sorted_entries = sorted(reversed(entries), key=lambda e: (e.timestamp, e.id))
     expected_previous_hashes: set[str | None] = {None}
     is_first = True
 
@@ -63,6 +63,8 @@ def verify_audit_log_chain(entries: list[AuditLog]) -> tuple[bool, str | None]:
             return False, f"Hash mismatch at entry {entry.id}"
 
         if entry.event_type == "audit.archive_checkpoint":
+            if not is_first and entry.previous_hash not in expected_previous_hashes:
+                return False, f"Broken chain link at checkpoint entry {entry.id}"
             expected_previous_hashes = {entry.entry_hash, entry.previous_hash}
             is_first = False
             continue

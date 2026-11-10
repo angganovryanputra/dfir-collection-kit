@@ -50,6 +50,12 @@ async def list_entries(
     return list(result.scalars().all())
 
 
+async def list_entries_chronological(db: AsyncSession, limit: int = 10000) -> list[AuditLog]:
+    stmt = select(AuditLog).order_by(AuditLog.timestamp.asc()).limit(limit)
+    result = await db.execute(stmt)
+    return list(result.scalars().all())
+
+
 async def list_entries_with_total(
     db: AsyncSession,
     event_type: str | None = None,
