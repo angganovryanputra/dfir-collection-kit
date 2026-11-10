@@ -273,6 +273,12 @@ The chain-of-custody uses cryptographic hashing to ensure tamper evidence:
 
 Any tampering with a CoC entry will cause verification to fail.
 
+4. **Archival Genesis Checkpoints (Audit Chain Preservation)**:
+   When audit logs exceed retention periods, traditional deletion would break the cryptographic SHA-256 hash chain link. The system implements an **Archival Genesis Checkpoint**:
+   - Computes a cumulative digest of all pruned entries.
+   - Writes a signed `CHECKPOINT` genesis record containing the cumulative hash.
+   - Re-anchors the active chain at the checkpoint so historical integrity verification remains 100% mathematically verifiable without data loss.
+
 **API Endpoints**
 
 - `GET /api/v1/chain-of-custody` (optional `incident_id` filter)
@@ -468,6 +474,26 @@ The Super Timeline feature enables cross-host evidence correlation and threat de
 - Filter panel (quick filters, source chips, date range picker)
 - Highlight search terms in results
 - Column visibility toggle (persisted to localStorage)
+
+### Performance & Scalability Subsystems
+
+1. **Celery Worker Queue Segregation (`worker.py`)**:
+   - `forensics` queue: Dedicated to long-running, CPU/IO-intensive tasks (EZTools, Chainsaw, DuckDB building) with 2-hour hard limit and 1h 50m soft limit.
+   - `periodic` queue: Dedicated to fast Celery Beat crons (heartbeat checks, legal hold expirations, scheduled collection dispatch) running every 60s without queue starvation.
+   - `default` queue: General asynchronous backend workloads.
+
+2. **DuckDB Read-Only Connection Pooling (`evidence.py`)**:
+   - Read-only queries to `super_timeline.duckdb` reuse cached connections via a thread-safe connection pool (`get_duckdb_read_conn`).
+   - Yields isolated cursors per query (`conn.cursor()`) eliminating file lock contention and metadata re-parsing overhead under concurrent analyst searches.
+
+3. **Threat Intel 24-Hour Cache Layer (`threat_intel.py`)**:
+   - VirusTotal v3 and MISP IOC enrichment results are cached in Redis with an 86,400-second (24-hour) TTL (`threat_intel:{service}:{type}:{value}`).
+   - Automatically preserves public API rate-limits with in-memory TTL dictionary fallback if Redis is unavailable.
+
+4. **Agent VSS Mutex Serialization & Point-of-Capture Manifest (`windows_artifacts.go`, `executor.go`)**:
+   - Package-level mutex `vssMu` serializes Windows Volume Shadow Copy creation and ensures idempotent cleanup via `sync.Once`.
+   - Before archive packaging, the Go agent calculates individual SHA-256 hashes of all captured files directly on the endpoint, writing an authoritative `manifest.sha256` into the root of `collection.zip` in compliance with ISO/IEC 27037 and NIST SP 800-86.
+
 - Export dropdown (CSV/JSONL)
 - Responsive table with sorting and pagination
 

@@ -30,6 +30,21 @@ setup: ## First-time setup: generate secrets, start services, run migrations
 up: ## Start all services in background
 	$(COMPOSE) up -d
 
+prod-up: ## Start prebuilt stack using GHCR images (no local compilation needed)
+	$(COMPOSE) -f docker-compose.prod.yml up -d
+
+update: ## Pull newest prebuilt images, update containers, and run migrations (Zero-Rebuild)
+	@echo "Pulling latest prebuilt images from GHCR..."
+	$(COMPOSE) -f docker-compose.prod.yml pull
+	@echo "Updating running containers..."
+	$(COMPOSE) -f docker-compose.prod.yml up -d
+	@echo "Running database migrations..."
+	$(COMPOSE) -f docker-compose.prod.yml exec -T backend alembic upgrade head
+	@echo "Update complete!"
+
+auto-update: ## Start stack with Watchtower for automated background updates
+	$(COMPOSE) -f docker-compose.prod.yml --profile auto-update up -d
+
 down: ## Stop all services
 	$(COMPOSE) down
 
