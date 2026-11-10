@@ -24,6 +24,8 @@ env/
 ENV/
 .venv/
 .pytest_cache/
+.pytest_tmp/
+.pytest_temp/
 
 # Node
 node_modules/
