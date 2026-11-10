@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.endpoints.agents import verify_agent_secret
 from app.core.config import settings
 from app.core.deps import get_current_user, get_db
+from app.core.redis_bus import command_bus
 from app.crud.device import get_device
 from app.models.user import User
 from app.services.audit_log_service import record_event
@@ -49,13 +50,13 @@ from app.services.audit_log_service import record_event
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# ── In-memory command queues ───────────────────────────────────────────────────
-# _pending: agent_id → list of command dicts waiting to be picked up by the agent
-# _ws_queues: command_id → asyncio.Queue receiving chunks from the agent
-_pending: dict[str, list[dict]] = {}
-_ws_queues: dict[str, asyncio.Queue] = {}
-_command_agents: dict[str, str] = {}
-_pending_lock = asyncio.Lock()
+# ── Command queue & bus integration ───────────────────────────────────────────
+# Backwards-compatible aliases to the underlying bus structures for existing
+# inspection and test assertions.
+_pending = command_bus._pending
+_ws_queues = command_bus._ws_queues
+_command_agents = command_bus._command_agents
+_pending_lock = command_bus._lock
 
 # Maximum allowed command timeout (seconds)
 _MAX_TIMEOUT_SEC = 300
@@ -186,7 +187,6 @@ async def analyst_ws(
                 continue
 
             command_id = f"CMD-{uuid4().hex[:12].upper()}"
-            result_queue: asyncio.Queue = asyncio.Queue()
 
             try:
                 from app.db.session import AsyncSessionLocal
@@ -223,18 +223,15 @@ async def analyst_ws(
                 )
                 continue
 
-            async with _pending_lock:
-                _pending.setdefault(agent_id, []).append(
-                    {
-                        "command_id": command_id,
-                        "cmd": cmd,
-                        "timeout_sec": timeout_sec,
-                        "created_at": datetime.now(timezone.utc).isoformat(),
-                        "expires_at": time.time() + timeout_sec + 30,
-                    }
-                )
-                _ws_queues[command_id] = result_queue
-                _command_agents[command_id] = agent_id
+            cmd_dict = {
+                "command_id": command_id,
+                "cmd": cmd,
+                "timeout_sec": timeout_sec,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "expires_at": time.time() + timeout_sec + 30,
+            }
+            await command_bus.enqueue_command(agent_id, cmd_dict)
+            result_queue = await command_bus.register_listener(command_id)
 
             deadline = time.monotonic() + timeout_sec + 30
             try:
@@ -270,15 +267,7 @@ async def analyst_ws(
                     if chunk.get("type") in ("done", "error"):
                         break
             finally:
-                async with _pending_lock:
-                    pending = _pending.get(agent_id, [])
-                    _pending[agent_id] = [
-                        entry for entry in pending if entry["command_id"] != command_id
-                    ]
-                    if not _pending[agent_id]:
-                        _pending.pop(agent_id, None)
-                    _ws_queues.pop(command_id, None)
-                    _command_agents.pop(command_id, None)
+                await command_bus.unregister_listener(command_id)
     except WebSocketDisconnect:
         logger.info("Analyst WS disconnected for agent %s", agent_id)
     except Exception as exc:
@@ -300,17 +289,9 @@ async def poll_for_command(
 ) -> dict:
     """Agent calls this endpoint periodically to check for pending commands."""
     verify_agent_secret(agent_token, await get_device(db, agent_id))
-    async with _pending_lock:
-        queue = _pending.get(agent_id, [])
-        now = time.time()
-        while queue and float(queue[0].get("expires_at", 0)) <= now:
-            queue.pop(0)
-        if not queue:
-            _pending.pop(agent_id, None)
-            return {}
-        entry = queue.pop(0)
-        if not queue:
-            _pending.pop(agent_id, None)
+    entry = await command_bus.pop_command(agent_id)
+    if not entry:
+        return {}
     return {
         "command_id": entry["command_id"],
         "cmd": entry["cmd"],
@@ -329,11 +310,8 @@ async def post_command_result(
     # Authenticate before exposing whether a command has an active subscriber.
     # Unknown/expired commands use the bootstrap credential for backward
     # compatibility; known commands are bound to their registered device.
-    agent_id = _command_agents.get(command_id)
+    agent_id = await command_bus.get_command_agent(command_id)
     verify_agent_secret(agent_token, await get_device(db, agent_id) if agent_id else None)
-    result_queue = _ws_queues.get(command_id)
-    if result_queue is None:
-        return {"status": "no_subscriber"}
 
     output = str(payload.get("output", ""))
     if len(output) > _MAX_OUTPUT_CHARS:
@@ -341,9 +319,16 @@ async def post_command_result(
     exit_code = payload.get("exit_code", 0)
     if isinstance(exit_code, bool) or not isinstance(exit_code, int):
         raise HTTPException(status_code=422, detail="exit_code must be an integer")
+
+    delivered = False
     if output:
-        await result_queue.put({"type": "output", "chunk": output})
-    await result_queue.put({"type": "done", "exit_code": exit_code})
+        d1 = await command_bus.publish_output(command_id, {"type": "output", "chunk": output})
+        delivered = delivered or d1
+    d2 = await command_bus.publish_output(command_id, {"type": "done", "exit_code": exit_code})
+    delivered = delivered or d2
+
+    if not delivered:
+        return {"status": "no_subscriber"}
     return {"status": "ok"}
 
 
@@ -384,20 +369,15 @@ async def run_command_sync(
     )
     await db.commit()
 
-    result_queue: asyncio.Queue = asyncio.Queue()
-
-    async with _pending_lock:
-        _pending.setdefault(agent_id, []).append(
-            {
-                "command_id": command_id,
-                "cmd": cmd,
-                "timeout_sec": timeout_sec,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "expires_at": time.time() + timeout_sec + 30,
-            }
-        )
-        _ws_queues[command_id] = result_queue
-        _command_agents[command_id] = agent_id
+    cmd_dict = {
+        "command_id": command_id,
+        "cmd": cmd,
+        "timeout_sec": timeout_sec,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": time.time() + timeout_sec + 30,
+    }
+    await command_bus.enqueue_command(agent_id, cmd_dict)
+    result_queue = await command_bus.register_listener(command_id)
 
     deadline = time.monotonic() + timeout_sec + 30
     output_parts: list[str] = []
@@ -419,16 +399,7 @@ async def run_command_sync(
             elif chunk.get("type") == "error":
                 raise HTTPException(status_code=502, detail=chunk.get("message", "Agent error"))
     finally:
-        async with _pending_lock:
-            remaining_commands = [
-                entry for entry in _pending.get(agent_id, []) if entry["command_id"] != command_id
-            ]
-            if remaining_commands:
-                _pending[agent_id] = remaining_commands
-            else:
-                _pending.pop(agent_id, None)
-            _ws_queues.pop(command_id, None)
-            _command_agents.pop(command_id, None)
+        await command_bus.unregister_listener(command_id)
 
     return {
         "command_id": command_id,
