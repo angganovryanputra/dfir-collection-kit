@@ -16,6 +16,7 @@ from typing import Awaitable, TypeVar
 
 from celery import Celery
 from celery.exceptions import MaxRetriesExceededError, SoftTimeLimitExceeded
+from kombu import Queue
 
 logger = logging.getLogger(__name__)
 _TaskResult = TypeVar("_TaskResult")
@@ -79,6 +80,21 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_time_limit=7200,
     task_soft_time_limit=6600,
+    task_default_queue="default",
+    task_queues=(
+        Queue("default"),
+        Queue("forensics"),
+        Queue("periodic"),
+    ),
+    task_routes={
+        "dfir.run_pipeline": {"queue": "forensics"},
+        "dfir.process_s3_upload": {"queue": "forensics"},
+        "dfir.run_super_timeline": {"queue": "forensics"},
+        "dfir.run_scheduled_collection": {"queue": "forensics"},
+        "dfir.check_scheduled_collections": {"queue": "periodic"},
+        "dfir.expire_legal_holds": {"queue": "periodic"},
+        "dfir.verify_evidence_integrity": {"queue": "periodic"},
+    },
     beat_schedule={
         "check-scheduled-collections": {
             "task": "dfir.check_scheduled_collections",
